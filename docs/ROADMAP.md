@@ -95,9 +95,9 @@
 - [ ] Ограничения честно показываем: Codex/Cursor могут не вернуть session id — тогда только «новый чат».
 
 ### Phase 1 — UX-аудит и контракт действий · **S–M** · релиз не нужен
-- [ ] `docs/UX_AUDIT.md`: все текущие экраны и кнопки, что непонятно, чем заменяем.
-- [ ] `docs/UX_ACTIONS.md`: для каждого объекта × состояния: primary / secondary / overflow, когда disabled и почему, tooltip, нужен ли confirm. Это контракт, по которому пишутся шаблоны.
-- [ ] Единый визуальный словарь: ✓ ⚠ ✕ ● ○ + текст рядом; компоненты «строка с состоянием», «primary + secondary + ⋯», «disabled с причиной», «danger в ⋯».
+- [x] `docs/UX_AUDIT.md`: все текущие экраны и кнопки, что непонятно, чем заменяем.
+- [x] `docs/UX_ACTIONS.md`: для каждого объекта × состояния: primary / secondary / overflow, когда disabled и почему, tooltip, нужен ли confirm. Это контракт, по которому пишутся шаблоны.
+- [x] Единый визуальный словарь: ✓ ⚠ ✕ ● ○ + текст рядом (в UX_ACTIONS.md §0); компоненты реализуются в фазе D.
 
 ### Phase 2 — Merge Requests: список и деталь как эталон · **L** · релиз 0.3.0
 - [ ] Данные GitLab на MR: head pipeline (status), approvals (n/m), unresolved threads (есть), `diverged_commits_count`, draft/merged/closed, `changes_count`. Один вызов `glab api …/merge_requests/:iid?include_diverged_commits_count=true` + approvals. ← п.12, 13, 20
