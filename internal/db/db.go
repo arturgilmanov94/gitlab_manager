@@ -1,0 +1,703 @@
+// Package db is the SQLite storage layer (pure Go driver, no cgo).
+package db
+
+import (
+	"database/sql"
+	_ "embed"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+//go:embed schema.sql
+var schemaSQL string
+
+// Run kinds and statuses.
+const (
+	KindReviewQuick  = "review_quick"
+	KindReviewFull   = "review_full"
+	KindReviewVerify = "review_verify"
+	KindFixComments  = "fix_comments"
+	KindPlan         = "plan"
+	KindImplement    = "implement"
+
+	StatusQueued    = "queued"
+	StatusRunning   = "running"
+	StatusDone      = "done"
+	StatusFailed    = "failed"
+	StatusCancelled = "cancelled"
+)
+
+// Now returns the current UTC time in RFC3339.
+func Now() string { return time.Now().UTC().Truncate(time.Second).Format(time.RFC3339) }
+
+// DB wraps the SQL handle.
+type DB struct{ sql *sql.DB }
+
+// Open opens (creating directories as needed) the SQLite database.
+func Open(path string) (*DB, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	handle, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
+	if err != nil {
+		return nil, err
+	}
+	handle.SetMaxOpenConns(1) // serialise writers; SQLite is single-writer anyway
+	return &DB{sql: handle}, nil
+}
+
+// Close closes the handle.
+func (d *DB) Close() error { return d.sql.Close() }
+
+// Migrate applies the embedded schema (idempotent) and records the version.
+func (d *DB) Migrate() ([]string, error) {
+	if _, err := d.sql.Exec("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"); err != nil {
+		return nil, err
+	}
+	var applied []string
+	const name = "001_init"
+	var exists int
+	if err := d.sql.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE name = ?", name).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists == 0 {
+		if _, err := d.sql.Exec(schemaSQL); err != nil {
+			return nil, fmt.Errorf("apply schema: %w", err)
+		}
+		if _, err := d.sql.Exec("INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)", name, Now()); err != nil {
+			return nil, err
+		}
+		applied = append(applied, name)
+	}
+	return applied, nil
+}
+
+// SchemaVersion lists applied migrations (empty if the DB is not initialised).
+func (d *DB) SchemaVersion() []string {
+	rows, err := d.sql.Query("SELECT name FROM schema_migrations ORDER BY name")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------------- merge requests
+
+// MergeRequest row.
+type MergeRequest struct {
+	ID              int64
+	GitLabHost      string
+	ProjectPath     string
+	IID             int64
+	WebURL          string
+	Title           string
+	Author          string
+	SourceBranch    string
+	TargetBranch    string
+	State           string
+	HeadSHA         string
+	Unresolved      int64 // unresolved reviewer discussions
+	GitLabUpdatedAt string
+	SyncedAt        string
+	AddedAt         string
+}
+
+// Ref is "project!iid".
+func (m MergeRequest) Ref() string { return fmt.Sprintf("%s!%d", m.ProjectPath, m.IID) }
+
+const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at"
+
+func scanMR(s scanner) (*MergeRequest, error) {
+	var m MergeRequest
+	err := s.Scan(&m.ID, &m.GitLabHost, &m.ProjectPath, &m.IID, &m.WebURL, &m.Title, &m.Author, &m.SourceBranch, &m.TargetBranch, &m.State, &m.HeadSHA, &m.Unresolved, &m.GitLabUpdatedAt, &m.SyncedAt, &m.AddedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+type scanner interface{ Scan(dest ...any) error }
+
+// UpsertMR inserts or refreshes a merge request.
+func (d *DB) UpsertMR(m MergeRequest) (*MergeRequest, error) {
+	now := Now()
+	_, err := d.sql.Exec(`
+		INSERT INTO merge_requests (gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (gitlab_host, project_path, iid) DO UPDATE SET
+			web_url = excluded.web_url, title = excluded.title, author = excluded.author,
+			source_branch = excluded.source_branch, target_branch = excluded.target_branch,
+			state = excluded.state, head_sha = excluded.head_sha, unresolved = excluded.unresolved,
+			gitlab_updated_at = excluded.gitlab_updated_at, synced_at = excluded.synced_at`,
+		m.GitLabHost, m.ProjectPath, m.IID, m.WebURL, m.Title, m.Author, m.SourceBranch, m.TargetBranch, m.State, m.HeadSHA, m.Unresolved, m.GitLabUpdatedAt, now, now)
+	if err != nil {
+		return nil, err
+	}
+	return scanMR(d.sql.QueryRow("SELECT "+mrColumns+" FROM merge_requests WHERE gitlab_host = ? AND project_path = ? AND iid = ?", m.GitLabHost, m.ProjectPath, m.IID))
+}
+
+// GetMR returns a merge request or nil.
+func (d *DB) GetMR(id int64) (*MergeRequest, error) {
+	m, err := scanMR(d.sql.QueryRow("SELECT "+mrColumns+" FROM merge_requests WHERE id = ?", id))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return m, err
+}
+
+// DeleteMR removes a merge request and (by cascade) its runs.
+func (d *DB) DeleteMR(id int64) error {
+	_, err := d.sql.Exec("DELETE FROM merge_requests WHERE id = ?", id)
+	return err
+}
+
+// LastRun is the summary of the newest run attached to an MR/issue.
+type LastRun struct {
+	ID           int64
+	Kind         string
+	Status       string
+	Verdict      string
+	HeadSHA      string
+	Runner       string
+	Model        string
+	FinishedAt   string
+	CreatedAt    string
+	OpenFindings int64
+}
+
+// MRListItem is an MR with its latest run.
+type MRListItem struct {
+	MergeRequest
+	Last  *LastRun
+	Stale bool
+}
+
+// ListMRs returns all MRs, newest GitLab activity first, with their latest run.
+func (d *DB) ListMRs() ([]MRListItem, error) {
+	rows, err := d.sql.Query(`
+		SELECT ` + prefixed(mrColumns, "mr.") + `,
+		       r.id, r.kind, r.status, r.verdict, r.head_sha, r.runner, r.model, r.finished_at, r.created_at,
+		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = r.id AND f.status = 'open')
+		FROM merge_requests mr
+		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE mr_id = mr.id ORDER BY id DESC LIMIT 1)
+		ORDER BY CASE WHEN mr.gitlab_updated_at = '' THEN mr.added_at ELSE mr.gitlab_updated_at END DESC, mr.id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MRListItem
+	for rows.Next() {
+		var item MRListItem
+		var last LastRun
+		var id, open sql.NullInt64
+		var kind, status, verdict, sha, runner, model, finished, created sql.NullString
+		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Author, &item.SourceBranch, &item.TargetBranch, &item.State, &item.HeadSHA, &item.Unresolved, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
+			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &open); err != nil {
+			return nil, err
+		}
+		if id.Valid {
+			last = LastRun{id.Int64, kind.String, status.String, verdict.String, sha.String, runner.String, model.String, finished.String, created.String, open.Int64}
+			item.Last = &last
+			item.Stale = last.Status == StatusDone && last.HeadSHA != "" && last.HeadSHA != item.HeadSHA
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------------- issues
+
+// Issue row.
+type Issue struct {
+	ID              int64
+	GitLabHost      string
+	ProjectPath     string
+	IID             int64
+	WebURL          string
+	Title           string
+	Description     string
+	Author          string
+	State           string
+	Labels          string
+	GitLabUpdatedAt string
+	SyncedAt        string
+	AddedAt         string
+}
+
+// Ref is "project#iid" — also the project's branch naming convention.
+func (i Issue) Ref() string { return fmt.Sprintf("%s#%d", i.ProjectPath, i.IID) }
+
+const issueColumns = "id, gitlab_host, project_path, iid, web_url, title, description, author, state, labels, gitlab_updated_at, synced_at, added_at"
+
+func scanIssue(s scanner) (*Issue, error) {
+	var i Issue
+	err := s.Scan(&i.ID, &i.GitLabHost, &i.ProjectPath, &i.IID, &i.WebURL, &i.Title, &i.Description, &i.Author, &i.State, &i.Labels, &i.GitLabUpdatedAt, &i.SyncedAt, &i.AddedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &i, nil
+}
+
+// UpsertIssue inserts or refreshes an issue.
+func (d *DB) UpsertIssue(i Issue) (*Issue, error) {
+	now := Now()
+	_, err := d.sql.Exec(`
+		INSERT INTO issues (gitlab_host, project_path, iid, web_url, title, description, author, state, labels, gitlab_updated_at, synced_at, added_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (gitlab_host, project_path, iid) DO UPDATE SET
+			web_url = excluded.web_url, title = excluded.title, description = excluded.description, author = excluded.author,
+			state = excluded.state, labels = excluded.labels, gitlab_updated_at = excluded.gitlab_updated_at, synced_at = excluded.synced_at`,
+		i.GitLabHost, i.ProjectPath, i.IID, i.WebURL, i.Title, i.Description, i.Author, i.State, i.Labels, i.GitLabUpdatedAt, now, now)
+	if err != nil {
+		return nil, err
+	}
+	return scanIssue(d.sql.QueryRow("SELECT "+issueColumns+" FROM issues WHERE gitlab_host = ? AND project_path = ? AND iid = ?", i.GitLabHost, i.ProjectPath, i.IID))
+}
+
+// GetIssue returns an issue or nil.
+func (d *DB) GetIssue(id int64) (*Issue, error) {
+	i, err := scanIssue(d.sql.QueryRow("SELECT "+issueColumns+" FROM issues WHERE id = ?", id))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return i, err
+}
+
+// DeleteIssue removes an issue and its runs.
+func (d *DB) DeleteIssue(id int64) error {
+	_, err := d.sql.Exec("DELETE FROM issues WHERE id = ?", id)
+	return err
+}
+
+// IssueListItem is an issue with its latest run.
+type IssueListItem struct {
+	Issue
+	Last *LastRun
+}
+
+// ListIssues returns all issues with their latest run.
+func (d *DB) ListIssues() ([]IssueListItem, error) {
+	rows, err := d.sql.Query(`
+		SELECT ` + prefixed(issueColumns, "i.") + `,
+		       r.id, r.kind, r.status, r.verdict, r.head_sha, r.runner, r.model, r.finished_at, r.created_at
+		FROM issues i
+		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE issue_id = i.id ORDER BY id DESC LIMIT 1)
+		ORDER BY CASE WHEN i.gitlab_updated_at = '' THEN i.added_at ELSE i.gitlab_updated_at END DESC, i.id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []IssueListItem
+	for rows.Next() {
+		var item IssueListItem
+		var id sql.NullInt64
+		var kind, status, verdict, sha, runner, model, finished, created sql.NullString
+		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Description, &item.Author, &item.State, &item.Labels, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
+			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created); err != nil {
+			return nil, err
+		}
+		if id.Valid {
+			item.Last = &LastRun{ID: id.Int64, Kind: kind.String, Status: status.String, Verdict: verdict.String, HeadSHA: sha.String, Runner: runner.String, Model: model.String, FinishedAt: finished.String, CreatedAt: created.String}
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------------- runs
+
+// Run row.
+type Run struct {
+	ID              int64
+	Kind            string
+	MRID            *int64
+	IssueID         *int64
+	BaseRunID       *int64
+	HeadSHA         string
+	Status          string
+	Runner          string
+	Model           string
+	SkillIdentifier string
+	Notes           string
+	Prompt          string
+	Summary         string
+	Verdict         string
+	ResultJSON      string
+	RawResult       string
+	Error           string
+	LogPath         string
+	SessionID       string
+	WorkDir         string
+	Branch          string
+	CostUSD         float64
+	DurationMs      int64
+	CreatedAt       string
+	StartedAt       string
+	FinishedAt      string
+}
+
+// Active reports whether the run is queued or running.
+func (r Run) Active() bool { return r.Status == StatusQueued || r.Status == StatusRunning }
+
+// IsReview reports whether the run is a review kind (produces findings).
+func (r Run) IsReview() bool {
+	return r.Kind == KindReviewFull || r.Kind == KindReviewVerify || r.Kind == KindReviewQuick
+}
+
+// IsEdit reports whether the run edits files in a worktree.
+func (r Run) IsEdit() bool { return r.Kind == KindImplement || r.Kind == KindFixComments }
+
+const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, created_at, started_at, finished_at"
+
+func scanRun(s scanner) (*Run, error) {
+	var r Run
+	var mrID, issueID, baseID sql.NullInt64
+	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.CreatedAt, &r.StartedAt, &r.FinishedAt)
+	if err != nil {
+		return nil, err
+	}
+	if mrID.Valid {
+		r.MRID = &mrID.Int64
+	}
+	if issueID.Valid {
+		r.IssueID = &issueID.Int64
+	}
+	if baseID.Valid {
+		r.BaseRunID = &baseID.Int64
+	}
+	return &r, nil
+}
+
+// CreateRun inserts a queued run and returns its id.
+func (d *DB) CreateRun(r Run) (int64, error) {
+	res, err := d.sql.Exec(`
+		INSERT INTO runs (kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, work_dir, branch, created_at)
+		VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
+		r.Kind, nullInt(r.MRID), nullInt(r.IssueID), nullInt(r.BaseRunID), r.HeadSHA, r.Runner, r.Model, r.SkillIdentifier, r.Notes, r.WorkDir, r.Branch, Now())
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// UpdateRun sets the given columns.
+func (d *DB) UpdateRun(id int64, fields map[string]any) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	var sets []string
+	var args []any
+	for key, value := range fields {
+		sets = append(sets, key+" = ?")
+		args = append(args, value)
+	}
+	args = append(args, id)
+	_, err := d.sql.Exec("UPDATE runs SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...)
+	return err
+}
+
+// GetRun returns a run or nil.
+func (d *DB) GetRun(id int64) (*Run, error) {
+	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE id = ?", id))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return r, err
+}
+
+// RunSummary is a run with finding counters.
+type RunSummary struct {
+	Run
+	OpenFindings  int64
+	TotalFindings int64
+}
+
+func (d *DB) listRuns(where string, arg any) ([]RunSummary, error) {
+	rows, err := d.sql.Query(`SELECT `+prefixed(runColumns, "r.")+`,
+		(SELECT COUNT(*) FROM findings f WHERE f.run_id = r.id AND f.status = 'open'),
+		(SELECT COUNT(*) FROM findings f WHERE f.run_id = r.id)
+		FROM runs r WHERE `+where+` ORDER BY r.id DESC`, arg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RunSummary
+	for rows.Next() {
+		var s RunSummary
+		var mrID, issueID, baseID sql.NullInt64
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.OpenFindings, &s.TotalFindings); err != nil {
+			return nil, err
+		}
+		if mrID.Valid {
+			s.MRID = &mrID.Int64
+		}
+		if issueID.Valid {
+			s.IssueID = &issueID.Int64
+		}
+		if baseID.Valid {
+			s.BaseRunID = &baseID.Int64
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// ListRunsForMR returns the MR's runs, newest first.
+func (d *DB) ListRunsForMR(mrID int64) ([]RunSummary, error) { return d.listRuns("r.mr_id = ?", mrID) }
+
+// ListRunsForIssue returns the issue's runs, newest first.
+func (d *DB) ListRunsForIssue(issueID int64) ([]RunSummary, error) {
+	return d.listRuns("r.issue_id = ?", issueID)
+}
+
+// LatestDoneReview returns the newest completed review run for an MR.
+func (d *DB) LatestDoneReview(mrID int64) (*Run, error) {
+	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE mr_id = ? AND status = 'done' AND kind IN ('review_full', 'review_verify', 'review_quick') ORDER BY id DESC LIMIT 1", mrID))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return r, err
+}
+
+// ActiveRunForMR returns the queued/running run of an MR, if any.
+func (d *DB) ActiveRunForMR(mrID int64) (*Run, error) {
+	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE mr_id = ? AND status IN ('queued', 'running') ORDER BY id DESC LIMIT 1", mrID))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return r, err
+}
+
+// ActiveRunForIssue returns the queued/running run of an issue, if any.
+func (d *DB) ActiveRunForIssue(issueID int64) (*Run, error) {
+	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE issue_id = ? AND status IN ('queued', 'running') ORDER BY id DESC LIMIT 1", issueID))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return r, err
+}
+
+// FailStaleRuns marks queued/running runs as failed (after a restart).
+func (d *DB) FailStaleRuns(message string) (int64, error) {
+	res, err := d.sql.Exec("UPDATE runs SET status = 'failed', error = ?, finished_at = ? WHERE status IN ('queued', 'running')", message, Now())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ---------------------------------------------------------------------------------- findings
+
+// Finding row.
+type Finding struct {
+	ID              int64
+	RunID           int64
+	Ordinal         int64
+	OriginFindingID *int64
+	Status          string
+	Severity        string
+	Category        string
+	File            string
+	Line            *int64
+	Title           string
+	Description     string
+	Suggestion      string
+	VerifyNote      string
+}
+
+// ReplaceFindings replaces a run's findings.
+func (d *DB) ReplaceFindings(runID int64, findings []Finding) error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM findings WHERE run_id = ?", runID); err != nil {
+		return err
+	}
+	for i, f := range findings {
+		status := f.Status
+		if status == "" {
+			status = "open"
+		}
+		severity := strings.ToUpper(f.Severity)
+		if severity == "" {
+			severity = "MEDIUM"
+		}
+		title := f.Title
+		if title == "" {
+			title = "(untitled)"
+		}
+		if _, err := tx.Exec(`INSERT INTO findings (run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runID, i+1, nullInt(f.OriginFindingID), status, severity, f.Category, f.File, nullInt(f.Line), title, f.Description, f.Suggestion, f.VerifyNote); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ListFindings returns a run's findings in order.
+func (d *DB) ListFindings(runID int64) ([]Finding, error) {
+	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note FROM findings WHERE run_id = ? ORDER BY ordinal", runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Finding
+	for rows.Next() {
+		var f Finding
+		var origin, line sql.NullInt64
+		if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.VerifyNote); err != nil {
+			return nil, err
+		}
+		if origin.Valid {
+			f.OriginFindingID = &origin.Int64
+		}
+		if line.Valid {
+			f.Line = &line.Int64
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// Discussion row.
+type Discussion struct {
+	ID         int64
+	RunID      int64
+	Author     string
+	File       string
+	Line       *int64
+	Body       string
+	Assessment string
+	Addressed  bool
+}
+
+// ReplaceDiscussions replaces a run's unresolved discussions.
+func (d *DB) ReplaceDiscussions(runID int64, items []Discussion) error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM discussions WHERE run_id = ?", runID); err != nil {
+		return err
+	}
+	for _, it := range items {
+		addressed := 0
+		if it.Addressed {
+			addressed = 1
+		}
+		if _, err := tx.Exec("INSERT INTO discussions (run_id, author, file, line, body, assessment, addressed) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			runID, it.Author, it.File, nullInt(it.Line), it.Body, it.Assessment, addressed); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ListDiscussions returns a run's discussions.
+func (d *DB) ListDiscussions(runID int64) ([]Discussion, error) {
+	rows, err := d.sql.Query("SELECT id, run_id, author, file, line, body, assessment, addressed FROM discussions WHERE run_id = ? ORDER BY id", runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Discussion
+	for rows.Next() {
+		var it Discussion
+		var line sql.NullInt64
+		var addressed int
+		if err := rows.Scan(&it.ID, &it.RunID, &it.Author, &it.File, &line, &it.Body, &it.Assessment, &addressed); err != nil {
+			return nil, err
+		}
+		if line.Valid {
+			it.Line = &line.Int64
+		}
+		it.Addressed = addressed == 1
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------------- messages
+
+// Message is one follow-up chat entry.
+type Message struct {
+	ID        int64
+	RunID     int64
+	Role      string
+	Content   string
+	CostUSD   float64
+	CreatedAt string
+}
+
+// AddMessage appends a chat message.
+func (d *DB) AddMessage(runID int64, role, content string, cost float64) (int64, error) {
+	res, err := d.sql.Exec("INSERT INTO messages (run_id, role, content, cost_usd, created_at) VALUES (?, ?, ?, ?, ?)", runID, role, content, cost, Now())
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// ListMessages returns a run's chat.
+func (d *DB) ListMessages(runID int64) ([]Message, error) {
+	rows, err := d.sql.Query("SELECT id, run_id, role, content, cost_usd, created_at FROM messages WHERE run_id = ? ORDER BY id", runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Message
+	for rows.Next() {
+		var m Message
+		if err := rows.Scan(&m.ID, &m.RunID, &m.Role, &m.Content, &m.CostUSD, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// Counts returns simple totals for the header.
+func (d *DB) Counts() map[string]int64 {
+	out := map[string]int64{}
+	for _, table := range []string{"merge_requests", "issues", "runs", "findings"} {
+		var n int64
+		_ = d.sql.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n)
+		out[table] = n
+	}
+	var cost float64
+	_ = d.sql.QueryRow("SELECT COALESCE(SUM(cost_usd), 0) FROM runs").Scan(&cost)
+	out["cost_cents"] = int64(cost * 100)
+	return out
+}
+
+func nullInt(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func prefixed(columns, prefix string) string {
+	parts := strings.Split(columns, ", ")
+	for i := range parts {
+		parts[i] = prefix + parts[i]
+	}
+	return strings.Join(parts, ", ")
+}

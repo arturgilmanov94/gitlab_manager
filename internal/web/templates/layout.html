@@ -1,0 +1,34 @@
+{{define "layout"}}<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Base.Title}} · MR Review</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="navbar">
+  <div class="navbar-inner">
+    <a class="brand" href="/"><span class="brand-mark"></span>MR Review</a>
+    <nav class="tabs">
+      <a href="/" class="{{if eq .Base.Nav "mrs"}}active{{end}}">Merge requests <span class="pill">{{index .Base.Counts "merge_requests"}}</span></a>
+      <a href="/issues" class="{{if eq .Base.Nav "issues"}}active{{end}}">Задачи <span class="pill">{{index .Base.Counts "issues"}}</span></a>
+      <a href="/doctor" class="{{if eq .Base.Nav "doctor"}}active{{end}}">Doctor</a>
+    </nav>
+    <div class="nav-context">
+      {{if .Base.Username}}<span class="tip" data-tip="Пользователь GitLab из glab auth. По нему определяются «мои» MR и задачи.">@{{.Base.Username}}</span> · {{end}}
+      {{if .Base.ProjectRoot}}<span class="mono tip" data-tip="Корень основного проекта. Все запуски агентов стартуют отсюда, поэтому подхватываются правила именно этого чекаута.">{{.Base.ProjectRoot}}</span>{{else}}<span class="text-danger">project root не определён</span>{{end}}
+      {{if .Base.Skill}} · <span class="mono tip" data-tip="Project-local review skill, найденный в репозитории проекта. Не копируется: после git pull используется новая версия.">{{.Base.Skill.Identifier}}</span>{{else}} · <span class="text-warning">review skill не найден</span>{{end}}
+    </div>
+  </div>
+</header>
+<main class="container">
+  <div id="flash" class="alert" hidden></div>
+  {{template "content" .}}
+</main>
+<footer class="footer">mr-review {{.Base.Version}} · только чтение относительно проекта · данные в data/ · потрачено ${{printf "%.2f" (divCents (index .Base.Counts "cost_cents"))}}</footer>
+<div id="tooltip" class="tooltip" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>{{end}}

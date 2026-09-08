@@ -1,0 +1,39 @@
+{{define "findings"}}
+{{if .Findings}}
+<table class="table findings">
+  <thead><tr><th>Severity</th><th>Статус</th><th>Где</th><th>Замечание</th></tr></thead>
+  <tbody>
+  {{range .Findings}}
+  <tr class="finding f-{{.Status}}">
+    <td><span class="sev sev-{{.Severity}}">{{.Severity}}</span><div class="muted small">{{.Category}}</div></td>
+    <td><span class="fstatus fstatus-{{.Status}}">{{if eq .Status "open"}}открыто{{else if eq .Status "fixed"}}исправлено{{else}}неактуально{{end}}</span></td>
+    <td class="mono small">{{if .File}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{else}}—{{end}}</td>
+    <td>
+      <b>{{.Title}}</b>
+      <div class="prewrap">{{.Description}}</div>
+      {{if .Suggestion}}<details><summary>Предлагаемый фикс</summary><pre>{{.Suggestion}}</pre></details>{{end}}
+      {{if .VerifyNote}}<div class="small muted">проверка: {{.VerifyNote}}</div>{{end}}
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p class="muted">Замечаний нет.</p>{{end}}
+
+{{if .Discussions}}
+<h3>Нерешённые обсуждения ревьюеров ({{len .Discussions}})</h3>
+<table class="table compact">
+  <thead><tr><th>Автор</th><th>Где</th><th>Комментарий</th><th>Оценка агента</th></tr></thead>
+  <tbody>
+  {{range .Discussions}}
+  <tr>
+    <td>{{.Author}}</td>
+    <td class="mono small">{{if .File}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{else}}—{{end}}</td>
+    <td class="prewrap">{{.Body}}</td>
+    <td>{{if .Addressed}}<span class="fstatus fstatus-fixed">учтено</span>{{else}}<span class="fstatus fstatus-open">открыто</span>{{end}} <div class="small">{{.Assessment}}</div></td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+{{end}}

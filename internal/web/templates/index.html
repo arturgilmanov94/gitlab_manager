@@ -1,0 +1,50 @@
+{{define "content"}}
+<section class="toolbar">
+  <form class="inline" onsubmit="return addRef(event, '/api/mrs')">
+    <input type="text" name="ref" placeholder="Ссылка на MR (https://gitlab…/-/merge_requests/123) или !123" size="58" required>
+    <button type="submit" class="btn btn-confirm tip" data-tip="Загружает MR из GitLab через glab (метаданные, head SHA, число нерешённых обсуждений) и добавляет в список. Ревью не запускается.">Добавить</button>
+  </form>
+  <button class="btn tip" data-tip="Подтягивает открытые MR, где вы reviewer или assignee (роли настраиваются в .env). Только текущий проект, определённый из git remote. Ничего не запускает." onclick="post('/api/mrs/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' MR для @' + r.username, true), reload()))">Синхронизировать с GitLab</button>
+  <span class="muted">{{index .Base.Counts "runs"}} запусков · {{index .Base.Counts "findings"}} замечаний</span>
+</section>
+
+{{if not .MRs}}
+<div class="empty">Пока нет merge requests. Вставьте ссылку или синхронизируйте назначенные вам.</div>
+{{else}}
+<div class="card">
+<table class="table list">
+  <thead><tr><th>MR</th><th>Название</th><th>Ветка</th><th>Head</th><th>Последний запуск</th><th class="center">Открыто</th><th></th></tr></thead>
+  <tbody>
+  {{range .MRs}}
+  <tr>
+    <td class="nowrap"><a class="ref" href="/mr/{{.ID}}">!{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
+    <td>
+      <a href="/mr/{{.ID}}">{{.Title}}</a>
+      <div class="muted small">{{.Author}}{{if and $.Base.Username (eq .Author $.Base.Username)}} <span class="badge badge-info tip" data-tip="Автор MR — вы. Доступна кнопка исправления замечаний ревьюеров.">мой</span>{{end}} · {{.State}} · обновлён {{when .GitLabUpdatedAt}}
+      {{if .Unresolved}} · <span class="badge badge-warning tip" data-tip="Нерешённые обсуждения ревьюеров в GitLab (resolvable и не resolved). Обновляется при синхронизации и при каждом запуске.">{{.Unresolved}} обсужд.</span>{{end}}</div>
+    </td>
+    <td class="mono small">{{.SourceBranch}}<div class="muted">→ {{.TargetBranch}}</div></td>
+    <td class="mono small">{{shortSHA .HeadSHA}}{{if .Stale}}<div class="text-warning small tip" data-tip="В MR появились коммиты после последнего ревью. Нажмите «Проверить», чтобы перепроверить открытые замечания на новом head.">новые коммиты</div>{{end}}</td>
+    <td>
+      {{if .Last}}
+        <a href="/run/{{.Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}">{{template "status" .Last.Status}}</a>
+        <div class="small">{{kindLabel .Last.Kind}} · {{.Last.Runner}}{{if .Last.Verdict}} · <span class="verdict verdict-{{.Last.Verdict}}">{{verdict .Last.Verdict}}</span>{{end}}</div>
+        <div class="muted small">{{if .Last.FinishedAt}}{{when .Last.FinishedAt}}{{else}}{{when .Last.CreatedAt}}{{end}}</div>
+      {{else}}<span class="muted">—</span>{{end}}
+    </td>
+    <td class="center">{{if and .Last (eq .Last.Status "done")}}<span class="count {{if .Last.OpenFindings}}hot{{end}}">{{.Last.OpenFindings}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+    <td class="nowrap actions">
+      {{$busy := and .Last (or (eq .Last.Status "running") (eq .Last.Status "queued"))}}
+      <button class="btn btn-sm tip" data-tip="{{kindTip "quick"}}" {{if $busy}}disabled{{end}} onclick="startRun('/api/mrs/{{.ID}}/runs', 'quick', this)">Быстрое</button>
+      <button class="btn btn-sm btn-confirm tip" data-tip="{{kindTip "full"}}" {{if $busy}}disabled{{end}} onclick="startRun('/api/mrs/{{.ID}}/runs', 'full', this)">Полное</button>
+      <button class="btn btn-sm tip" data-tip="{{kindTip "verify"}}" {{if or $busy (not .Last)}}disabled{{end}} onclick="startRun('/api/mrs/{{.ID}}/runs', 'verify', this)">Проверить</button>
+      <a class="btn btn-sm btn-link" href="{{.WebURL}}" target="_blank" rel="noopener">GitLab ↗</a>
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<div class="muted small toolbar-note">Агент для запусков со списка: {{template "runner-picker" .Base.Runners}}</div>
+{{end}}
+{{end}}

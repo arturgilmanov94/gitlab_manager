@@ -1,0 +1,73 @@
+{{define "content"}}
+<section class="page-head">
+  <div>
+    <div class="muted small"><a href="/issues">← все задачи</a> · {{.Issue.ProjectPath}}</div>
+    <h1><a class="ref" href="{{.Issue.WebURL}}" target="_blank" rel="noopener">#{{.Issue.IID}}</a> {{.Issue.Title}}</h1>
+    <div class="meta">автор <b>{{.Issue.Author}}</b> · {{.Issue.State}}{{if .Issue.Labels}} · {{.Issue.Labels}}{{end}} · GitLab обновлена {{when .Issue.GitLabUpdatedAt}}</div>
+  </div>
+  <div class="actions">
+    <button class="btn tip" data-tip="Перечитывает задачу из GitLab (описание, метки, статус)." onclick="post('/api/issues/{{.Issue.ID}}/refresh', {}, this).then(r => r && reload())">Обновить из GitLab</button>
+    <button class="btn btn-danger-secondary tip" data-tip="Убирает задачу и историю её запусков из dashboard. Ветки и worktree не удаляются, в GitLab ничего не меняется." onclick="confirm('Убрать задачу из dashboard?') && del('/api/issues/{{.Issue.ID}}', this).then(r => r && go('/issues'))">Убрать</button>
+  </div>
+</section>
+
+<section class="card">
+  <details>
+    <summary>Описание задачи</summary>
+    <pre class="description">{{.Issue.Description}}</pre>
+  </details>
+</section>
+
+<section class="card run-controls" id="implement">
+  <div class="controls-row">
+    <div class="controls-label">Агент</div>
+    {{template "runner-picker" .Base.Runners}}
+  </div>
+  <div class="controls-row">
+    <div class="controls-label">Указания</div>
+    <textarea id="notes" rows="3" placeholder="Необязательно: дополнительное описание для агента — как решать, что учесть, чего не трогать. Пусто = задача решается как есть."></textarea>
+  </div>
+  <div class="controls-row">
+    <div class="controls-label">Ветка</div>
+    <input id="branch" type="text" size="40" value="{{.DefaultBranch}}" class="mono">
+    <span class="muted small tip" data-tip="Ветка создаётся от origin/{{.BaseBranch}} в отдельном worktree. По умолчанию имя = ссылка на задачу, как принято в проекте. Если ветка уже есть локально или на origin — используется она.">от origin/{{.BaseBranch}}, в отдельном worktree</span>
+  </div>
+  <div class="controls-row">
+    <div class="controls-label"></div>
+    <button class="btn tip" data-tip="{{kindTip "plan"}}" {{if .Active}}disabled{{end}} onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'plan', this, {notes: document.getElementById('notes').value})">Составить план</button>
+    <button class="btn btn-confirm tip" data-tip="{{kindTip "implement"}}" {{if .Active}}disabled{{end}} onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Реализовать в worktree</button>
+  </div>
+</section>
+
+{{if .Active}}
+<div class="progress-box" data-run-status="{{.Active.ID}}" data-status="{{.Active.Status}}" data-started="{{.Active.StartedAt}}" data-reload="1">
+  <div class="progress-head">{{template "status" .Active.Status}} <b>{{kindLabel .Active.Kind}}</b> · {{.Active.Runner}} · <span class="elapsed">—</span> · <a href="/run/{{.Active.ID}}">открыть лог</a>
+    <button class="btn btn-sm btn-danger-secondary" onclick="post('/api/runs/{{.Active.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Отменить</button></div>
+  <div class="progress"><div class="progress-bar indeterminate"></div></div>
+</div>
+{{end}}
+
+<section class="card">
+  <h2>История запусков</h2>
+  {{if not .Runs}}<p class="muted">Запусков ещё не было.</p>{{else}}
+  <table class="table compact">
+    <thead><tr><th>#</th><th>Тип</th><th>Статус</th><th>Агент</th><th>Ветка</th><th>Стоимость</th><th>Время</th><th>Старт</th><th>Итог</th></tr></thead>
+    <tbody>
+    {{range .Runs}}
+    <tr>
+      <td><a href="/run/{{.ID}}">#{{.ID}}</a></td>
+      <td>{{kindLabel .Kind}}</td>
+      <td><a href="/run/{{.ID}}" data-run-status="{{.ID}}" data-status="{{.Status}}">{{template "status" .Status}}</a></td>
+      <td>{{.Runner}}</td>
+      <td class="mono small">{{.Branch}}</td>
+      <td>{{money .CostUSD}}</td>
+      <td>{{seconds .DurationMs}}</td>
+      <td class="small">{{if .StartedAt}}{{when .StartedAt}}{{else}}{{when .CreatedAt}}{{end}}</td>
+      <td class="small clamp">{{if .Summary}}{{.Summary}}{{else if .Error}}<span class="text-danger">{{.Error}}</span>{{end}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</section>
+{{end}}

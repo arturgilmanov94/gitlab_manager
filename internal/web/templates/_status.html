@@ -1,0 +1,20 @@
+{{/* status icon + label; . is a run status string */}}
+{{define "status"}}<span class="status status-{{.}}">
+  {{if eq . "running"}}<span class="spinner"></span> выполняется
+  {{else if eq . "queued"}}<span class="dot dot-pulse"></span> в очереди
+  {{else if eq . "done"}}<svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/><path d="M4.5 8.5l2.5 2.5 4.5-5"/></svg> завершён
+  {{else if eq . "failed"}}<svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5"/></svg> не вышло
+  {{else if eq . "cancelled"}}<svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/><path d="M5 8h6"/></svg> отменён
+  {{else}}{{.}}{{end}}
+</span>{{end}}
+
+{{define "runner-picker"}}
+<div class="segmented tip" data-tip="Какой агент выполняет запуск. У каждого свои правила и модель: Claude Code берёт CLAUDE.md, .claude/agents и skills проекта; Codex читает AGENTS.md; Cursor — правила Cursor. Показываются только установленные.">
+  {{range $i, $r := .}}
+  <label class="seg{{if eq $i 0}} checked{{end}}" title="{{$r.Path}} {{$r.Version}}">
+    <input type="radio" name="runner" value="{{$r.Name}}" {{if eq $i 0}}checked{{end}}>
+    {{if eq $r.Name "claude"}}Claude{{else if eq $r.Name "codex"}}Codex{{else if eq $r.Name "cursor"}}Cursor{{else}}{{$r.Name}}{{end}}
+  </label>
+  {{else}}<span class="text-danger">агенты не найдены</span>{{end}}
+</div>
+{{end}}

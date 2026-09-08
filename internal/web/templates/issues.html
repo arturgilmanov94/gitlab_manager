@@ -1,0 +1,42 @@
+{{define "content"}}
+<section class="toolbar">
+  <form class="inline" onsubmit="return addRef(event, '/api/issues')">
+    <input type="text" name="ref" placeholder="Ссылка на задачу (https://gitlab…/-/issues/123) или #123" size="58" required>
+    <button type="submit" class="btn btn-confirm tip" data-tip="Загружает задачу из GitLab через glab (название, описание, метки) и добавляет в список. Задачи из других проектов (например tn/project/eu/eu) тоже подходят: код всё равно берётся из основного репозитория.">Добавить</button>
+  </form>
+  <button class="btn tip" data-tip="Подтягивает открытые задачи, где вы assignee. Ничего не запускает." onclick="post('/api/issues/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' задач для @' + r.username, true), reload()))">Синхронизировать с GitLab</button>
+</section>
+
+{{if not .Issues}}
+<div class="empty">Пока нет задач. Вставьте ссылку на issue или синхронизируйте назначенные вам.</div>
+{{else}}
+<div class="card">
+<table class="table list">
+  <thead><tr><th>Задача</th><th>Название</th><th>Метки</th><th>Последний запуск</th><th></th></tr></thead>
+  <tbody>
+  {{range .Issues}}
+  <tr>
+    <td class="nowrap"><a class="ref" href="/issue/{{.ID}}">#{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
+    <td><a href="/issue/{{.ID}}">{{.Title}}</a><div class="muted small">{{.Author}} · {{.State}} · обновлена {{when .GitLabUpdatedAt}}</div></td>
+    <td class="small">{{.Labels}}</td>
+    <td>
+      {{if .Last}}
+        <a href="/run/{{.Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}">{{template "status" .Last.Status}}</a>
+        <div class="small">{{kindLabel .Last.Kind}} · {{.Last.Runner}}</div>
+        <div class="muted small">{{if .Last.FinishedAt}}{{when .Last.FinishedAt}}{{else}}{{when .Last.CreatedAt}}{{end}}</div>
+      {{else}}<span class="muted">—</span>{{end}}
+    </td>
+    <td class="nowrap actions">
+      {{$busy := and .Last (or (eq .Last.Status "running") (eq .Last.Status "queued"))}}
+      <button class="btn btn-sm tip" data-tip="{{kindTip "plan"}}" {{if $busy}}disabled{{end}} onclick="startRun('/api/issues/{{.ID}}/runs', 'plan', this)">План</button>
+      <a class="btn btn-sm btn-confirm tip" data-tip="{{kindTip "implement"}}" href="/issue/{{.ID}}#implement">Реализовать…</a>
+      <a class="btn btn-sm btn-link" href="{{.WebURL}}" target="_blank" rel="noopener">GitLab ↗</a>
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<div class="muted small toolbar-note">Агент для запусков со списка: {{template "runner-picker" .Base.Runners}}</div>
+{{end}}
+{{end}}

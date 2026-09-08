@@ -1,0 +1,6 @@
+.env
+data/
+logs/
+runtime/
+dist/
+/mr-review

@@ -1,0 +1,85 @@
+{{define "content"}}
+<section class="page-head">
+  <div>
+    <div class="muted small"><a href="/">← все merge requests</a> · {{.MR.ProjectPath}}</div>
+    <h1><a class="ref" href="{{.MR.WebURL}}" target="_blank" rel="noopener">!{{.MR.IID}}</a> {{.MR.Title}}</h1>
+    <div class="meta">
+      автор <b>{{.MR.Author}}</b>{{if .IsMine}} <span class="badge badge-info">мой</span>{{end}} · <span class="mono">{{.MR.SourceBranch}}</span> → <span class="mono">{{.MR.TargetBranch}}</span>
+      · head <span class="mono">{{shortSHA .MR.HeadSHA}}</span> · {{.MR.State}}
+      {{if .MR.Unresolved}} · <span class="badge badge-warning">{{.MR.Unresolved}} нерешённых обсуждений</span>{{end}}
+      · GitLab обновлён {{when .MR.GitLabUpdatedAt}} · синхронизирован {{when .MR.SyncedAt}}
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn tip" data-tip="Перечитывает MR из GitLab: название, ветки, head SHA, статус, число нерешённых обсуждений. Ничего не запускает." onclick="post('/api/mrs/{{.MR.ID}}/refresh', {}, this).then(r => r && reload())">Обновить из GitLab</button>
+    <button class="btn btn-danger-secondary tip" data-tip="Убирает MR и всю историю его запусков из dashboard. В GitLab ничего не меняется." onclick="confirm('Убрать MR и историю запусков из dashboard?') && del('/api/mrs/{{.MR.ID}}', this).then(r => r && go('/'))">Убрать</button>
+  </div>
+</section>
+
+<section class="card run-controls">
+  <div class="controls-row">
+    <div class="controls-label">Агент</div>
+    {{template "runner-picker" .Base.Runners}}
+  </div>
+  <div class="controls-row">
+    <div class="controls-label">Ревью</div>
+    <button class="btn tip" data-tip="{{kindTip "quick"}}" {{if .Active}}disabled{{end}} onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'quick', this)">Быстрое ревью</button>
+    <button class="btn btn-confirm tip" data-tip="{{kindTip "full"}}" {{if .Active}}disabled{{end}} onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'full', this)">Полное ревью</button>
+    <button class="btn tip" data-tip="{{kindTip "verify"}}" {{if or .Active (not .Latest)}}disabled{{end}} onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'verify', this)">Проверить исправления</button>
+  </div>
+  {{if .IsMine}}
+  <div class="controls-row">
+    <div class="controls-label">Мой MR</div>
+    <button class="btn btn-warning tip" data-tip="{{kindTip "fix"}}" {{if or .Active (not .MR.Unresolved)}}disabled{{end}} onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'fix', this, {notes: document.getElementById('fix-notes').value})">Исправить замечания ревьюеров{{if .MR.Unresolved}} ({{.MR.Unresolved}}){{end}}</button>
+    <input id="fix-notes" type="text" size="50" placeholder="Необязательно: уточнения для агента (что учесть, что не трогать)">
+    {{if not .MR.Unresolved}}<span class="muted small">нет нерешённых обсуждений</span>{{end}}
+  </div>
+  {{end}}
+</section>
+
+{{if .Active}}
+<div class="progress-box" data-run-status="{{.Active.ID}}" data-status="{{.Active.Status}}" data-started="{{.Active.StartedAt}}" data-reload="1">
+  <div class="progress-head">{{template "status" .Active.Status}} <b>{{kindLabel .Active.Kind}}</b> · {{.Active.Runner}} · <span class="elapsed">—</span> · <a href="/run/{{.Active.ID}}">открыть лог</a>
+    <button class="btn btn-sm btn-danger-secondary tip" data-tip="Останавливает процесс агента. Результат не сохраняется, запуск помечается как отменённый." onclick="post('/api/runs/{{.Active.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Отменить</button></div>
+  <div class="progress"><div class="progress-bar indeterminate"></div></div>
+</div>
+{{end}}
+{{if .Stale}}
+<div class="alert alert-warning">В MR есть новые коммиты (<span class="mono">{{shortSHA .MR.HeadSHA}}</span>) после последнего ревью (<span class="mono">{{shortSHA .Latest.HeadSHA}}</span>). Нажмите <b>Проверить исправления</b>, чтобы перепроверить открытые замечания.</div>
+{{end}}
+
+{{if .Latest}}
+<section class="card">
+  <h2>Последний результат — <a href="/run/{{.Latest.ID}}">запуск #{{.Latest.ID}}</a> · {{kindLabel .Latest.Kind}} · <span class="verdict verdict-{{.Latest.Verdict}}">{{verdict .Latest.Verdict}}</span></h2>
+  <p class="prewrap summary">{{.Latest.Summary}}</p>
+  {{template "findings" .}}
+</section>
+{{else}}
+<div class="empty">Завершённых ревью пока нет. Запустите <b>Быстрое</b> или <b>Полное ревью</b>: агент стартует из корня проекта с его правилами и review-скиллом.</div>
+{{end}}
+
+<section class="card">
+  <h2>История запусков</h2>
+  {{if not .Runs}}<p class="muted">Запусков ещё не было.</p>{{else}}
+  <table class="table compact">
+    <thead><tr><th>#</th><th>Тип</th><th>Статус</th><th>Агент</th><th>Head</th><th>Вердикт</th><th>Замечания</th><th>Стоимость</th><th>Время</th><th>Старт</th></tr></thead>
+    <tbody>
+    {{range .Runs}}
+    <tr>
+      <td><a href="/run/{{.ID}}">#{{.ID}}</a></td>
+      <td>{{kindLabel .Kind}}</td>
+      <td><a href="/run/{{.ID}}" data-run-status="{{.ID}}" data-status="{{.Status}}">{{template "status" .Status}}</a></td>
+      <td>{{.Runner}}</td>
+      <td class="mono small">{{shortSHA .HeadSHA}}</td>
+      <td class="verdict verdict-{{.Verdict}}">{{if .Verdict}}{{verdict .Verdict}}{{else}}—{{end}}</td>
+      <td>{{if eq .Status "done"}}{{.OpenFindings}} открыто / {{.TotalFindings}}{{else}}—{{end}}</td>
+      <td>{{money .CostUSD}}</td>
+      <td>{{seconds .DurationMs}}</td>
+      <td class="small">{{if .StartedAt}}{{when .StartedAt}}{{else}}{{when .CreatedAt}}{{end}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</section>
+{{end}}
