@@ -1,17 +1,25 @@
-/* Dashboard helpers: JSON API calls, tooltips, run polling, elapsed timers. */
+/* Dashboard helpers: JSON API calls, toast, tooltips, overflow menus, run polling, elapsed timers. */
 (function () {
-  const flashEl = document.getElementById('flash');
+  // ---- toast / feedback
+  let toastTimer = null;
   window.flash = function (message, ok) {
-    if (!flashEl) return;
-    flashEl.textContent = message;
-    flashEl.className = 'alert' + (ok ? ' ok' : '');
-    flashEl.hidden = false;
+    let el = document.getElementById('toast');
+    if (!el) { el = document.createElement('div'); el.id = 'toast'; document.body.appendChild(el); }
+    el.className = 'toast' + (ok ? '' : ' error');
+    el.textContent = message;
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.hidden = true; }, ok ? 3500 : 8000);
   };
-  window.reload = () => window.location.reload();
+  window.reload = () => { try { sessionStorage.setItem('scroll:' + location.pathname, String(window.scrollY)); } catch (e) {} window.location.reload(); };
   window.go = (url) => { window.location.href = url; };
+  try {
+    const saved = sessionStorage.getItem('scroll:' + location.pathname);
+    if (saved) { sessionStorage.removeItem('scroll:' + location.pathname); window.scrollTo(0, parseInt(saved, 10) || 0); }
+  } catch (e) { /* ignore */ }
 
   function busy(button, on) {
-    if (!button) return;
+    if (!button || !button.classList) return;
     button.disabled = on;
     button.classList.toggle('busy', on);
   }
@@ -37,6 +45,7 @@
   window.post = (url, body, button) => call('POST', url, body || {}, button);
   window.del = (url, button) => call('DELETE', url, undefined, button);
 
+  // ---- agent picker
   function selectedRunner() {
     const checked = document.querySelector('input[name="runner"]:checked');
     return checked ? checked.value : '';
@@ -47,6 +56,17 @@
     });
   });
 
+  // ---- overflow menus: close on outside click / Escape
+  document.addEventListener('click', (event) => {
+    document.querySelectorAll('details.menu[open]').forEach((menu) => {
+      if (!menu.contains(event.target)) menu.removeAttribute('open');
+    });
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') document.querySelectorAll('details.menu[open]').forEach((m) => m.removeAttribute('open'));
+  });
+
+  // ---- actions
   window.addRef = async function (event, url) {
     event.preventDefault();
     const input = event.target.querySelector('input[name="ref"]');
@@ -55,10 +75,14 @@
     return false;
   };
 
+  const startedLabels = {
+    quick: 'Быстрое ревью поставлено в очередь', full: 'Полное ревью поставлено в очередь', verify: 'Проверка изменений поставлена в очередь',
+    fix: 'Исправление замечаний запущено, создаю workspace', plan: 'Исследование поставлено в очередь', implement: 'Решение задачи запущено, создаю workspace',
+  };
   window.startRun = async function (url, kind, button, extra) {
     const body = Object.assign({ kind, runner: selectedRunner() }, extra || {});
     const data = await call('POST', url, body, button);
-    if (data && data.redirect) go(data.redirect);
+    if (data && data.redirect) { flash(startedLabels[kind] || 'Запуск поставлен в очередь', true); go(data.redirect); }
   };
 
   window.ask = async function (event, runId) {
@@ -74,7 +98,7 @@
     chat.appendChild(pending);
     const waiting = document.createElement('div');
     waiting.className = 'msg msg-assistant';
-    waiting.innerHTML = '<div class="msg-role"><span class="spinner"></span> агент думает…</div>';
+    waiting.innerHTML = '<div class="msg-role"><span class="spinner"></span> агент отвечает в той же сессии…</div>';
     chat.appendChild(waiting);
     area.value = '';
     const data = await call('POST', `/api/runs/${runId}/ask`, { question }, event.submitter);
@@ -96,7 +120,11 @@
     if (data && data.url) { flash('MR создан: ' + data.url, true); window.open(data.url, '_blank'); }
   };
 
-  // Tooltips: one floating element positioned near the hovered control.
+  window.copyText = async function (text) {
+    try { await navigator.clipboard.writeText(text); flash('Скопировано', true); } catch (e) { flash('Не удалось скопировать', false); }
+  };
+
+  // ---- tooltips (also for disabled controls wrapped in .disabled-wrap)
   const tooltip = document.getElementById('tooltip');
   if (tooltip) {
     let current = null;
@@ -107,8 +135,7 @@
       tooltip.textContent = target.dataset.tip;
       tooltip.hidden = false;
       const rect = target.getBoundingClientRect();
-      const width = Math.min(380, window.innerWidth - 24);
-      tooltip.style.maxWidth = width + 'px';
+      tooltip.style.maxWidth = Math.min(360, window.innerWidth - 24) + 'px';
       let left = rect.left;
       if (left + tooltip.offsetWidth > window.innerWidth - 12) left = window.innerWidth - tooltip.offsetWidth - 12;
       let top = rect.bottom + 8;
@@ -121,7 +148,7 @@
     });
   }
 
-  // Elapsed timers for running boxes.
+  // ---- elapsed timers
   function tickElapsed() {
     document.querySelectorAll('[data-started]').forEach((box) => {
       const el = box.querySelector('.elapsed');
@@ -134,7 +161,7 @@
   tickElapsed();
   setInterval(tickElapsed, 1000);
 
-  // Poll active runs; reload the page when one finishes.
+  // ---- poll active runs; reload when one finishes
   const active = Array.from(document.querySelectorAll('[data-run-status]')).filter((el) => /queued|running/.test(el.dataset.status));
   if (active.length) {
     const ids = Array.from(new Set(active.map((el) => el.dataset.runStatus)));

@@ -1,54 +1,92 @@
 {{define "content"}}
 <section class="page-head">
   <div>
-    <div class="muted small"><a href="/issues">← все задачи</a> · {{.Issue.ProjectPath}}</div>
+    <div class="crumbs"><a href="/issues">Задачи</a> · {{.Issue.ProjectPath}}</div>
     <h1><a class="ref" href="{{.Issue.WebURL}}" target="_blank" rel="noopener">#{{.Issue.IID}}</a> {{.Issue.Title}}</h1>
-    <div class="meta">автор <b>{{.Issue.Author}}</b> · {{.Issue.State}}{{if .Issue.Labels}} · {{.Issue.Labels}}{{end}} · GitLab обновлена {{when .Issue.GitLabUpdatedAt}}</div>
+    <div class="meta"><span>{{.Issue.Author}}</span><span class="sep"></span><span>{{.Issue.State}}</span>{{if .Issue.Labels}}<span class="sep"></span><span>{{.Issue.Labels}}</span>{{end}}<span class="sep"></span><span>GitLab обновлена {{when .Issue.GitLabUpdatedAt}}</span></div>
   </div>
   <div class="actions">
-    <button class="btn tip" data-tip="Перечитывает задачу из GitLab (описание, метки, статус)." onclick="post('/api/issues/{{.Issue.ID}}/refresh', {}, this).then(r => r && reload())">Обновить из GitLab</button>
-    <button class="btn btn-danger-secondary tip" data-tip="Убирает задачу и историю её запусков из dashboard. Ветки и worktree не удаляются, в GitLab ничего не меняется." onclick="confirm('Убрать задачу из dashboard?') && del('/api/issues/{{.Issue.ID}}', this).then(r => r && go('/issues'))">Убрать</button>
+    {{if .Active}}
+      <a class="btn btn-primary" href="/run/{{.Active.ID}}">Открыть сессию</a>
+    {{else if eq .State "failed"}}
+      <a class="btn" href="/run/{{.Failed.ID}}">Посмотреть ошибку</a>
+      <button class="btn btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Failed.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Повторить</button>
+    {{else if eq .State "ready"}}
+      <a class="btn btn-primary" href="/run/{{.Impl.ID}}">Подготовить MR</a>
+      <a class="btn" href="/run/{{.Impl.ID}}#workspace">Показать diff</a>
+    {{else if eq .State "planned"}}
+      <button class="btn btn-primary tip" data-tip="{{kindTip "implement_plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {plan_run: '{{.Plan.ID}}', notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Реализовать этот план</button>
+      <a class="btn" href="/run/{{.Plan.ID}}">Открыть план</a>
+    {{else}}
+      <button class="btn btn-primary tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Решить задачу</button>
+      <button class="btn tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'plan', this, {notes: document.getElementById('notes').value})">Исследовать</button>
+    {{end}}
+    <details class="menu">
+      <summary title="Ещё действия">⋯</summary>
+      <div class="menu-items">
+        {{if not .Active}}
+          <button class="item tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'plan', this, {notes: document.getElementById('notes').value})">Исследовать{{if .Plan}} заново{{end}}<span class="sub">без изменений кода</span></button>
+          <button class="item tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Решить без плана<span class="sub">агент сам спланирует и реализует</span></button>
+          <div class="divider"></div>
+        {{end}}
+        <a class="item ext" href="{{.Issue.WebURL}}" target="_blank" rel="noopener">GitLab</a>
+        <button class="item tip" data-tip="{{kindTip "refresh"}}" onclick="post('/api/issues/{{.Issue.ID}}/refresh', {}, this).then(r => r && reload())">Обновить из GitLab</button>
+        <a class="item" href="#history">История сессий</a>
+        <div class="divider"></div>
+        {{if .Active}}<button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Active.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
+        <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="confirm('Убрать задачу из dashboard? Ветки и workspace не удаляются.') && del('/api/issues/{{.Issue.ID}}', this).then(r => r && go('/issues'))">Убрать из dashboard</button>
+      </div>
+    </details>
   </div>
 </section>
 
-<section class="card">
-  <details>
-    <summary>Описание задачи</summary>
-    <pre class="description">{{.Issue.Description}}</pre>
-  </details>
-</section>
-
-<section class="card run-controls" id="implement">
-  <div class="controls-row">
-    <div class="controls-label">Агент</div>
-    {{template "runner-picker" .Base.Runners}}
+<section class="status-panel">
+  <div class="status-block tone-{{if .Active}}info{{else if eq .State "failed"}}danger{{else if or (eq .State "ready") (eq .State "planned")}}success{{else}}neutral{{end}}">
+    <div class="label">Состояние задачи</div>
+    <div class="value">
+      {{if .Active}}<span class="spinner"></span> {{if eq .Active.Kind "plan"}}Исследуется{{else}}Пишется код{{end}}
+      {{else if eq .State "failed"}}<span class="glyph">✕</span> Ошибка
+      {{else if eq .State "ready"}}<span class="glyph">✓</span> Готово к MR
+      {{else if eq .State "planned"}}<span class="glyph">✓</span> Есть план
+      {{else}}<span class="glyph">○</span> Новая{{end}}
+    </div>
+    <div class="detail">
+      {{if .Active}}{{.Active.Runner}} · <span data-started="{{.Active.StartedAt}}"><span class="elapsed">—</span></span>
+      {{else if eq .State "failed"}}{{firstLine .Failed.Error}}
+      {{else if eq .State "ready"}}реализация в workspace на ветке <span class="mono">{{.Impl.Branch}}</span>; дальше diff, commit, push и MR
+      {{else if eq .State "planned"}}исследование #{{.Plan.ID}} от {{when .Plan.FinishedAt}}; план будет передан агенту при реализации
+      {{else}}агент ещё не работал над задачей{{end}}
+    </div>
   </div>
-  <div class="controls-row">
-    <div class="controls-label">Указания</div>
-    <textarea id="notes" rows="3" placeholder="Необязательно: дополнительное описание для агента — как решать, что учесть, чего не трогать. Пусто = задача решается как есть."></textarea>
-  </div>
-  <div class="controls-row">
-    <div class="controls-label">Ветка</div>
-    <input id="branch" type="text" size="40" value="{{.DefaultBranch}}" class="mono">
-    <span class="muted small tip" data-tip="Ветка создаётся от origin/{{.BaseBranch}} в отдельном worktree. По умолчанию имя = ссылка на задачу, как принято в проекте. Если ветка уже есть локально или на origin — используется она.">от origin/{{.BaseBranch}}, в отдельном worktree</span>
-  </div>
-  <div class="controls-row">
-    <div class="controls-label"></div>
-    <button class="btn tip" data-tip="{{kindTip "plan"}}" {{if .Active}}disabled{{end}} onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'plan', this, {notes: document.getElementById('notes').value})">Составить план</button>
-    <button class="btn btn-confirm tip" data-tip="{{kindTip "implement"}}" {{if .Active}}disabled{{end}} onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Реализовать в worktree</button>
+  <div class="status-block tone-neutral">
+    <div class="label">Агент для запусков</div>
+    <div class="value">{{template "runner-picker" .Base.Runners}}</div>
+    <div class="detail">запуски стартуют из корня проекта с его правилами</div>
   </div>
 </section>
 
 {{if .Active}}
 <div class="progress-box" data-run-status="{{.Active.ID}}" data-status="{{.Active.Status}}" data-started="{{.Active.StartedAt}}" data-reload="1">
-  <div class="progress-head">{{template "status" .Active.Status}} <b>{{kindLabel .Active.Kind}}</b> · {{.Active.Runner}} · <span class="elapsed">—</span> · <a href="/run/{{.Active.ID}}">открыть лог</a>
-    <button class="btn btn-sm btn-danger-secondary" onclick="post('/api/runs/{{.Active.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Отменить</button></div>
+  <div class="progress-head">{{template "status" .Active.Status}} <b>{{kindLabel .Active.Kind}}</b> · {{.Active.Runner}} · <span class="elapsed">—</span> · <a href="/run/{{.Active.ID}}">открыть сессию</a></div>
   <div class="progress"><div class="progress-bar indeterminate"></div></div>
 </div>
 {{end}}
 
 <section class="card">
-  <h2>История запусков</h2>
+  <div class="card-head"><h2>Описание задачи</h2></div>
+  <pre class="description">{{if .Issue.Description}}{{.Issue.Description}}{{else}}(описание в GitLab пустое){{end}}</pre>
+</section>
+
+<section class="card" id="solve">
+  <div class="card-head"><h2>Указания агенту</h2><span class="small muted">необязательно</span></div>
+  <div class="field"><label for="notes">Что учесть</label><div style="flex:1"><textarea id="notes" rows="3" placeholder="Как решать, что учесть, чего не трогать. Пусто — задача решается как есть."></textarea></div></div>
+  <details class="section"><summary>Дополнительно: ветка</summary>
+    <div class="field" style="margin-top:8px"><label for="branch">Ветка</label><div><input id="branch" type="text" size="44" value="{{.DefaultBranch}}" class="mono"><div class="hint">создаётся от origin/{{.BaseBranch}} в отдельном workspace; по умолчанию имя = ссылка на задачу, как принято в проекте</div></div></div>
+  </details>
+</section>
+
+<section class="card" id="history">
+  <div class="card-head"><h2>История сессий по задаче</h2></div>
   {{if not .Runs}}<p class="muted">Запусков ещё не было.</p>{{else}}
   <table class="table compact">
     <thead><tr><th>#</th><th>Тип</th><th>Статус</th><th>Агент</th><th>Ветка</th><th>Токены</th><th>Время</th><th>Старт</th><th>Итог</th></tr></thead>
@@ -63,7 +101,7 @@
       <td><span class="tip" data-tip="{{tokensTip .InputTokens .OutputTokens .CacheReadTokens .CacheWriteTokens}}">{{tokens .TotalTokens}}</span></td>
       <td>{{seconds .DurationMs}}</td>
       <td class="small">{{if .StartedAt}}{{when .StartedAt}}{{else}}{{when .CreatedAt}}{{end}}</td>
-      <td class="small clamp">{{if .Summary}}{{.Summary}}{{else if .Error}}<span class="text-danger">{{.Error}}</span>{{end}}</td>
+      <td class="small clamp">{{if .Summary}}{{.Summary}}{{else if .Error}}<span class="text-danger">{{firstLine .Error}}</span>{{end}}</td>
     </tr>
     {{end}}
     </tbody>

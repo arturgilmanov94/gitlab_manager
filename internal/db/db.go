@@ -198,10 +198,26 @@ type LastRun struct {
 	Tokens       int64
 }
 
-// MRListItem is an MR with its latest run.
+// DoneReview summarises the latest completed review of an MR.
+type DoneReview struct {
+	ID         int64
+	Kind       string
+	Verdict    string
+	HeadSHA    string
+	FinishedAt string
+	OpenMajor  int64 // CRITICAL + HIGH
+	OpenMinor  int64 // MEDIUM
+	OpenInfo   int64 // LOW + INFO
+}
+
+// Open is the total of open findings.
+func (r DoneReview) Open() int64 { return r.OpenMajor + r.OpenMinor + r.OpenInfo }
+
+// MRListItem is an MR with its latest run and latest completed review.
 type MRListItem struct {
 	MergeRequest
 	Last  *LastRun
+	Done  *DoneReview
 	Stale bool
 }
 
@@ -211,9 +227,14 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 		SELECT ` + prefixed(mrColumns, "mr.") + `,
 		       r.id, r.kind, r.status, r.verdict, r.head_sha, r.runner, r.model, r.finished_at, r.created_at,
 		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = r.id AND f.status = 'open'),
-		       r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens
+		       r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens,
+		       d.id, d.kind, d.verdict, d.head_sha, d.finished_at,
+		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = d.id AND f.status = 'open' AND f.severity IN ('CRITICAL', 'HIGH')),
+		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = d.id AND f.status = 'open' AND f.severity = 'MEDIUM'),
+		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = d.id AND f.status = 'open' AND f.severity IN ('LOW', 'INFO'))
 		FROM merge_requests mr
 		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE mr_id = mr.id ORDER BY id DESC LIMIT 1)
+		LEFT JOIN runs d ON d.id = (SELECT id FROM runs WHERE mr_id = mr.id AND status = 'done' AND kind IN ('review_full', 'review_verify', 'review_quick') ORDER BY id DESC LIMIT 1)
 		ORDER BY CASE WHEN mr.gitlab_updated_at = '' THEN mr.added_at ELSE mr.gitlab_updated_at END DESC, mr.id DESC`)
 	if err != nil {
 		return nil, err
@@ -223,16 +244,20 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 	for rows.Next() {
 		var item MRListItem
 		var last LastRun
-		var id, open, tokens sql.NullInt64
-		var kind, status, verdict, sha, runner, model, finished, created sql.NullString
+		var id, open, tokens, dID, dMajor, dMinor, dInfo sql.NullInt64
+		var kind, status, verdict, sha, runner, model, finished, created, dKind, dVerdict, dSHA, dFinished sql.NullString
 		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Author, &item.SourceBranch, &item.TargetBranch, &item.State, &item.HeadSHA, &item.Unresolved, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
-			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &open, &tokens); err != nil {
+			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &open, &tokens,
+			&dID, &dKind, &dVerdict, &dSHA, &dFinished, &dMajor, &dMinor, &dInfo); err != nil {
 			return nil, err
 		}
 		if id.Valid {
 			last = LastRun{id.Int64, kind.String, status.String, verdict.String, sha.String, runner.String, model.String, finished.String, created.String, open.Int64, tokens.Int64}
 			item.Last = &last
-			item.Stale = last.Status == StatusDone && last.HeadSHA != "" && last.HeadSHA != item.HeadSHA
+		}
+		if dID.Valid {
+			item.Done = &DoneReview{dID.Int64, dKind.String, dVerdict.String, dSHA.String, dFinished.String, dMajor.Int64, dMinor.Int64, dInfo.Int64}
+			item.Stale = item.Done.HeadSHA != "" && item.Done.HeadSHA != item.HeadSHA
 		}
 		out = append(out, item)
 	}

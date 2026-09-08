@@ -60,7 +60,7 @@ func get(t *testing.T, url string) (int, string) {
 
 func TestPagesAndFlow(t *testing.T) {
 	ts, svc, fr := newServer(t)
-	if code, body := get(t, ts.URL+"/"); code != 200 || !strings.Contains(body, "Пока нет merge requests") || !strings.Contains(body, "agent:mr-review") {
+	if code, body := get(t, ts.URL+"/"); code != 200 || !strings.Contains(body, "Пока нет merge requests") || !strings.Contains(body, "skill: mr-review") {
 		t.Fatalf("%d %s", code, body[:200])
 	}
 	if code, body := get(t, ts.URL+"/api/health"); code != 200 || !strings.Contains(body, svc.Settings.ProjectRoot) {
@@ -71,8 +71,11 @@ func TestPagesAndFlow(t *testing.T) {
 		t.Fatalf("%d %v", code, out)
 	}
 	redirect := out["redirect"].(string)
-	if code, body := get(t, ts.URL+redirect); code != 200 || !strings.Contains(body, "Исправить замечания ревьюеров (2)") {
-		t.Fatalf("mr page: %d (author alice == current user -> fix button expected)", code)
+	if code, body := get(t, ts.URL+redirect); code != 200 || !strings.Contains(body, "Исправить замечания ревьюеров (2)") || !strings.Contains(body, "Запустить ревью") || !strings.Contains(body, "Ещё не проверен") {
+		t.Fatalf("mr page: %d (own MR with 2 unresolved threads, never reviewed)", code)
+	}
+	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "Запустить ревью") || strings.Contains(body, ">Быстрое<") {
+		t.Fatal("list must show a state-driven primary action, not bare mode buttons")
 	}
 	if code, body := get(t, ts.URL+"/"); code != 200 || !strings.Contains(body, "MR 42") || !strings.Contains(body, "data-tip=") {
 		t.Fatalf("%d", code)
@@ -88,8 +91,14 @@ func TestPagesAndFlow(t *testing.T) {
 		_, body := get(t, ts.URL+"/api/runs/"+strings.TrimPrefix(runURL, "/run/"))
 		return strings.Contains(body, `"status":"done"`)
 	})
-	if code, body := get(t, ts.URL+runURL); code != 200 || !strings.Contains(body, "Null deref") || !strings.Contains(body, "Нужны правки") || !strings.Contains(body, "Вопрос агенту") {
+	if code, body := get(t, ts.URL+runURL); code != 200 || !strings.Contains(body, "Null deref") || !strings.Contains(body, "Нужны правки") || !strings.Contains(body, "Продолжить сессию") {
 		t.Fatalf("run page %d", code)
+	}
+	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "Открыть замечания") || !strings.Contains(body, "1 major") || !strings.Contains(body, "Проверен") {
+		t.Fatal("list must show CURRENT state with findings summary and «Открыть замечания»")
+	}
+	if _, body := get(t, ts.URL+redirect); !strings.Contains(body, "Нет изменений после последнего ревью") {
+		t.Fatal("disabled «Проверить изменения» must explain why")
 	}
 	if _, body := get(t, ts.URL+runURL+"/log"); !strings.Contains(body, "fake run") {
 		t.Fatal("log")
@@ -126,8 +135,11 @@ func TestIssuesPages(t *testing.T) {
 	if code, body := get(t, ts.URL+"/issues"); code != 200 || !strings.Contains(body, "Task 7") {
 		t.Fatalf("%d", code)
 	}
-	if code, body := get(t, ts.URL+"/issue/1"); code != 200 || !strings.Contains(body, "group/sub/project#7") || !strings.Contains(body, "Реализовать в worktree") {
+	if code, body := get(t, ts.URL+"/issue/1"); code != 200 || !strings.Contains(body, "group/sub/project#7") || !strings.Contains(body, "Решить задачу") || !strings.Contains(body, "Исследовать") {
 		t.Fatalf("%d", code)
+	}
+	if _, body := get(t, ts.URL+"/issues"); !strings.Contains(body, "Решить задачу") || !strings.Contains(body, "Новая") {
+		t.Fatal("issues list must show state and primary action")
 	}
 	fr.Outputs = []map[string]any{testutil.PlanOutput()}
 	code, out = postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "plan", "notes": "n"})
@@ -139,8 +151,46 @@ func TestIssuesPages(t *testing.T) {
 		_, body := get(t, ts.URL+"/api/runs/"+strings.TrimPrefix(runURL, "/run/"))
 		return strings.Contains(body, `"status":"done"`)
 	})
-	if code, body := get(t, ts.URL+runURL); code != 200 || !strings.Contains(body, "План решения") || !strings.Contains(body, "Plan summary") {
+	if code, body := get(t, ts.URL+runURL); code != 200 || !strings.Contains(body, "План решения") || !strings.Contains(body, "Plan summary") || !strings.Contains(body, "Реализовать этот план") {
 		t.Fatalf("plan page %d", code)
+	}
+	if _, body := get(t, ts.URL+"/issue/1"); !strings.Contains(body, "Есть план") || !strings.Contains(body, "Реализовать этот план") {
+		t.Fatal("issue page must show planned state")
+	}
+	// Implement from the plan: the plan text must reach the agent's notes.
+	fr.Outputs = []map[string]any{testutil.ImplementOutput()}
+	code, out = postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "implement", "plan_run": strings.TrimPrefix(runURL, "/run/")})
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	implURL := out["redirect"].(string)
+	testutil.WaitFor(t, func() bool {
+		_, body := get(t, ts.URL+"/api/runs/"+strings.TrimPrefix(implURL, "/run/"))
+		return strings.Contains(body, `"status":"done"`)
+	})
+	last := fr.Requests[len(fr.Requests)-1]
+	if !strings.Contains(last.Prompt, "Plan from the investigation run") || !strings.Contains(last.Prompt, "1. one") {
+		t.Fatalf("plan not passed to implementation prompt")
+	}
+	if _, body := get(t, ts.URL+"/issue/1"); !strings.Contains(body, "Готово к MR") || !strings.Contains(body, "Подготовить MR") {
+		t.Fatal("issue page must show ready state")
+	}
+	// Retry a failed run.
+	fr.FailWith = "boom"
+	code, out = postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "plan"})
+	failedURL := out["redirect"].(string)
+	testutil.WaitFor(t, func() bool {
+		_, body := get(t, ts.URL+"/api/runs/"+strings.TrimPrefix(failedURL, "/run/"))
+		return strings.Contains(body, `"status":"failed"`)
+	})
+	if _, body := get(t, ts.URL+failedURL); !strings.Contains(body, "Не удалось исследовать задачу") || !strings.Contains(body, "Повторить") {
+		t.Fatal("failed run page must show a human error and retry")
+	}
+	fr.FailWith = ""
+	fr.Outputs = []map[string]any{testutil.PlanOutput()}
+	code, out = postJSON(t, ts.URL+"/api/runs/"+strings.TrimPrefix(failedURL, "/run/")+"/retry", map[string]any{})
+	if code != 200 || out["redirect"] == nil {
+		t.Fatalf("retry: %d %v", code, out)
 	}
 	if code, out := postJSON(t, ts.URL+"/api/issues/sync", map[string]any{}); code != 200 || out["synced"].(float64) != 1 {
 		t.Fatalf("%d %v", code, out)

@@ -14,20 +14,23 @@
     <nav class="tabs">
       <a href="/" class="{{if eq .Base.Nav "mrs"}}active{{end}}">Merge requests <span class="pill">{{index .Base.Counts "merge_requests"}}</span></a>
       <a href="/issues" class="{{if eq .Base.Nav "issues"}}active{{end}}">Задачи <span class="pill">{{index .Base.Counts "issues"}}</span></a>
-      <a href="/doctor" class="{{if eq .Base.Nav "doctor"}}active{{end}}">Doctor</a>
     </nav>
     <div class="nav-context">
-      {{if .Base.Username}}<span class="tip" data-tip="Пользователь GitLab из glab auth. По нему определяются «мои» MR и задачи.">@{{.Base.Username}}</span> · {{end}}
-      {{if .Base.ProjectRoot}}<span class="mono tip" data-tip="Корень основного проекта. Все запуски агентов стартуют отсюда, поэтому подхватываются правила именно этого чекаута.">{{.Base.ProjectRoot}}</span>{{else}}<span class="text-danger">project root не определён</span>{{end}}
-      {{if .Base.Skill}} · <span class="mono tip" data-tip="Project-local review skill, найденный в репозитории проекта. Не копируется: после git pull используется новая версия.">{{.Base.Skill.Identifier}}</span>{{else}} · <span class="text-warning">review skill не найден</span>{{end}}
+      {{if .Base.Username}}<span class="chip tip" data-tip="Пользователь GitLab из glab. По нему определяются «мои» MR и задачи.">@{{.Base.Username}}</span>{{end}}
+      {{if .Base.ProjectRoot}}<span class="chip path mono tip" data-tip="Корень проекта. Все агенты стартуют отсюда и берут правила именно этого чекаута.">{{.Base.ProjectRoot}}</span>{{else}}<span class="chip bad">project root не определён</span>{{end}}
+      {{if .Base.Skill}}<span class="chip tip" data-tip="Review-skill проекта ({{.Base.Skill.RelPath}}). Не копируется: после git pull используется новая версия.">skill: {{.Base.Skill.Name}}</span>{{else}}<span class="chip warn tip" data-tip="В проекте не найден агент/skill ревью; ревью идёт по CLAUDE.md и промпту dashboard.">review skill не найден</span>{{end}}
     </div>
   </div>
 </header>
 <main class="container">
-  <div id="flash" class="alert" hidden></div>
   {{template "content" .}}
 </main>
-<footer class="footer">mr-review {{.Base.Version}} · только чтение относительно проекта · данные в data/ · <span class="tip" data-tip="Сумма токенов всех запусков и вопросов агенту (вход, выход, чтение и запись кэша). Подписка считает лимиты именно в токенах, поэтому доллары не показываем.">токенов израсходовано: {{tokens (index .Base.Counts "tokens")}}</span></footer>
+<footer class="footer">
+  <span>mr-review {{.Base.Version}}</span>
+  <span class="tip" data-tip="Сумма токенов всех запусков и вопросов агенту: вход, выход, чтение и запись кэша.">токенов израсходовано: {{tokens (index .Base.Counts "tokens")}}</span>
+  <span>только чтение относительно проекта · данные в data/</span>
+  <a href="/doctor">Проверка окружения</a>
+</footer>
 <div id="tooltip" class="tooltip" hidden></div>
 <script src="/static/app.js"></script>
 </body>

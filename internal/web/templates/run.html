@@ -1,40 +1,69 @@
 {{define "content"}}
 <section class="page-head">
   <div>
-    <div class="muted small">
-      <a href="/">← MR</a> · <a href="/issues">задачи</a>
-      {{if .MR}} · <a href="/mr/{{.MR.ID}}">!{{.MR.IID}} {{.MR.Title}}</a>{{end}}
-      {{if .Issue}} · <a href="/issue/{{.Issue.ID}}">#{{.Issue.IID}} {{.Issue.Title}}</a>{{end}}
+    <div class="crumbs">
+      {{if .MR}}<a href="/">Merge requests</a> · <a href="/mr/{{.MR.ID}}">!{{.MR.IID}} {{.MR.Title}}</a>{{else if .Issue}}<a href="/issues">Задачи</a> · <a href="/issue/{{.Issue.ID}}">#{{.Issue.IID}} {{.Issue.Title}}</a>{{else}}Сессия{{end}}
     </div>
-    <h1>Запуск #{{.Run.ID}} · {{kindLabel .Run.Kind}} · <span data-run-status="{{.Run.ID}}" data-status="{{.Run.Status}}" {{if .Run.Active}}data-reload="1"{{end}}>{{template "status" .Run.Status}}</span></h1>
+    <h1>{{kindLabel .Run.Kind}} <span class="muted">· сессия #{{.Run.ID}}</span></h1>
     <div class="meta">
-      агент <b>{{.Run.Runner}}</b>{{if .Run.SkillIdentifier}} · skill <span class="mono">{{.Run.SkillIdentifier}}</span>{{end}}
-      {{if .Run.HeadSHA}} · head <span class="mono">{{shortSHA .Run.HeadSHA}}</span>{{end}}
-      {{if .Run.Branch}} · ветка <span class="mono">{{.Run.Branch}}</span>{{end}}
-      · старт {{when .Run.StartedAt}} · финиш {{when .Run.FinishedAt}} · <span class="tip" data-tip="{{tokensTip .Run.InputTokens .Run.OutputTokens .Run.CacheReadTokens .Run.CacheWriteTokens}}">{{tokens .Run.TotalTokens}} токенов</span> · {{seconds .Run.DurationMs}}
-      {{if .Run.BaseRunID}} · проверяет <a href="/run/{{deref .Run.BaseRunID}}">#{{deref .Run.BaseRunID}}</a>{{end}}
+      <span data-run-status="{{.Run.ID}}" data-status="{{.Run.Status}}" {{if .Run.Active}}data-reload="1"{{end}}>{{template "status" .Run.Status}}</span>
+      <span class="sep"></span><span>агент <b>{{.Run.Runner}}</b></span>
+      {{if .Run.SkillIdentifier}}<span class="sep"></span><span>skill <span class="mono">{{.Run.SkillIdentifier}}</span></span>{{end}}
+      {{if .Run.HeadSHA}}<span class="sep"></span><span>HEAD <span class="mono">{{shortSHA .Run.HeadSHA}}</span></span>{{end}}
+      {{if .Run.Branch}}<span class="sep"></span><span>ветка <span class="mono">{{.Run.Branch}}</span></span>{{end}}
+      <span class="sep"></span><span>старт {{when .Run.StartedAt}}</span>
+      {{if .Run.FinishedAt}}<span class="sep"></span><span>финиш {{when .Run.FinishedAt}} · {{seconds .Run.DurationMs}}</span>{{end}}
+      <span class="sep"></span><span class="tip" data-tip="{{tokensTip .Run.InputTokens .Run.OutputTokens .Run.CacheReadTokens .Run.CacheWriteTokens}}">{{tokens .Run.TotalTokens}} токенов</span>
+      {{if .Run.BaseRunID}}<span class="sep"></span><span>проверяет <a href="/run/{{deref .Run.BaseRunID}}">#{{deref .Run.BaseRunID}}</a></span>{{end}}
     </div>
   </div>
   <div class="actions">
-    {{if .Run.Active}}<button class="btn btn-danger-secondary tip" data-tip="Останавливает процесс агента. Результат не сохраняется, запуск помечается как отменённый." onclick="post('/api/runs/{{.Run.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Отменить</button>{{end}}
-    <a class="btn tip" data-tip="Полный лог запуска: команда, промпт, stderr и stdout агента." href="/run/{{.Run.ID}}/log" target="_blank">Полный лог</a>
+    {{if .Run.Active}}
+      <button class="btn btn-danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Run.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>
+    {{else if eq .Run.Status "failed"}}
+      <button class="btn btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Run.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Повторить</button>
+    {{end}}
+    <a class="btn tip" data-tip="Команда, промпт, stderr и stdout агента — для диагностики." href="/run/{{.Run.ID}}/log" target="_blank">Технический лог</a>
   </div>
+</section>
+
+<section class="status-panel">
+  <div class="status-block tone-neutral">
+    <div class="label">Контекст сессии</div>
+    <div class="value">{{if .Messages}}Продолжалась{{else}}Новая сессия{{end}}</div>
+    <div class="detail">{{if .Run.SessionID}}агент помнит этот запуск{{if .Messages}} и {{len .Messages}} сообщений диалога{{end}}; можно продолжить ниже{{else}}агент не вернул идентификатор сессии — продолжить нельзя{{end}}</div>
+  </div>
+  {{if .Run.WorkDir}}
+  <div class="status-block tone-neutral">
+    <div class="label">Где работал агент</div>
+    <div class="value mono small">{{.Run.WorkDir}}</div>
+    <div class="detail">{{if .Run.IsEdit}}отдельный workspace; ваша рабочая копия не менялась{{else}}корень проекта, только чтение{{end}}</div>
+  </div>
+  {{end}}
 </section>
 
 {{if .Run.Active}}
 <div class="progress-box" data-started="{{.Run.StartedAt}}">
-  <div class="progress-head">{{template "status" .Run.Status}} агент работает из <span class="mono">{{.Run.WorkDir}}</span> · <span class="elapsed">—</span> · страница обновится сама</div>
+  <div class="progress-head">{{template "status" .Run.Status}} агент работает · <span class="elapsed">—</span> · страница обновится сама</div>
   <div class="progress"><div class="progress-bar indeterminate"></div></div>
 </div>
 {{else if eq .Run.Status "failed"}}
-<section class="card"><h2 class="text-danger">Не вышло</h2><pre class="error">{{.Run.Error}}</pre></section>
+<div class="error-box">
+  <h2>{{errorTitle .Run.Kind}}</h2>
+  <div class="prewrap">{{firstLine .Run.Error}}</div>
+  <div class="actions">
+    <button class="btn btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Run.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Повторить</button>
+    <a class="btn" href="/run/{{.Run.ID}}/log" target="_blank">Технический лог</a>
+  </div>
+  {{if ne (firstLine .Run.Error) .Run.Error}}<details class="section" style="margin-top:8px"><summary>Полный текст ошибки</summary><pre class="error">{{.Run.Error}}</pre></details>{{end}}
+</div>
 {{else if eq .Run.Status "cancelled"}}
-<section class="card"><h2 class="muted">Отменён</h2><pre>{{.Run.Error}}</pre></section>
+<div class="alert"><span class="state state-neutral"><span class="glyph">—</span> Остановлено</span> {{.Run.Error}} <button class="btn btn-sm tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Run.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Запустить снова</button></div>
 {{end}}
 
 {{if and (eq .Run.Status "done") .Run.IsReview}}
 <section class="card">
-  <h2>Вердикт: <span class="verdict verdict-{{.Run.Verdict}}">{{verdict .Run.Verdict}}</span></h2>
+  <div class="card-head"><h2>Результат ревью</h2><span class="verdict-{{.Run.Verdict}}">{{verdict .Run.Verdict}}</span></div>
   <p class="prewrap summary">{{.Run.Summary}}</p>
   {{template "findings" .}}
 </section>
@@ -42,20 +71,23 @@
 
 {{if and (eq .Run.Status "done") .Plan}}
 <section class="card">
-  <h2>План решения <span class="muted small">оценка: {{index .Plan "estimate"}}</span></h2>
+  <div class="card-head"><h2>План решения</h2><span class="badge">оценка: {{index .Plan "estimate"}}</span></div>
   <p class="prewrap summary">{{index .Plan "summary"}}</p>
   <h3>Шаги</h3><ol>{{range index .Plan "steps"}}<li class="prewrap">{{.}}</li>{{end}}</ol>
   <h3>Файлы</h3>
   <table class="table compact"><tbody>{{range index .Plan "files"}}<tr><td class="mono small nowrap">{{index . "path"}}</td><td class="prewrap">{{index . "change"}}</td></tr>{{end}}</tbody></table>
   {{with index .Plan "risks"}}<h3>Риски</h3><ul>{{range .}}<li class="prewrap">{{.}}</li>{{end}}</ul>{{end}}
   {{with index .Plan "questions"}}<h3>Открытые вопросы</h3><ul>{{range .}}<li class="prewrap">{{.}}</li>{{end}}</ul>{{end}}
-  {{if .Issue}}<p><a class="btn btn-confirm tip" data-tip="Переход к форме реализации: план можно вставить в указания агенту." href="/issue/{{.Issue.ID}}#implement">Перейти к реализации →</a></p>{{end}}
+  {{if .Issue}}<div class="actions left" style="margin-top:12px">
+    <button class="btn btn-primary tip" data-tip="{{kindTip "implement_plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {plan_run: '{{.Run.ID}}'})">Реализовать этот план</button>
+    <a class="btn" href="/issue/{{.Issue.ID}}#solve">Изменить указания…</a>
+  </div>{{end}}
 </section>
 {{end}}
 
 {{if .Run.IsEdit}}
 <section class="card">
-  <h2>Отчёт агента</h2>
+  <div class="card-head"><h2>Отчёт агента</h2></div>
   {{if .Report}}
     <p class="prewrap summary">{{index .Report "summary"}}</p>
     {{with index .Report "addressed"}}<h3>Замечания ревьюеров</h3>
@@ -63,26 +95,33 @@
     {{range .}}<tr><td>{{index . "author"}}</td><td class="mono small">{{index . "file"}}{{with index . "line"}}:{{.}}{{end}}</td><td class="prewrap">{{index . "comment"}}</td><td>{{if index . "done"}}<span class="fstatus fstatus-fixed">сделано</span>{{else}}<span class="fstatus fstatus-open">нужно решение</span>{{end}} <div class="small prewrap">{{index . "action"}}</div></td></tr>{{end}}
     </tbody></table>{{end}}
     {{with index .Report "changes"}}<h3>Изменения</h3><table class="table compact"><tbody>{{range .}}<tr><td class="mono small nowrap">{{index . "path"}}</td><td class="prewrap">{{index . "description"}}</td></tr>{{end}}</tbody></table>{{end}}
-    <p><b>Проверки:</b> <span class="prewrap">{{index .Report "tests"}}</span></p>
-    {{with index .Report "todo"}}<h3>Требует решения человека</h3><ul>{{range .}}<li class="prewrap">{{.}}</li>{{end}}</ul>{{end}}
+    <h3>Проверки</h3><p class="prewrap">{{index .Report "tests"}}</p>
+    {{with index .Report "todo"}}<h3>Требует вашего решения</h3><ul>{{range .}}<li class="prewrap">{{.}}</li>{{end}}</ul>{{end}}
   {{else if not .Run.Active}}<p class="muted">Отчёта нет.</p>{{end}}
 </section>
 
 {{if .Worktree}}
-<section class="card">
-  <h2>Worktree <span class="mono small">{{.Worktree.Path}}</span></h2>
-  {{if not .Worktree.Exists}}<p class="muted">Worktree удалён. Ветка <span class="mono">{{.Run.Branch}}</span> сохранена в репозитории.</p>
+<section class="card" id="workspace">
+  <div class="card-head"><h2>Workspace</h2><span class="mono small muted">{{.Worktree.Path}}</span></div>
+  {{if not .Worktree.Exists}}<p class="muted">Workspace удалён. Ветка <span class="mono">{{.Run.Branch}}</span> сохранена в репозитории.</p>
   {{else}}
-  <div class="controls-row">
-    <input id="commit-msg" type="text" size="60" class="mono" value="{{if .Report}}{{index .Report "commit_message"}}{{end}}" placeholder="Сообщение коммита">
-    <button class="btn tip" data-tip="git add -A && git commit в worktree с этим сообщением. Ветка остаётся локальной, пока не нажат Push." onclick="post('/api/runs/{{.Run.ID}}/commit', {message: document.getElementById('commit-msg').value}, this).then(r => r && reload())">Commit</button>
-    <button class="btn btn-confirm tip" data-tip="git push --set-upstream origin {{.Run.Branch}}. {{if .MR}}Обновит существующий MR !{{.MR.IID}} — ревьюеры увидят новые коммиты.{{else}}Ветка появится на GitLab, после этого можно создать MR.{{end}} Это запись в удалённый репозиторий." onclick="confirm('Запушить ветку {{.Run.Branch}} в origin?') && post('/api/runs/{{.Run.ID}}/push', {}, this).then(r => r && (flash('Запушено', true), reload()))">Push</button>
-    {{if .Issue}}<button class="btn btn-confirm tip" data-tip="Создаёт MR из ветки {{.Run.Branch}} в develop через glab (POST в GitLab). Заголовок по умолчанию: «{{.Issue.Ref}} {{.Issue.Title}}», описание содержит ссылку на задачу. Сначала нужен Push." onclick="createMR({{.Run.ID}}, this)">Создать MR</button>{{end}}
-    <button class="btn btn-danger-secondary tip" data-tip="git worktree remove --force: удаляет каталог worktree из runtime/. Ветка и коммиты остаются в репозитории; незакоммиченные изменения будут потеряны." onclick="confirm('Удалить worktree? Незакоммиченные изменения пропадут.') && del('/api/runs/{{.Run.ID}}/worktree', this).then(r => r && reload())">Удалить worktree</button>
+  <div class="field"><label for="commit-msg">Сообщение коммита</label><div style="flex:1"><input id="commit-msg" type="text" style="width:100%" class="mono" value="{{if .Report}}{{index .Report "commit_message"}}{{end}}" placeholder="Сообщение коммита"></div></div>
+  <div class="actions left">
+    <button class="btn tip" data-tip="git add -A и git commit в workspace с этим сообщением. Ветка остаётся локальной, пока не нажат Push." onclick="post('/api/runs/{{.Run.ID}}/commit', {message: document.getElementById('commit-msg').value}, this).then(r => r && reload())">Commit</button>
+    <button class="btn btn-primary tip" data-tip="git push --set-upstream origin {{.Run.Branch}}. {{if .MR}}Обновит MR !{{.MR.IID}}: ревьюеры увидят новые коммиты.{{else}}Ветка появится на GitLab, после этого можно создать MR.{{end}}" onclick="confirm('Запушить ветку {{.Run.Branch}} в origin?') && post('/api/runs/{{.Run.ID}}/push', {}, this).then(r => r && (flash('Ветка отправлена в origin', true), reload()))">Push</button>
+    {{if .Issue}}<button class="btn btn-primary tip" data-tip="Создать MR из ветки {{.Run.Branch}} в develop через GitLab. Заголовок по умолчанию: «{{.Issue.Ref}} {{.Issue.Title}}». Сначала нужен Push." onclick="createMR({{.Run.ID}}, this)">Создать MR</button>{{end}}
+    <details class="menu">
+      <summary title="Ещё действия">⋯</summary>
+      <div class="menu-items">
+        <button class="item" onclick="copyText('{{.Worktree.Path}}')">Скопировать путь workspace</button>
+        <div class="divider"></div>
+        <button class="item danger tip" data-tip="Удалить каталог workspace из runtime/. Ветка и коммиты остаются в репозитории; незакоммиченные изменения будут потеряны." onclick="confirm('Удалить workspace? Незакоммиченные изменения пропадут.') && del('/api/runs/{{.Run.ID}}/worktree', this).then(r => r && reload())">Удалить workspace</button>
+      </div>
+    </details>
   </div>
   {{if .Worktree.Log}}<h3>Коммиты в ветке</h3><pre>{{.Worktree.Log}}</pre>{{end}}
   <h3>git status</h3><pre>{{if .Worktree.Status}}{{.Worktree.Status}}{{else}}(чисто — всё закоммичено){{end}}</pre>
-  {{if .Worktree.Diff}}<details open><summary>Diff незакоммиченных изменений</summary><pre class="diff">{{.Worktree.Diff}}</pre></details>{{end}}
+  {{if .Worktree.Diff}}<details open class="section"><summary>Diff незакоммиченных изменений</summary><pre class="diff">{{.Worktree.Diff}}</pre></details>{{end}}
   {{end}}
 </section>
 {{end}}
@@ -90,22 +129,22 @@
 
 {{if or (eq .Run.Status "done") (eq .Run.Status "failed")}}
 <section class="card">
-  <h2>Вопрос агенту <span class="muted small tip" data-tip="Продолжает ту же сессию агента (resume по session id) в том же каталоге: у него остаётся контекст ревью. Режим read-only, файлы не меняются. Ответ и вопрос сохраняются здесь.">как это работает?</span></h2>
+  <div class="card-head"><h2>Продолжить сессию с агентом</h2><span class="small muted tip" data-tip="Та же сессия агента (resume): у него остаётся контекст этого запуска. Режим только чтение, файлы не меняются. Вопрос и ответ сохраняются здесь.">как это работает?</span></div>
   <div id="chat">
     {{range .Messages}}<div class="msg msg-{{.Role}}"><div class="msg-role">{{if eq .Role "user"}}вы{{else if eq .Role "assistant"}}агент{{else}}ошибка{{end}} · {{when .CreatedAt}}{{if .Tokens}} · {{tokens .Tokens}} токенов{{end}}</div><div class="prewrap">{{.Content}}</div></div>{{end}}
   </div>
   {{if .Run.SessionID}}
   <form class="inline" onsubmit="return ask(event, {{.Run.ID}})">
     <textarea id="question" rows="2" placeholder="Например: почему это HIGH, а не MEDIUM? Покажи, как выглядел бы фикс для второго замечания." required></textarea>
-    <button type="submit" class="btn btn-confirm">Спросить</button>
+    <button type="submit" class="btn btn-primary">Отправить</button>
   </form>
-  {{else}}<p class="muted small">Сессия этого запуска недоступна для продолжения (агент {{.Run.Runner}} не вернул session id).</p>{{end}}
+  {{else}}<p class="muted small">Сессия недоступна для продолжения: агент {{.Run.Runner}} не вернул её идентификатор.</p>{{end}}
 </section>
 {{end}}
 
 <section class="card">
-  <details {{if ne .Run.Status "done"}}open{{end}}><summary>Лог запуска (хвост)</summary><pre class="log" id="log-tail">{{.LogTail}}</pre></details>
-  <details><summary>Промпт (только добавления dashboard — правила проекта агент загружает сам)</summary><pre class="log">{{.Run.Prompt}}</pre></details>
-  {{if .Run.ResultJSON}}<details><summary>Результат (JSON)</summary><pre class="log">{{prettyJSON .Run.ResultJSON}}</pre></details>{{end}}
+  <details class="section" {{if ne .Run.Status "done"}}open{{end}}><summary>Технический лог (хвост)</summary><pre class="log" id="log-tail">{{.LogTail}}</pre></details>
+  <details class="section"><summary>Что было передано агенту</summary><pre class="log">{{.Run.Prompt}}</pre></details>
+  {{if .Run.ResultJSON}}<details class="section"><summary>Результат (JSON)</summary><pre class="log">{{prettyJSON .Run.ResultJSON}}</pre></details>{{end}}
 </section>
 {{end}}

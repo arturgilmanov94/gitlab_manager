@@ -505,6 +505,40 @@ func (s *Service) enqueue(run db.Run) (int64, error) {
 	return id, nil
 }
 
+// Retry starts a new run with the same parameters as a finished/failed one.
+func (s *Service) Retry(runID int64) (int64, error) {
+	run, _ := s.DB.GetRun(runID)
+	if run == nil {
+		return 0, userErr("run #%d not found", runID)
+	}
+	if run.Active() {
+		return 0, userErr("the run is still active")
+	}
+	switch run.Kind {
+	case db.KindReviewQuick, db.KindReviewFull, db.KindReviewVerify:
+		if run.MRID == nil {
+			return 0, userErr("run has no merge request")
+		}
+		return s.StartReview(*run.MRID, run.Kind, run.Runner)
+	case db.KindFixComments:
+		if run.MRID == nil {
+			return 0, userErr("run has no merge request")
+		}
+		return s.StartFixComments(*run.MRID, run.Runner, run.Notes)
+	case db.KindPlan:
+		if run.IssueID == nil {
+			return 0, userErr("run has no issue")
+		}
+		return s.StartPlan(*run.IssueID, run.Runner, run.Notes)
+	case db.KindImplement:
+		if run.IssueID == nil {
+			return 0, userErr("run has no issue")
+		}
+		return s.StartImplement(*run.IssueID, run.Runner, run.Notes, run.Branch)
+	}
+	return 0, userErr("cannot retry a %s run", run.Kind)
+}
+
 // Cancel stops a queued/running run.
 func (s *Service) Cancel(runID int64) bool {
 	run, _ := s.DB.GetRun(runID)

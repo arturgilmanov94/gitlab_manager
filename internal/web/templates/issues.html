@@ -1,42 +1,76 @@
 {{define "content"}}
 <section class="toolbar">
   <form class="inline" onsubmit="return addRef(event, '/api/issues')">
-    <input type="text" name="ref" placeholder="Ссылка на задачу (https://gitlab…/-/issues/123) или #123" size="58" required>
-    <button type="submit" class="btn btn-confirm tip" data-tip="Загружает задачу из GitLab через glab (название, описание, метки) и добавляет в список. Задачи из других проектов (например tn/project/eu/eu) тоже подходят: код всё равно берётся из основного репозитория.">Добавить</button>
+    <input type="text" name="ref" placeholder="Ссылка на задачу или #123" size="44" required>
+    <button type="submit" class="btn tip" data-tip="{{kindTip "add"}}">Добавить</button>
   </form>
-  <button class="btn tip" data-tip="Подтягивает открытые задачи, где вы assignee. Ничего не запускает." onclick="post('/api/issues/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' задач для @' + r.username, true), reload()))">Синхронизировать с GitLab</button>
+  <button class="btn tip" data-tip="{{kindTip "sync-issues"}}" onclick="post('/api/issues/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' задач для @' + r.username, true), reload()))">Синхронизировать с GitLab</button>
+  <span class="spacer"></span>
+  <span class="small secondary">Агент для запусков:</span> {{template "runner-picker" .Base.Runners}}
 </section>
 
 {{if not .Issues}}
-<div class="empty">Пока нет задач. Вставьте ссылку на issue или синхронизируйте назначенные вам.</div>
+<div class="empty"><b>Пока нет задач.</b><br>Вставьте ссылку на issue или синхронизируйте назначенные вам.</div>
 {{else}}
 <div class="card table-card">
 <table class="table list">
-  <thead><tr><th>Задача</th><th>Название</th><th class="hide-md">Метки</th><th>Последний запуск</th><th class="actions-col"></th></tr></thead>
+  <thead><tr><th>Задача</th><th>Название</th><th>Состояние</th><th class="right"></th></tr></thead>
   <tbody>
   {{range .Issues}}
+  {{$busy := and .Last (or (eq .Last.Status "running") (eq .Last.Status "queued"))}}
   <tr>
-    <td class="nowrap"><a class="ref" href="/issue/{{.ID}}">#{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
-    <td class="title-cell"><a href="/issue/{{.ID}}">{{.Title}}</a><div class="muted small">{{.Author}} · {{.State}} · обновлена {{when .GitLabUpdatedAt}}</div></td>
-    <td class="small hide-md">{{.Labels}}</td>
-    <td>
-      {{if .Last}}
-        <a href="/run/{{.Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}">{{template "status" .Last.Status}}</a>
-        <div class="small">{{kindLabel .Last.Kind}} · {{.Last.Runner}}</div>
-        <div class="muted small">{{if .Last.FinishedAt}}{{when .Last.FinishedAt}}{{else}}{{when .Last.CreatedAt}}{{end}}</div>
-      {{else}}<span class="muted">—</span>{{end}}
+    <td class="nowrap ref-cell"><a class="ref" href="/issue/{{.ID}}">#{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
+    <td class="title-cell">
+      <a class="title" href="/issue/{{.ID}}">{{.Title}}</a>
+      <div class="sub">{{.Author}} · обновлена {{when .GitLabUpdatedAt}}{{if .Labels}} · <span class="muted">{{.Labels}}</span>{{end}}</div>
     </td>
-    <td class="nowrap actions">
-      {{$busy := and .Last (or (eq .Last.Status "running") (eq .Last.Status "queued"))}}
-      <button class="btn btn-sm tip" data-tip="{{kindTip "plan"}}" {{if $busy}}disabled{{end}} onclick="startRun('/api/issues/{{.ID}}/runs', 'plan', this)">План</button>
-      <a class="btn btn-sm btn-confirm tip" data-tip="{{kindTip "implement"}}" href="/issue/{{.ID}}#implement">Реализовать…</a>
-      <a class="btn btn-sm btn-link" href="{{.WebURL}}" target="_blank" rel="noopener">GitLab ↗</a>
+    <td data-label="Состояние">
+      <div class="state-stack">
+        {{if not .Last}}<span class="state state-neutral"><span class="glyph">○</span> Новая</span>
+        {{else if $busy}}<a href="/run/{{.Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}"><span class="state state-info"><span class="spinner"></span> {{if eq .Last.Kind "plan"}}Исследуется{{else}}Пишется код{{end}}</span></a>
+        {{else if eq .Last.Status "failed"}}<span class="state state-danger"><span class="glyph">✕</span> Ошибка</span><span class="small muted">{{kindLabel .Last.Kind}} · {{when .Last.FinishedAt}}</span>
+        {{else if eq .Last.Status "cancelled"}}<span class="state state-neutral"><span class="glyph">—</span> Остановлено вами</span><span class="small muted">{{kindLabel .Last.Kind}} · {{when .Last.FinishedAt}}</span>
+        {{else if eq .Last.Kind "plan"}}<span class="state state-success"><span class="glyph">✓</span> Есть план</span><span class="small muted">{{when .Last.FinishedAt}} · {{.Last.Runner}}</span>
+        {{else}}<span class="state state-success"><span class="glyph">✓</span> Готово к MR</span><span class="small muted">{{when .Last.FinishedAt}} · {{.Last.Runner}}</span>{{end}}
+      </div>
+    </td>
+    <td class="actions-cell">
+      <div class="actions">
+        {{if $busy}}
+          <a class="btn btn-sm btn-primary" href="/run/{{.Last.ID}}">Открыть сессию</a>
+        {{else if and .Last (eq .Last.Status "failed")}}
+          <a class="btn btn-sm" href="/run/{{.Last.ID}}">Посмотреть ошибку</a>
+          <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Last.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Повторить</button>
+        {{else if and .Last (eq .Last.Status "done") (eq .Last.Kind "plan")}}
+          <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "implement_plan"}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'implement', this, {plan_run: '{{.Last.ID}}'})">Реализовать этот план</button>
+          <a class="btn btn-sm" href="/run/{{.Last.ID}}">Открыть план</a>
+        {{else if and .Last (eq .Last.Status "done") (eq .Last.Kind "implement")}}
+          <a class="btn btn-sm btn-primary" href="/run/{{.Last.ID}}">Подготовить MR</a>
+        {{else}}
+          <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'implement', this)">Решить задачу</button>
+          <button class="btn btn-sm tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'plan', this)">Исследовать</button>
+        {{end}}
+        <details class="menu">
+          <summary title="Ещё действия">⋯</summary>
+          <div class="menu-items">
+            {{if not $busy}}
+              <button class="item tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'plan', this)">Исследовать{{if .Last}} заново{{end}}<span class="sub">без изменений кода</span></button>
+              <a class="item" href="/issue/{{.ID}}#solve">Решить с указаниями…<span class="sub">свои указания агенту, имя ветки</span></a>
+              <div class="divider"></div>
+            {{end}}
+            <a class="item ext" href="{{.WebURL}}" target="_blank" rel="noopener">GitLab</a>
+            <a class="item" href="/issue/{{.ID}}#history">История сессий</a>
+            <div class="divider"></div>
+            {{if $busy}}<button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Last.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
+            <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="confirm('Убрать задачу из dashboard? Ветки и workspace не удаляются.') && del('/api/issues/{{.ID}}', this).then(r => r && reload())">Убрать из dashboard</button>
+          </div>
+        </details>
+      </div>
     </td>
   </tr>
   {{end}}
   </tbody>
 </table>
 </div>
-<div class="muted small toolbar-note">Агент для запусков со списка: {{template "runner-picker" .Base.Runners}}</div>
 {{end}}
 {{end}}

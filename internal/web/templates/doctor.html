@@ -1,5 +1,5 @@
 {{define "content"}}
-<section class="page-head"><h1>Проверка окружения</h1><div class="actions"><a class="btn" href="/doctor">Повторить</a></div></section>
+<section class="page-head"><div><div class="crumbs">Служебное</div><h1>Проверка окружения</h1></div><div class="actions"><a class="btn" href="/doctor">Повторить проверку</a></div></section>
 <section class="card">
   <table class="table compact">
     <tbody>
@@ -13,6 +13,6 @@
     {{end}}
     </tbody>
   </table>
-  <p class="{{if .Report.Ready}}text-success{{else}}text-danger{{end}}">{{if .Report.Ready}}Готово к работе.{{else}}Не готово: исправьте пункты FAIL.{{end}}</p>
+  <p class="{{if .Report.Ready}}text-success{{else}}text-danger{{end}}">{{if .Report.Ready}}✓ Готово к работе.{{else}}✕ Не готово: исправьте пункты FAIL.{{end}}</p>
 </section>
 {{end}}

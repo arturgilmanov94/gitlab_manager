@@ -91,9 +91,27 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 			b, _ := json.MarshalIndent(v, "", "  ")
 			return string(b)
 		},
-		"lower":    strings.ToLower,
-		"divCents": func(cents int64) float64 { return float64(cents) / 100 },
-		"tokens":   formatTokens,
+		"lower":           strings.ToLower,
+		"divCents":        func(cents int64) float64 { return float64(cents) / 100 },
+		"aiState":         aiState,
+		"aiLabel":         aiLabel,
+		"aiTone":          aiTone,
+		"statusLabel":     statusLabel,
+		"statusTone":      statusTone,
+		"glyph":           glyph,
+		"findingsSummary": findingsSummary,
+		"firstLine": func(s string) string {
+			s = strings.TrimSpace(s)
+			if i := strings.IndexByte(s, '\n'); i >= 0 {
+				return s[:i]
+			}
+			if len(s) > 160 {
+				return s[:160] + "…"
+			}
+			return s
+		},
+		"errorTitle": errorTitle,
+		"tokens":     formatTokens,
 		"tokensTip": func(in, out, read, write int64) string {
 			return fmt.Sprintf("Токены за запуск, суммарно по всем моделям (агент + субагенты)\nвход: %s · выход: %s · чтение кэша: %s · запись кэша: %s",
 				formatTokens(in), formatTokens(out), formatTokens(read), formatTokens(write))
@@ -170,6 +188,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/issues/{id}/runs", s.apiStartIssueRun)
 
 	s.mux.HandleFunc("GET /api/runs/{id}", s.apiRun)
+	s.mux.HandleFunc("POST /api/runs/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
+		runID, err := s.svc.Retry(pathID(r))
+		if err != nil {
+			s.result(w, nil, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "run_id": runID, "redirect": fmt.Sprintf("/run/%d", runID)})
+	})
 	s.mux.HandleFunc("POST /api/runs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": s.svc.Cancel(pathID(r))})
 	})
@@ -253,11 +279,42 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 	}
 	active, _ := s.svc.DB.ActiveRunForMR(mr.ID)
 	username := s.svc.CurrentUser()
+	stale := latest != nil && latest.HeadSHA != "" && latest.HeadSHA != mr.HeadSHA
+	var lastRun *db.RunSummary
+	if len(runs) > 0 {
+		lastRun = &runs[0]
+	}
+	state := "never"
+	switch {
+	case active != nil:
+		state = active.Status
+	case lastRun != nil && lastRun.Status == db.StatusFailed && lastRun.IsReview():
+		state = "failed"
+	case latest != nil && stale:
+		state = "stale"
+	case latest != nil:
+		state = "current"
+	}
+	var major, minor, info int64
+	for _, f := range findings {
+		if f.Status != "open" {
+			continue
+		}
+		switch f.Severity {
+		case "CRITICAL", "HIGH":
+			major++
+		case "MEDIUM":
+			minor++
+		default:
+			info++
+		}
+	}
 	s.render(w, "mr", map[string]any{
 		"Base": s.base("mrs", fmt.Sprintf("!%d %s", mr.IID, mr.Title)), "MR": mr, "Runs": runs, "Latest": latest,
-		"Findings": findings, "Discussions": discussions, "Active": active,
-		"Stale":  latest != nil && latest.HeadSHA != "" && latest.HeadSHA != mr.HeadSHA,
+		"Findings": findings, "Discussions": discussions, "Active": active, "LastRun": lastRun,
+		"Stale": stale, "State": state, "OpenMajor": major, "OpenMinor": minor, "OpenInfo": info,
 		"IsMine": username != "" && mr.Author == username,
+		"Closed": mr.State == "merged" || mr.State == "closed",
 	})
 }
 
@@ -269,8 +326,34 @@ func (s *Server) issuePage(w http.ResponseWriter, r *http.Request) {
 	}
 	runs, _ := s.svc.DB.ListRunsForIssue(issue.ID)
 	active, _ := s.svc.DB.ActiveRunForIssue(issue.ID)
+	var plan, impl, failed *db.RunSummary
+	for i := range runs {
+		r := &runs[i]
+		switch {
+		case r.Status == db.StatusDone && r.Kind == db.KindPlan && plan == nil:
+			plan = r
+		case r.Status == db.StatusDone && r.Kind == db.KindImplement && impl == nil:
+			impl = r
+		case r.Status == db.StatusFailed && failed == nil && i == 0:
+			failed = r
+		}
+	}
+	state := "new"
+	switch {
+	case active != nil && active.Kind == db.KindPlan:
+		state = "researching"
+	case active != nil:
+		state = "implementing"
+	case failed != nil:
+		state = "failed"
+	case impl != nil:
+		state = "ready"
+	case plan != nil:
+		state = "planned"
+	}
 	s.render(w, "issue", map[string]any{
 		"Base": s.base("issues", fmt.Sprintf("#%d %s", issue.IID, issue.Title)), "Issue": issue, "Runs": runs, "Active": active,
+		"Plan": plan, "Impl": impl, "Failed": failed, "State": state,
 		"DefaultBranch": issue.Ref(), "BaseBranch": s.svc.Settings.BaseBranch,
 	})
 }
@@ -401,7 +484,13 @@ func (s *Server) apiStartIssueRun(w http.ResponseWriter, r *http.Request) {
 	case "plan", "":
 		runID, err = s.svc.StartPlan(id, body["runner"], body["notes"])
 	case "implement":
-		runID, err = s.svc.StartImplement(id, body["runner"], body["notes"], body["branch"])
+		notes := body["notes"]
+		if planID, perr := strconv.ParseInt(body["plan_run"], 10, 64); perr == nil && planID > 0 {
+			if plan, _ := s.svc.DB.GetRun(planID); plan != nil && plan.ResultJSON != "" {
+				notes = strings.TrimSpace(notes + "\n\nPlan from the investigation run (follow it unless it contradicts the code you find):\n" + planAsText(plan.ResultJSON))
+			}
+		}
+		runID, err = s.svc.StartImplement(id, body["runner"], notes, body["branch"])
 	default:
 		writeJSON(w, 400, map[string]any{"error": "kind must be plan or implement"})
 		return
@@ -523,13 +612,13 @@ func kindLabel(kind string) string {
 	case db.KindReviewFull:
 		return "Полное ревью"
 	case db.KindReviewVerify:
-		return "Проверка исправлений"
+		return "Проверка изменений"
 	case db.KindFixComments:
 		return "Исправление замечаний"
 	case db.KindPlan:
-		return "План"
+		return "Исследование"
 	case db.KindImplement:
-		return "Реализация"
+		return "Решение задачи"
 	}
 	return kind
 }
@@ -537,17 +626,33 @@ func kindLabel(kind string) string {
 func kindTip(kind string) string {
 	switch kind {
 	case "quick":
-		return "Лёгкий проход. Агент читает diff MR и нерешённые обсуждения, соседний код открывает только когда без него правку не оценить. В отчёт попадают CRITICAL, HIGH и MEDIUM, резюме короткое.\n\nЗапуск read-only из корня проекта: подхватываются правила проекта и агент ревью. Ничего не меняется ни локально, ни в GitLab. Обычно 1–3 минуты."
+		return "AI пройдёт только по diff MR и обсуждениям, без обхода кодовой базы. Быстрее и дешевле по токенам; в отчёт попадают CRITICAL/HIGH/MEDIUM."
 	case "full":
-		return "Полный проход по правилам проекта (CLAUDE.md, агент mr-review): diff, контекст затронутого кода, нерешённые обсуждения, регрессии, обработка ошибок, безопасность, соответствие паттернам проекта. Все уровни severity, конкретные предложения фиксов.\n\nRead-only, из корня проекта. Обычно 3–10 минут."
+		return "AI заново проверит весь MR на текущем HEAD по правилам проекта: контекст кода, регрессии, безопасность, все уровни замечаний."
 	case "verify":
-		return "Берёт открытые findings последнего завершённого ревью и проверяет каждый на текущем head MR: fixed / open / obsolete с обоснованием. Дополнительно ищет только новые проблемы, внесённые новыми коммитами.\n\nИмеет смысл после того, как в MR появились коммиты. Read-only."
+		return "AI проверит только изменения после последнего ревью и обновит статусы прежних замечаний: исправлено / открыто / неактуально."
 	case "fix":
-		return "Только для ваших MR с нерешёнными обсуждениями. Создаётся отдельный git worktree на ветке MR внутри runtime/ — ваша рабочая копия и текущая ветка не трогаются. Агент читает комментарии ревьюеров через glab, правит код по правилам проекта, гоняет проверки.\n\nПотом вы смотрите diff здесь и сами нажимаете Commit и Push; push обновит MR. Отвечать на комментарии и резолвить их в GitLab агент не будет."
+		return "Агент создаст отдельный workspace на ветке MR и исправит код по нерешённым обсуждениям ревьюеров. Commit и push — только по вашей кнопке."
 	case "plan":
-		return "Read-only анализ задачи из корня проекта: агент изучает описание задачи и код и выдаёт план: шаги, файлы и что в них меняется, риски, открытые вопросы, оценка размера. Можно добавить свои указания в поле ниже. Ничего не меняется."
+		return "Агент изучит задачу и код без изменений: план, затронутые файлы, риски, открытые вопросы, оценка."
 	case "implement":
-		return "Агент реализует задачу в отдельном git worktree на новой ветке от origin/develop (имя ветки по умолчанию — ссылка на задачу, как принято в проекте). Ваша рабочая копия не трогается. Правила проекта подхватываются (.claude/ линкуется в worktree).\n\nПосле завершения вы смотрите diff, коммитите, пушите и создаёте MR отсюда — каждое из этих действий отдельной кнопкой."
+		return "Агент создаст отдельный workspace на новой ветке и реализует задачу; ваша рабочая копия не меняется. Commit, push и MR — по вашим кнопкам."
+	case "implement_plan":
+		return "Агент реализует план из исследования в отдельном workspace на новой ветке."
+	case "retry":
+		return "Запустить то же самое ещё раз с теми же параметрами."
+	case "stop":
+		return "Остановить агента. Частичный результат не сохраняется; можно запустить снова."
+	case "remove":
+		return "Убрать из dashboard вместе с историей запусков. В GitLab ничего не меняется."
+	case "refresh":
+		return "Перечитать данные из GitLab. Ничего не запускается."
+	case "sync-mrs":
+		return "Подтянуть открытые MR, где вы reviewer, assignee или автор, из текущего проекта. Ничего не запускается."
+	case "sync-issues":
+		return "Подтянуть открытые задачи, где вы assignee. Ничего не запускается."
+	case "add":
+		return "Загрузить из GitLab по ссылке и добавить в dashboard. Ничего не запускается."
 	}
 	return ""
 }
@@ -573,4 +678,163 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// aiState derives the AI-review state of a list item: never | queued | running | current | stale | failed.
+func aiState(item db.MRListItem) string {
+	if item.Last != nil && (item.Last.Status == db.StatusQueued || item.Last.Status == db.StatusRunning) {
+		return item.Last.Status
+	}
+	if item.Last != nil && item.Last.Status == db.StatusFailed && (item.Done == nil || item.Last.ID > item.Done.ID) {
+		return "failed"
+	}
+	if item.Done == nil {
+		return "never"
+	}
+	if item.Stale {
+		return "stale"
+	}
+	return "current"
+}
+
+func aiLabel(state string) string {
+	switch state {
+	case "never":
+		return "Ещё не проверен"
+	case "queued":
+		return "В очереди"
+	case "running":
+		return "Проверяется"
+	case "current":
+		return "Проверен"
+	case "stale":
+		return "Есть новые изменения"
+	case "failed":
+		return "Ошибка ревью"
+	}
+	return state
+}
+
+func aiTone(state string) string {
+	switch state {
+	case "current":
+		return "success"
+	case "stale":
+		return "warning"
+	case "failed":
+		return "danger"
+	case "queued", "running":
+		return "info"
+	}
+	return "neutral"
+}
+
+// statusLabel is the human status of a run.
+func statusLabel(status string) string {
+	switch status {
+	case db.StatusQueued:
+		return "В очереди"
+	case db.StatusRunning:
+		return "Выполняется"
+	case db.StatusDone:
+		return "Завершён"
+	case db.StatusFailed:
+		return "Ошибка"
+	case db.StatusCancelled:
+		return "Остановлен"
+	}
+	return status
+}
+
+func statusTone(status string) string {
+	switch status {
+	case db.StatusDone:
+		return "success"
+	case db.StatusFailed:
+		return "danger"
+	case db.StatusQueued, db.StatusRunning:
+		return "info"
+	}
+	return "neutral"
+}
+
+// glyph is the text glyph of a tone (never the only carrier of meaning).
+func glyph(tone string) string {
+	switch tone {
+	case "success":
+		return "✓"
+	case "warning":
+		return "⚠"
+	case "danger":
+		return "✕"
+	case "info":
+		return "●"
+	}
+	return "○"
+}
+
+func findingsSummary(major, minor, info int64) string {
+	var parts []string
+	if major > 0 {
+		parts = append(parts, fmt.Sprintf("%d major", major))
+	}
+	if minor > 0 {
+		parts = append(parts, fmt.Sprintf("%d minor", minor))
+	}
+	if info > 0 {
+		parts = append(parts, fmt.Sprintf("%d info", info))
+	}
+	if len(parts) == 0 {
+		return "0 открытых замечаний"
+	}
+	return strings.Join(parts, " · ")
+}
+
+// errorTitle turns a run kind into a human failure headline.
+func errorTitle(kind string) string {
+	switch kind {
+	case db.KindReviewQuick, db.KindReviewFull, db.KindReviewVerify:
+		return "Не удалось выполнить ревью"
+	case db.KindPlan:
+		return "Не удалось исследовать задачу"
+	case db.KindImplement:
+		return "Не удалось решить задачу"
+	case db.KindFixComments:
+		return "Не удалось исправить замечания"
+	}
+	return "Запуск завершился с ошибкой"
+}
+
+// planAsText renders a plan result JSON as readable text for the implementation notes.
+func planAsText(raw string) string {
+	var plan struct {
+		Summary string   `json:"summary"`
+		Steps   []string `json:"steps"`
+		Files   []struct {
+			Path   string `json:"path"`
+			Change string `json:"change"`
+		} `json:"files"`
+		Risks []string `json:"risks"`
+	}
+	if json.Unmarshal([]byte(raw), &plan) != nil {
+		return raw
+	}
+	var b strings.Builder
+	b.WriteString(plan.Summary + "\n\nSteps:\n")
+	for i, step := range plan.Steps {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, step)
+	}
+	if len(plan.Files) > 0 {
+		b.WriteString("\nFiles:\n")
+		for _, f := range plan.Files {
+			fmt.Fprintf(&b, "- %s: %s\n", f.Path, f.Change)
+		}
+	}
+	if len(plan.Risks) > 0 {
+		b.WriteString("\nRisks:\n")
+		for _, r := range plan.Risks {
+			fmt.Fprintf(&b, "- %s\n", r)
+		}
+	}
+	return b.String()
 }
