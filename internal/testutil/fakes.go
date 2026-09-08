@@ -223,6 +223,10 @@ func GitRepo(t *testing.T, dir string) string {
 // Settings builds settings for a dashboard directory next to a project.
 func Settings(t *testing.T) (*config.Settings, string) {
 	t.Helper()
+	// CI runners have no git identity; the worktree commit step needs one.
+	for _, kv := range [][2]string{{"GIT_AUTHOR_NAME", "mr-review test"}, {"GIT_AUTHOR_EMAIL", "test@example.com"}, {"GIT_COMMITTER_NAME", "mr-review test"}, {"GIT_COMMITTER_EMAIL", "test@example.com"}} {
+		t.Setenv(kv[0], kv[1])
+	}
 	tmp := t.TempDir()
 	project := GitRepo(t, filepath.Join(tmp, "project"))
 	dash := filepath.Join(tmp, "dash")
