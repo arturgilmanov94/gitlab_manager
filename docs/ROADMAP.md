@@ -177,3 +177,26 @@
 - Проценты прогресса, «Paused» у workspace, мобильный UI, обязательные горячие клавиши.
 - Автоматический push, создание MR, комментарии в GitLab без явного подтверждения.
 - Новые skills/rules внутри dashboard: только orchestration-промпты поверх правил проекта.
+
+---
+
+## 6. Как продолжить работу с другой машины
+
+Всё нужное лежит в этом репозитории; локальные `data/`, `logs/`, `runtime/`, `.env` не нужны.
+
+```sh
+cd ~/projects                      # рядом должен быть чекаут основного проекта (tradernet) с его .claude/
+git clone git@github.com:arturgilmanov94/gitlab_manager.git mr-review
+cd mr-review
+go build -o mr-review ./cmd/mr-review && go test ./...     # Go 1.22+ (или взять бинарник из Releases)
+./mr-review doctor && ./mr-review
+```
+
+Состояние на 2026-09-08: выпущена **0.3.0** (фазы 0, 1, D закрыты). **Следующий шаг — Phase C** (контекст сессии),
+затем Phase 2 (MR как эталон: данные GitLab, инкрементальное ревью, findings-карточки).
+
+Соглашения: контракт кнопок — `docs/UX_ACTIONS.md`, изменения UI сверяются с ним; каждая фаза = запись в
+`CHANGELOG.md` + bump `VERSION` + тег `vX.Y.Z` → GitHub Actions собирает релиз; тесты `go test ./...` зелёные
+перед пушем; dashboard не меняет файлы основного проекта и не хранит credentials.
+
+Чтобы продолжить с AI-ассистентом, достаточно открыть репозиторий и сказать: «прочитай docs/ROADMAP.md и начинай Phase C».
