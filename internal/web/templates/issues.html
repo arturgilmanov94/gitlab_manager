@@ -10,15 +10,15 @@
 {{if not .Issues}}
 <div class="empty">Пока нет задач. Вставьте ссылку на issue или синхронизируйте назначенные вам.</div>
 {{else}}
-<div class="card">
+<div class="card table-card">
 <table class="table list">
-  <thead><tr><th>Задача</th><th>Название</th><th>Метки</th><th>Последний запуск</th><th></th></tr></thead>
+  <thead><tr><th>Задача</th><th>Название</th><th class="hide-md">Метки</th><th>Последний запуск</th><th class="actions-col"></th></tr></thead>
   <tbody>
   {{range .Issues}}
   <tr>
     <td class="nowrap"><a class="ref" href="/issue/{{.ID}}">#{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
-    <td><a href="/issue/{{.ID}}">{{.Title}}</a><div class="muted small">{{.Author}} · {{.State}} · обновлена {{when .GitLabUpdatedAt}}</div></td>
-    <td class="small">{{.Labels}}</td>
+    <td class="title-cell"><a href="/issue/{{.ID}}">{{.Title}}</a><div class="muted small">{{.Author}} · {{.State}} · обновлена {{when .GitLabUpdatedAt}}</div></td>
+    <td class="small hide-md">{{.Labels}}</td>
     <td>
       {{if .Last}}
         <a href="/run/{{.Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}">{{template "status" .Last.Status}}</a>

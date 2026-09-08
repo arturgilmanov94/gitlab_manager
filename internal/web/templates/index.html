@@ -11,20 +11,20 @@
 {{if not .MRs}}
 <div class="empty">Пока нет merge requests. Вставьте ссылку или синхронизируйте назначенные вам.</div>
 {{else}}
-<div class="card">
+<div class="card table-card">
 <table class="table list">
-  <thead><tr><th>MR</th><th>Название</th><th>Ветка</th><th>Head</th><th>Последний запуск</th><th class="center">Открыто</th><th></th></tr></thead>
+  <thead><tr><th>MR</th><th>Название</th><th class="hide-md">Ветка</th><th class="hide-sm">Head</th><th>Последний запуск</th><th class="center hide-sm">Открыто</th><th class="actions-col"></th></tr></thead>
   <tbody>
   {{range .MRs}}
   <tr>
     <td class="nowrap"><a class="ref" href="/mr/{{.ID}}">!{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
-    <td>
+    <td class="title-cell">
       <a href="/mr/{{.ID}}">{{.Title}}</a>
       <div class="muted small">{{.Author}}{{if and $.Base.Username (eq .Author $.Base.Username)}} <span class="badge badge-info tip" data-tip="Автор MR — вы. Доступна кнопка исправления замечаний ревьюеров.">мой</span>{{end}} · {{.State}} · обновлён {{when .GitLabUpdatedAt}}
       {{if .Unresolved}} · <span class="badge badge-warning tip" data-tip="Нерешённые обсуждения ревьюеров в GitLab (resolvable и не resolved). Обновляется при синхронизации и при каждом запуске.">{{.Unresolved}} обсужд.</span>{{end}}</div>
     </td>
-    <td class="mono small">{{.SourceBranch}}<div class="muted">→ {{.TargetBranch}}</div></td>
-    <td class="mono small">{{shortSHA .HeadSHA}}{{if .Stale}}<div class="text-warning small tip" data-tip="В MR появились коммиты после последнего ревью. Нажмите «Проверить», чтобы перепроверить открытые замечания на новом head.">новые коммиты</div>{{end}}</td>
+    <td class="mono small hide-md">{{.SourceBranch}}<div class="muted">→ {{.TargetBranch}}</div></td>
+    <td class="mono small hide-sm">{{shortSHA .HeadSHA}}{{if .Stale}}<div class="text-warning small tip" data-tip="В MR появились коммиты после последнего ревью. Нажмите «Проверить», чтобы перепроверить открытые замечания на новом head.">новые коммиты</div>{{end}}</td>
     <td>
       {{if .Last}}
         <a href="/run/{{.Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}">{{template "status" .Last.Status}}</a>
@@ -32,7 +32,7 @@
         <div class="muted small">{{if .Last.FinishedAt}}{{when .Last.FinishedAt}}{{else}}{{when .Last.CreatedAt}}{{end}}</div>
       {{else}}<span class="muted">—</span>{{end}}
     </td>
-    <td class="center">{{if and .Last (eq .Last.Status "done")}}<span class="count {{if .Last.OpenFindings}}hot{{end}}">{{.Last.OpenFindings}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+    <td class="center hide-sm">{{if and .Last (eq .Last.Status "done")}}<span class="count {{if .Last.OpenFindings}}hot{{end}}">{{.Last.OpenFindings}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
     <td class="nowrap actions">
       {{$busy := and .Last (or (eq .Last.Status "running") (eq .Last.Status "queued"))}}
       <button class="btn btn-sm tip" data-tip="{{kindTip "quick"}}" {{if $busy}}disabled{{end}} onclick="startRun('/api/mrs/{{.ID}}/runs', 'quick', this)">Быстрое</button>

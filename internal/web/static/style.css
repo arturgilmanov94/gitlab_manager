@@ -80,7 +80,19 @@ textarea { width: 100%; max-width: 760px; resize: vertical; }
 .table tr:last-child td { border-bottom: 0; }
 .table.list tr:hover td { background: #fbfafd; }
 .compact td, .compact th { padding: 6px 10px; }
-.card > .table, .card > .table.list { margin: -16px; width: calc(100% + 32px); }
+.card.table-card { padding: 0; overflow-x: auto; }
+.card.table-card > .table { min-width: 720px; }
+.table th.actions-col, .table td.actions { white-space: nowrap; }
+.table td.title-cell { min-width: 220px; }
+@media (max-width: 1100px) {
+  .table .hide-md { display: none; }
+  .nav-context { display: none; }
+}
+@media (max-width: 820px) {
+  .table .hide-sm { display: none; }
+  .page-head { flex-direction: column; }
+  .controls-label { width: 100%; }
+}
 
 /* badges & status */
 .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; border: 1px solid transparent; }

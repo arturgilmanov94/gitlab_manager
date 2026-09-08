@@ -10,6 +10,16 @@
 - Watch-режим: опрос GitLab по отслеживаемым MR, автоматическая проверка исправлений при новых коммитах, уведомление.
 - Сводка расходов по дням и агентам.
 
+## [0.2.2] — 2026-09-08
+
+### Исправлено
+- Таблицы MR и задач вылезали за границу карточки; теперь карточка скроллится по горизонтали, а второстепенные
+  колонки (ветка, head, метки, счётчик) скрываются на узком окне.
+
+### Изменено
+- Синхронизация по умолчанию подтягивает и MR, где вы автор (`GITLAB_SYNC_ROLES=reviewer,assignee,author`).
+- Добавлен `docs/ROADMAP.md`: план итерации «engineering cockpit» с фазами, решениями и открытыми вопросами.
+
 ## [0.2.1] — 2026-09-08
 
 ### Изменено
@@ -68,7 +78,8 @@
   через `PROJECT_ROOT`, git и родительские каталоги.
 - Doctor, лаунчер `./mr-review`, `bootstrap.sh`, release-архив с проверкой на абсолютные пути и секреты.
 
-[Unreleased]: https://github.com/arturgilmanov94/gitlab_manager/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/arturgilmanov94/gitlab_manager/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/arturgilmanov94/gitlab_manager/releases/tag/v0.2.2
 [0.2.1]: https://github.com/arturgilmanov94/gitlab_manager/releases/tag/v0.2.1
 [0.2.0]: https://github.com/arturgilmanov94/gitlab_manager/releases/tag/v0.2.0
 [0.1.0]: https://github.com/arturgilmanov94/gitlab_manager/releases/tag/v0.1.0

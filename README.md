@@ -193,7 +193,7 @@ Ready to run.
 | `CLAUDE_MAX_BUDGET_USD`, `RUN_TIMEOUT_SEC` | пусто, `1800` | Лимиты на запуск (бюджет Claude Code считает по API-прайсу, даже при подписке) |
 | `CLAUDE_EXTRA_ALLOWED_TOOLS` | пусто | Дополнительные инструменты для read-only запусков, например `Bash(php *)` |
 | `GLAB_BIN`, `GITLAB_HOST`, `GITLAB_PROJECT` | `glab`, из `git remote`, из `git remote` | GitLab; host/project задаются вручную, если remote не разбирается |
-| `GITLAB_SYNC_ROLES`, `GITLAB_SYNC_ONLY_PROJECT` | `reviewer,assignee`, `1` | Что синхронизировать |
+| `GITLAB_SYNC_ROLES`, `GITLAB_SYNC_ONLY_PROJECT` | `reviewer,assignee,author`, `1` | Что синхронизировать (author = мои MR) |
 | `BASE_BRANCH` | `develop` | От чего создаются ветки задач |
 | `RUN_CONCURRENCY` | `1` | Сколько запусков агентов параллельно |
 

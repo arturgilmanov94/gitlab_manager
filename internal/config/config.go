@@ -169,7 +169,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		GlabBin:               str("GLAB_BIN", "glab"),
 		GitLabHost:            strings.TrimSpace(get("GITLAB_HOST")),
 		GitLabProject:         strings.TrimSpace(get("GITLAB_PROJECT")),
-		GitLabSyncRoles:       splitList(str("GITLAB_SYNC_ROLES", "reviewer,assignee")),
+		GitLabSyncRoles:       splitList(str("GITLAB_SYNC_ROLES", "reviewer,assignee,author")),
 		GitLabSyncOnlyProject: boolean("GITLAB_SYNC_ONLY_PROJECT", true),
 		BaseBranch:            str("BASE_BRANCH", "develop"),
 		RunConcurrency:        num("RUN_CONCURRENCY", 1),
