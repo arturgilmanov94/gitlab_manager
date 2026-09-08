@@ -71,7 +71,7 @@ func TestAddSyncReviewVerify(t *testing.T) {
 	}
 	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
 	run, _ := svc.DB.GetRun(runID)
-	if run.Verdict != "request_changes" || run.SkillIdentifier != "agent:mr-review" || run.CostUSD != 0.1 || run.SessionID != "sess-1" {
+	if run.Verdict != "request_changes" || run.SkillIdentifier != "agent:mr-review" || run.CostUSD != 0.1 || run.SessionID != "sess-1" || run.TotalTokens() != 54200 {
 		t.Fatalf("%+v", run)
 	}
 	req := fr.Requests[0]

@@ -93,6 +93,11 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 		},
 		"lower":    strings.ToLower,
 		"divCents": func(cents int64) float64 { return float64(cents) / 100 },
+		"tokens":   formatTokens,
+		"tokensTip": func(in, out, read, write int64) string {
+			return fmt.Sprintf("Токены за запуск, суммарно по всем моделям (агент + субагенты)\nвход: %s · выход: %s · чтение кэша: %s · запись кэша: %s",
+				formatTokens(in), formatTokens(out), formatTokens(read), formatTokens(write))
+		},
 	}
 	partials, err := fs.Glob(assets, "templates/_*.html")
 	if err != nil {
@@ -417,7 +422,7 @@ func (s *Server) apiRun(w http.ResponseWriter, r *http.Request) {
 	findings, _ := s.svc.DB.ListFindings(run.ID)
 	writeJSON(w, 200, map[string]any{
 		"id": run.ID, "kind": run.Kind, "status": run.Status, "verdict": run.Verdict, "summary": run.Summary,
-		"error": run.Error, "runner": run.Runner, "cost_usd": run.CostUSD, "duration_ms": run.DurationMs,
+		"error": run.Error, "runner": run.Runner, "cost_usd": run.CostUSD, "tokens": run.TotalTokens(), "duration_ms": run.DurationMs,
 		"started_at": run.StartedAt, "finished_at": run.FinishedAt, "findings": len(findings), "session_id": run.SessionID,
 	})
 }
@@ -483,6 +488,20 @@ func tail(path string, limit int) string {
 		return string(data[len(data)-limit:])
 	}
 	return string(data)
+}
+
+// formatTokens renders 1234 -> "1.2k", 6_400_000 -> "6.4M", 0 -> "—".
+func formatTokens(n int64) string {
+	switch {
+	case n <= 0:
+		return "—"
+	case n < 1000:
+		return strconv.FormatInt(n, 10)
+	case n < 1_000_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1000), ".0") + "k"
+	default:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1_000_000), ".0") + "M"
+	}
 }
 
 func formatWhen(value string) string {

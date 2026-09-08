@@ -139,7 +139,7 @@ func (f *FakeRunner) Run(ctx context.Context, req runner.Request) (*runner.Resul
 		if len(f.Texts) > 0 {
 			text, f.Texts = f.Texts[0], f.Texts[1:]
 		}
-		return &runner.Result{Text: text, SessionID: session, CostUSD: 0.01, DurationMs: 3}, nil
+		return &runner.Result{Text: text, SessionID: session, CostUSD: 0.01, Usage: runner.Usage{Input: 100, Output: 50}, DurationMs: 3}, nil
 	}
 	if len(f.Outputs) == 0 {
 		return nil, errors.New("fake runner: no canned output left")
@@ -150,7 +150,7 @@ func (f *FakeRunner) Run(ctx context.Context, req runner.Request) (*runner.Resul
 	if req.Mode == runner.ModeEdit {
 		_ = os.WriteFile(filepath.Join(req.Dir, "CHANGED.txt"), []byte("changed by fake agent\n"), 0o644)
 	}
-	return &runner.Result{Structured: raw, SessionID: session, CostUSD: 0.1, DurationMs: 5, Raw: []byte(`{"ok":1}`)}, nil
+	return &runner.Result{Structured: raw, SessionID: session, CostUSD: 0.1, Usage: runner.Usage{Input: 1000, Output: 200, CacheRead: 50000, CacheWrite: 3000}, DurationMs: 5, Raw: []byte(`{"ok":1}`)}, nil
 }
 
 // FullReviewOutput is a canned full review.

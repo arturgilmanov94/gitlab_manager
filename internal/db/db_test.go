@@ -21,7 +21,7 @@ func open(t *testing.T) *DB {
 func TestMigrateIdempotent(t *testing.T) {
 	d := open(t)
 	applied, err := d.Migrate()
-	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 1 {
+	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 2 {
 		t.Fatalf("%v %v %v", applied, err, d.SchemaVersion())
 	}
 }
@@ -43,12 +43,12 @@ func TestMRRunFindingsFlow(t *testing.T) {
 	if active, _ := d.ActiveRunForMR(mr.ID); active == nil || active.ID != runID {
 		t.Fatal("active run expected")
 	}
-	_ = d.UpdateRun(runID, map[string]any{"status": StatusDone, "summary": "s", "verdict": "approve"})
+	_ = d.UpdateRun(runID, map[string]any{"status": StatusDone, "summary": "s", "verdict": "approve", "input_tokens": 10, "cache_read_tokens": 90})
 	line := int64(3)
 	_ = d.ReplaceFindings(runID, []Finding{{Severity: "high", Title: "x", File: "a.php", Line: &line}, {Severity: "LOW", Title: "y", Status: "fixed"}})
 	_ = d.ReplaceDiscussions(runID, []Discussion{{Author: "bob", Body: "why?", Addressed: true}})
 	items, _ := d.ListMRs()
-	if len(items) != 1 || items[0].Last == nil || items[0].Last.Status != StatusDone || items[0].Last.OpenFindings != 1 {
+	if len(items) != 1 || items[0].Last == nil || items[0].Last.Status != StatusDone || items[0].Last.OpenFindings != 1 || items[0].Last.Tokens != 100 {
 		t.Fatalf("%+v", items)
 	}
 	findings, _ := d.ListFindings(runID)
@@ -62,10 +62,10 @@ func TestMRRunFindingsFlow(t *testing.T) {
 	if len(runs) != 1 || runs[0].TotalFindings != 2 {
 		t.Fatalf("%+v", runs)
 	}
-	if _, err := d.AddMessage(runID, "user", "q", 0); err != nil {
+	if _, err := d.AddMessage(runID, "user", "q", 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	if c := d.Counts(); c["merge_requests"] != 1 || c["runs"] != 1 || c["findings"] != 2 {
+	if c := d.Counts(); c["merge_requests"] != 1 || c["runs"] != 1 || c["findings"] != 2 || c["tokens"] != 100 {
 		t.Fatalf("%v", c)
 	}
 	_ = d.DeleteMR(mr.ID)

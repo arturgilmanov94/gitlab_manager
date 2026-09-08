@@ -135,6 +135,7 @@ func (c *Claude) Run(ctx context.Context, req Request) (*Result, error) {
 	res := &Result{
 		SessionID:  str(payload["session_id"]),
 		CostUSD:    num(payload["total_cost_usd"]),
+		Usage:      ClaudeUsage(payload),
 		DurationMs: int64(num(payload["duration_ms"])),
 		NumTurns:   int(num(payload["num_turns"])),
 		Raw:        stdout.Bytes(),
@@ -161,6 +162,29 @@ func (c *Claude) Run(ctx context.Context, req Request) (*Result, error) {
 		res.Structured = structured
 	}
 	return res, nil
+}
+
+// ClaudeUsage sums token usage over every model listed in modelUsage (main agent plus subagents);
+// it falls back to the top-level usage block of older CLI versions.
+func ClaudeUsage(payload map[string]any) Usage {
+	var u Usage
+	if models, ok := payload["modelUsage"].(map[string]any); ok && len(models) > 0 {
+		for _, v := range models {
+			m, _ := v.(map[string]any)
+			u.Input += int64(num(m["inputTokens"]))
+			u.Output += int64(num(m["outputTokens"]))
+			u.CacheRead += int64(num(m["cacheReadInputTokens"]))
+			u.CacheWrite += int64(num(m["cacheCreationInputTokens"]))
+		}
+		return u
+	}
+	if usage, ok := payload["usage"].(map[string]any); ok {
+		u.Input = int64(num(usage["input_tokens"]))
+		u.Output = int64(num(usage["output_tokens"]))
+		u.CacheRead = int64(num(usage["cache_read_input_tokens"]))
+		u.CacheWrite = int64(num(usage["cache_creation_input_tokens"]))
+	}
+	return u
 }
 
 // ParseClaudeJSON parses `claude -p --output-format json` output, tolerating leading noise.

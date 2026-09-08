@@ -27,7 +27,7 @@
   <div id="flash" class="alert" hidden></div>
   {{template "content" .}}
 </main>
-<footer class="footer">mr-review {{.Base.Version}} · только чтение относительно проекта · данные в data/ · потрачено ${{printf "%.2f" (divCents (index .Base.Counts "cost_cents"))}}</footer>
+<footer class="footer">mr-review {{.Base.Version}} · только чтение относительно проекта · данные в data/ · <span class="tip" data-tip="Сумма токенов всех запусков и вопросов агенту (вход, выход, чтение и запись кэша). Подписка считает лимиты именно в токенах, поэтому доллары не показываем.">токенов израсходовано: {{tokens (index .Base.Counts "tokens")}}</span></footer>
 <div id="tooltip" class="tooltip" hidden></div>
 <script src="/static/app.js"></script>
 </body>

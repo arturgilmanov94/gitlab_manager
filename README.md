@@ -125,7 +125,9 @@ Ready to run.
 - У каждой кнопки подробная подсказка при наведении: что произойдёт, где, что не будет тронуто.
 - Состояния запусков: в очереди, выполняется (спиннер, полоса прогресса, таймер), завершён, не вышло, отменён.
   Страницы с активным запуском обновляются сами.
-- У каждого запуска: полный лог (команда, промпт, stdout/stderr агента), стоимость, длительность, JSON результата.
+- У каждого запуска: полный лог (команда, промпт, stdout/stderr агента), израсходованные токены с разбивкой
+  (вход, выход, чтение и запись кэша, суммарно по агенту и субагентам), длительность, JSON результата.
+  Доллары не показываются: при работе по подписке важны лимиты в токенах.
 
 ## Как это работает
 
@@ -188,7 +190,7 @@ Ready to run.
 | `DATABASE_PATH`, `LOG_DIR`, `RUNTIME_DIR`, `WORKTREE_DIR` | `./data/reviews.sqlite`, `./logs`, `./runtime`, `./runtime/worktrees` | Где хранить данные |
 | `REVIEW_SKILL` | auto (`mr-review`) | Имя review-агента/команды/скилла проекта |
 | `CLAUDE_BIN`, `CODEX_BIN`, `DEFAULT_RUNNER` | `claude`, `codex`, `claude` | Агенты (Cursor ищется как `cursor-agent`) |
-| `CLAUDE_MAX_BUDGET_USD`, `RUN_TIMEOUT_SEC` | пусто, `1800` | Лимиты на запуск |
+| `CLAUDE_MAX_BUDGET_USD`, `RUN_TIMEOUT_SEC` | пусто, `1800` | Лимиты на запуск (бюджет Claude Code считает по API-прайсу, даже при подписке) |
 | `CLAUDE_EXTRA_ALLOWED_TOOLS` | пусто | Дополнительные инструменты для read-only запусков, например `Bash(php *)` |
 | `GLAB_BIN`, `GITLAB_HOST`, `GITLAB_PROJECT` | `glab`, из `git remote`, из `git remote` | GitLab; host/project задаются вручную, если remote не разбирается |
 | `GITLAB_SYNC_ROLES`, `GITLAB_SYNC_ONLY_PROJECT` | `reviewer,assignee`, `1` | Что синхронизировать |

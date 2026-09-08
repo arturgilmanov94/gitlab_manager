@@ -11,7 +11,7 @@
       агент <b>{{.Run.Runner}}</b>{{if .Run.SkillIdentifier}} · skill <span class="mono">{{.Run.SkillIdentifier}}</span>{{end}}
       {{if .Run.HeadSHA}} · head <span class="mono">{{shortSHA .Run.HeadSHA}}</span>{{end}}
       {{if .Run.Branch}} · ветка <span class="mono">{{.Run.Branch}}</span>{{end}}
-      · старт {{when .Run.StartedAt}} · финиш {{when .Run.FinishedAt}} · {{money .Run.CostUSD}} · {{seconds .Run.DurationMs}}
+      · старт {{when .Run.StartedAt}} · финиш {{when .Run.FinishedAt}} · <span class="tip" data-tip="{{tokensTip .Run.InputTokens .Run.OutputTokens .Run.CacheReadTokens .Run.CacheWriteTokens}}">{{tokens .Run.TotalTokens}} токенов</span> · {{seconds .Run.DurationMs}}
       {{if .Run.BaseRunID}} · проверяет <a href="/run/{{deref .Run.BaseRunID}}">#{{deref .Run.BaseRunID}}</a>{{end}}
     </div>
   </div>
@@ -92,7 +92,7 @@
 <section class="card">
   <h2>Вопрос агенту <span class="muted small tip" data-tip="Продолжает ту же сессию агента (resume по session id) в том же каталоге: у него остаётся контекст ревью. Режим read-only, файлы не меняются. Ответ и вопрос сохраняются здесь.">как это работает?</span></h2>
   <div id="chat">
-    {{range .Messages}}<div class="msg msg-{{.Role}}"><div class="msg-role">{{if eq .Role "user"}}вы{{else if eq .Role "assistant"}}агент{{else}}ошибка{{end}} · {{when .CreatedAt}}{{if .CostUSD}} · {{money .CostUSD}}{{end}}</div><div class="prewrap">{{.Content}}</div></div>{{end}}
+    {{range .Messages}}<div class="msg msg-{{.Role}}"><div class="msg-role">{{if eq .Role "user"}}вы{{else if eq .Role "assistant"}}агент{{else}}ошибка{{end}} · {{when .CreatedAt}}{{if .Tokens}} · {{tokens .Tokens}} токенов{{end}}</div><div class="prewrap">{{.Content}}</div></div>{{end}}
   </div>
   {{if .Run.SessionID}}
   <form class="inline" onsubmit="return ask(event, {{.Run.ID}})">

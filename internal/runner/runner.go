@@ -36,12 +36,24 @@ type Request struct {
 	Log             io.Writer
 }
 
+// Usage is the token consumption of a run, summed over every model the agent used.
+type Usage struct {
+	Input      int64
+	Output     int64
+	CacheRead  int64
+	CacheWrite int64
+}
+
+// Total is the sum of all token kinds.
+func (u Usage) Total() int64 { return u.Input + u.Output + u.CacheRead + u.CacheWrite }
+
 // Result is what an agent returned.
 type Result struct {
 	Structured json.RawMessage // parsed structured output (when Schema was given)
 	Text       string          // final plain-text answer
 	SessionID  string
 	CostUSD    float64
+	Usage      Usage
 	DurationMs int64
 	NumTurns   int
 	Raw        json.RawMessage

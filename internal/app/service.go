@@ -124,10 +124,34 @@ func (s *Service) Skill() *skill.Skill {
 	return skill.New(s.Settings.ProjectRoot, s.Settings.ReviewSkill).Resolve()
 }
 
-// Recover marks runs interrupted by a restart as failed.
+// Recover marks runs interrupted by a restart as failed and backfills token counters of old runs.
 func (s *Service) Recover() int64 {
 	n, _ := s.DB.FailStaleRuns("Interrupted: the dashboard was restarted while this run was active")
+	s.backfillTokens()
 	return n
+}
+
+// backfillTokens fills token counters for runs stored before token accounting existed (from raw_result).
+func (s *Service) backfillTokens() {
+	ids, err := s.DB.RunsWithoutTokens()
+	if err != nil {
+		return
+	}
+	for _, id := range ids {
+		run, _ := s.DB.GetRun(id)
+		if run == nil || run.RawResult == "" {
+			continue
+		}
+		payload, err := runner.ParseClaudeJSON(run.RawResult)
+		if err != nil {
+			continue
+		}
+		u := runner.ClaudeUsage(payload)
+		if u.Total() == 0 {
+			continue
+		}
+		_ = s.DB.UpdateRun(id, map[string]any{"input_tokens": u.Input, "output_tokens": u.Output, "cache_read_tokens": u.CacheRead, "cache_write_tokens": u.CacheWrite})
+	}
 }
 
 // Shutdown cancels active runs and waits briefly for workers.
@@ -638,6 +662,10 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 	if result != nil {
 		fields["cost_usd"] = result.CostUSD
 		fields["duration_ms"] = result.DurationMs
+		fields["input_tokens"] = result.Usage.Input
+		fields["output_tokens"] = result.Usage.Output
+		fields["cache_read_tokens"] = result.Usage.CacheRead
+		fields["cache_write_tokens"] = result.Usage.CacheWrite
 		fields["session_id"] = result.SessionID
 		if len(result.Raw) > 0 && len(result.Raw) < 2_000_000 {
 			fields["raw_result"] = string(result.Raw)
@@ -772,7 +800,7 @@ func (s *Service) Ask(runID int64, question string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_, _ = s.DB.AddMessage(runID, "user", question, 0)
+	_, _ = s.DB.AddMessage(runID, "user", question, 0, 0)
 	dir := run.WorkDir
 	if dir == "" || !dirExists(dir) {
 		dir = s.Settings.ProjectRoot
@@ -794,11 +822,11 @@ func (s *Service) Ask(runID int64, question string) (string, error) {
 		Log:             log,
 	})
 	if err != nil {
-		_, _ = s.DB.AddMessage(runID, "error", err.Error(), 0)
+		_, _ = s.DB.AddMessage(runID, "error", err.Error(), 0, 0)
 		return "", &UserError{err.Error()}
 	}
 	answer := strings.TrimSpace(result.Text)
-	_, _ = s.DB.AddMessage(runID, "assistant", answer, result.CostUSD)
+	_, _ = s.DB.AddMessage(runID, "assistant", answer, result.CostUSD, result.Usage.Total())
 	if result.SessionID != "" && result.SessionID != run.SessionID {
 		_ = s.DB.UpdateRun(runID, map[string]any{"session_id": result.SessionID})
 	}

@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -97,6 +99,7 @@ func (c *Codex) Run(ctx context.Context, req Request) (*Result, error) {
 	}
 	last, _ := os.ReadFile(outFile)
 	res := &Result{Text: strings.TrimSpace(string(last)), DurationMs: elapsed, Raw: stdout.Bytes(), SessionID: codexSessionID(stdout.String(), stderr.String())}
+	res.Usage.Input = codexTokensUsed(stdout.String(), stderr.String()) // codex reports one total; keep it as "input"
 	if len(req.Schema) > 0 {
 		text := res.Text
 		if idx := strings.Index(text, "{"); idx > 0 {
@@ -109,6 +112,19 @@ func (c *Codex) Run(ctx context.Context, req Request) (*Result, error) {
 		res.Structured, _ = json.Marshal(obj)
 	}
 	return res, nil
+}
+
+var codexTokensRe = regexp.MustCompile(`(?i)tokens used[:\s]+([\d,]+)`)
+
+// codexTokensUsed parses the "tokens used: N" summary line codex prints (best effort).
+func codexTokensUsed(outputs ...string) int64 {
+	for _, out := range outputs {
+		if m := codexTokensRe.FindStringSubmatch(out); m != nil {
+			n, _ := strconv.ParseInt(strings.ReplaceAll(m[1], ",", ""), 10, 64)
+			return n
+		}
+	}
+	return 0
 }
 
 // codexSessionID extracts a session/thread id from codex output when present (best effort).

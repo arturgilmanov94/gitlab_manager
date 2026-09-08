@@ -95,3 +95,20 @@ func TestRunErrorsAndTimeout(t *testing.T) {
 		t.Fatalf("expected ErrCancelled, got %v", err)
 	}
 }
+
+func TestClaudeUsageSumsModels(t *testing.T) {
+	payload := map[string]any{
+		"modelUsage": map[string]any{
+			"a": map[string]any{"inputTokens": 1.0, "outputTokens": 2.0, "cacheReadInputTokens": 3.0, "cacheCreationInputTokens": 4.0},
+			"b": map[string]any{"inputTokens": 10.0, "outputTokens": 20.0, "cacheReadInputTokens": 30.0, "cacheCreationInputTokens": 40.0},
+		},
+	}
+	u := ClaudeUsage(payload)
+	if u.Input != 11 || u.Output != 22 || u.CacheRead != 33 || u.CacheWrite != 44 || u.Total() != 110 {
+		t.Fatalf("%+v", u)
+	}
+	fallback := ClaudeUsage(map[string]any{"usage": map[string]any{"input_tokens": 5.0, "output_tokens": 6.0}})
+	if fallback.Input != 5 || fallback.Output != 6 {
+		t.Fatalf("%+v", fallback)
+	}
+}

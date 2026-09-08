@@ -547,7 +547,8 @@ func review(settings *config.Settings, args []string) int {
 			continue
 		}
 		run, _ := s.DB.GetRun(runID)
-		fmt.Printf("status: %s  verdict: %s  cost: $%.2f\n", run.Status, firstOf(run.Verdict, "-"), run.CostUSD)
+		fmt.Printf("status: %s  verdict: %s  tokens: %d (in %d / out %d / cache read %d / cache write %d)\n",
+			run.Status, firstOf(run.Verdict, "-"), run.TotalTokens(), run.InputTokens, run.OutputTokens, run.CacheReadTokens, run.CacheWriteTokens)
 		if run.Status != db.StatusDone {
 			fmt.Println(run.Error)
 			return errors.New("run did not complete")

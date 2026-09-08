@@ -62,7 +62,7 @@
   <h2>История запусков</h2>
   {{if not .Runs}}<p class="muted">Запусков ещё не было.</p>{{else}}
   <table class="table compact">
-    <thead><tr><th>#</th><th>Тип</th><th>Статус</th><th>Агент</th><th>Head</th><th>Вердикт</th><th>Замечания</th><th>Стоимость</th><th>Время</th><th>Старт</th></tr></thead>
+    <thead><tr><th>#</th><th>Тип</th><th>Статус</th><th>Агент</th><th>Head</th><th>Вердикт</th><th>Замечания</th><th>Токены</th><th>Время</th><th>Старт</th></tr></thead>
     <tbody>
     {{range .Runs}}
     <tr>
@@ -73,7 +73,7 @@
       <td class="mono small">{{shortSHA .HeadSHA}}</td>
       <td class="verdict verdict-{{.Verdict}}">{{if .Verdict}}{{verdict .Verdict}}{{else}}—{{end}}</td>
       <td>{{if eq .Status "done"}}{{.OpenFindings}} открыто / {{.TotalFindings}}{{else}}—{{end}}</td>
-      <td>{{money .CostUSD}}</td>
+      <td><span class="tip" data-tip="{{tokensTip .InputTokens .OutputTokens .CacheReadTokens .CacheWriteTokens}}">{{tokens .TotalTokens}}</span></td>
       <td>{{seconds .DurationMs}}</td>
       <td class="small">{{if .StartedAt}}{{when .StartedAt}}{{else}}{{when .CreatedAt}}{{end}}</td>
     </tr>

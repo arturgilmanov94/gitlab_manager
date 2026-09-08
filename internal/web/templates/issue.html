@@ -51,7 +51,7 @@
   <h2>История запусков</h2>
   {{if not .Runs}}<p class="muted">Запусков ещё не было.</p>{{else}}
   <table class="table compact">
-    <thead><tr><th>#</th><th>Тип</th><th>Статус</th><th>Агент</th><th>Ветка</th><th>Стоимость</th><th>Время</th><th>Старт</th><th>Итог</th></tr></thead>
+    <thead><tr><th>#</th><th>Тип</th><th>Статус</th><th>Агент</th><th>Ветка</th><th>Токены</th><th>Время</th><th>Старт</th><th>Итог</th></tr></thead>
     <tbody>
     {{range .Runs}}
     <tr>
@@ -60,7 +60,7 @@
       <td><a href="/run/{{.ID}}" data-run-status="{{.ID}}" data-status="{{.Status}}">{{template "status" .Status}}</a></td>
       <td>{{.Runner}}</td>
       <td class="mono small">{{.Branch}}</td>
-      <td>{{money .CostUSD}}</td>
+      <td><span class="tip" data-tip="{{tokensTip .InputTokens .OutputTokens .CacheReadTokens .CacheWriteTokens}}">{{tokens .TotalTokens}}</span></td>
       <td>{{seconds .DurationMs}}</td>
       <td class="small">{{if .StartedAt}}{{when .StartedAt}}{{else}}{{when .CreatedAt}}{{end}}</td>
       <td class="small clamp">{{if .Summary}}{{.Summary}}{{else if .Error}}<span class="text-danger">{{.Error}}</span>{{end}}</td>
