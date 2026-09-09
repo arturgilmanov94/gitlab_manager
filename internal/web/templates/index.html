@@ -1,10 +1,12 @@
 {{define "content"}}
 <section class="toolbar">
   <form class="inline" onsubmit="return addRef(event, '/api/mrs')">
-    <input type="text" name="ref" placeholder="Ссылка на MR или !123" size="44" required>
+    <input type="text" name="ref" placeholder="Ссылка на MR или !123" size="34" required>
     <button type="submit" class="btn tip" data-tip="{{kindTip "add"}}">Добавить</button>
   </form>
   <button class="btn tip" data-tip="{{kindTip "sync-mrs"}}" onclick="post('/api/mrs/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' MR для @' + r.username, true), reload()))">Синхронизировать с GitLab</button>
+  <input type="text" data-filter="#mrs-table" placeholder="Фильтр: номер, название, автор, ветка…" size="30">
+  <span class="small muted" id="filter-count"></span>
   <span class="spacer"></span>
   <span class="small secondary">Агент для запусков:</span> {{template "runner-picker" .Base.Runners}}
 </section>
@@ -13,24 +15,29 @@
 <div class="empty"><b>Пока нет merge requests.</b><br>Вставьте ссылку выше или синхронизируйте назначенные вам.</div>
 {{else}}
 <div class="card table-card">
-<table class="table list">
+<table class="table list" id="mrs-table">
   <thead><tr><th>MR</th><th>Название</th><th class="hide-lg">Ветка</th><th>GitLab</th><th>AI review</th><th class="right"></th></tr></thead>
   <tbody>
   {{range .MRs}}
   {{$st := aiState .}}
   {{$busy := or (eq $st "running") (eq $st "queued") (eq $st "waiting")}}
-  {{$closed := or (eq .State "merged") (eq .State "closed")}}
+  {{$closed := .Closed}}
   <tr>
     <td class="nowrap ref-cell"><a class="ref" href="/mr/{{.ID}}">!{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
     <td class="title-cell">
       <a class="title" href="/mr/{{.ID}}">{{.Title}}</a>
-      <div class="sub">{{.Author}}{{if and $.Base.Username (eq .Author $.Base.Username)}}<span class="badge badge-info tip" data-tip="Автор MR — вы.">мой</span>{{end}} · обновлён {{when .GitLabUpdatedAt}}</div>
+      <div class="sub">{{.Author}}{{if and $.Base.Username (eq .Author $.Base.Username)}}<span class="badge badge-info tip" data-tip="Автор MR — вы.">мой</span>{{end}}{{if .Draft}}<span class="badge">Draft</span>{{end}} · обновлён {{when .GitLabUpdatedAt}}{{if .ChangesCount}} · {{.ChangesCount}} файлов{{end}}</div>
     </td>
     <td class="mono small hide-lg" data-label="Ветка">{{.SourceBranch}}<div class="muted">→ {{.TargetBranch}}</div></td>
     <td data-label="GitLab">
       <div class="state-stack">
-        <span class="state state-{{if $closed}}neutral{{else}}success{{end}}"><span class="glyph">{{if $closed}}—{{else}}✓{{end}}</span> {{if eq .State "merged"}}Merged{{else if eq .State "closed"}}Closed{{else}}Открыт{{end}}</span>
-        {{if .Unresolved}}<span class="badge badge-warning tip" data-tip="Нерешённые обсуждения ревьюеров в GitLab.">{{.Unresolved}} обсужд.</span>{{end}}
+        {{if $closed}}<span class="state state-neutral"><span class="glyph">—</span> {{if eq .State "merged"}}Merged{{else}}Closed{{end}}</span>
+        {{else}}<span class="state state-{{pipelineTone .PipelineStatus}}"><span class="glyph">{{glyph (pipelineTone .PipelineStatus)}}</span> {{pipelineLabel .PipelineStatus}}</span>{{end}}
+        <span class="small muted">
+          {{if .ApprovalsRequired}}{{if ge .ApprovalsGiven .ApprovalsRequired}}<span class="text-success">✓ approvals {{.ApprovalsGiven}}/{{.ApprovalsRequired}}</span>{{else}}approvals {{.ApprovalsGiven}}/{{.ApprovalsRequired}}{{end}}{{else if .ApprovalsGiven}}approvals {{.ApprovalsGiven}}{{end}}
+          {{if .Unresolved}} · <span class="text-warning tip" data-tip="Нерешённые обсуждения ревьюеров в GitLab.">{{.Unresolved}} обсужд.</span>{{end}}
+          {{if .Diverged}} · <span class="tip" data-tip="На сколько коммитов {{.TargetBranch}} ушёл вперёд с момента ветвления.">отстаёт на {{.Diverged}}</span>{{end}}
+        </span>
       </div>
     </td>
     <td data-label="AI review">
@@ -51,7 +58,7 @@
           <a class="btn btn-sm btn-primary" href="/run/{{.Last.ID}}">Открыть прогресс</a>
         {{else if eq $st "failed"}}
           <a class="btn btn-sm" href="/run/{{.Last.ID}}">Посмотреть ошибку</a>
-          <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Last.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Повторить</button>
+          <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Last.ID}}/retry', {}, this).then(r => r && reload())">Повторить</button>
         {{else if eq $st "stale"}}
           <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'verify', this)">Проверить изменения</button>
         {{else if eq $st "current"}}

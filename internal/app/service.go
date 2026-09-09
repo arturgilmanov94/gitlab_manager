@@ -229,6 +229,10 @@ func (s *Service) mrFromPayload(payload map[string]any, ref gitlab.Ref) db.Merge
 		State:           gitlab.Str(payload, "state"),
 		HeadSHA:         gitlab.HeadSHA(payload),
 		GitLabUpdatedAt: gitlab.Str(payload, "updated_at"),
+		PipelineStatus:  gitlab.PipelineStatus(payload),
+		Diverged:        gitlab.Int(payload, "diverged_commits_count"),
+		Draft:           gitlab.Bool(payload, "draft") || gitlab.Bool(payload, "work_in_progress"),
+		ChangesCount:    gitlab.Str(payload, "changes_count"),
 	}
 }
 
@@ -240,6 +244,9 @@ func (s *Service) fetchMR(ref gitlab.Ref) (*db.MergeRequest, error) {
 	row := s.mrFromPayload(payload, ref)
 	if n, err := s.GitLab.CountUnresolved(ref); err == nil {
 		row.Unresolved = n
+	}
+	if given, required, err := s.GitLab.GetApprovals(ref); err == nil {
+		row.ApprovalsGiven, row.ApprovalsRequired = given, required
 	}
 	return s.DB.UpsertMR(row)
 }
@@ -294,12 +301,9 @@ func (s *Service) SyncMRs() (SyncResult, error) {
 		if !ok {
 			itemHost, itemProject = host, project
 		}
+		// The list payload lacks pipeline/divergence details: refresh every MR individually.
 		ref := gitlab.Ref{Host: itemHost, ProjectPath: itemProject, IID: gitlab.Int(item, "iid")}
-		row := s.mrFromPayload(item, ref)
-		if n, err := s.GitLab.CountUnresolved(ref); err == nil {
-			row.Unresolved = n
-		}
-		if _, err := s.DB.UpsertMR(row); err == nil {
+		if _, err := s.fetchMR(ref); err == nil {
 			result.Synced++
 		}
 	}
@@ -680,6 +684,12 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 					if f.Status == "open" {
 						previous = append(previous, f)
 					}
+				}
+				// Continue the review's own agent session: it already holds the MR context (Phase C).
+				if base.SessionID != "" && base.Runner == run.Runner {
+					req.ResumeSessionID = base.SessionID
+					req.Agent = ""
+					logln(fmt.Sprintf("continuing agent session of run #%d", base.ID))
 				}
 			}
 			req.Prompt, req.Schema = prompts.Verify(pm, sk, baseSHA, toPrev(previous)), prompts.VerifySchema
@@ -1088,6 +1098,66 @@ func (s *Service) Ask(runID int64, question string) (string, error) {
 		_ = s.DB.UpdateRun(runID, map[string]any{"session_id": result.SessionID})
 	}
 	return answer, nil
+}
+
+// SetFindingStatus records the developer's decision about a finding (open / false_positive / ignored / resolved).
+func (s *Service) SetFindingStatus(findingID int64, status string) error {
+	if f, _ := s.DB.GetFinding(findingID); f == nil {
+		return userErr("finding #%d not found", findingID)
+	}
+	if err := s.DB.SetFindingStatus(findingID, status); err != nil {
+		return &UserError{err.Error()}
+	}
+	return nil
+}
+
+// Workspace summarises one worktree for the workspaces page.
+type Workspace struct {
+	Path        string
+	Branch      string
+	Head        string
+	Run         *db.Run // newest run that used it (nil when unknown)
+	Active      bool
+	Dirty       bool
+	HasUpstream bool
+	Unpushed    int
+	State       string // active | dirty | clean | pushed
+}
+
+// Workspaces lists the dashboard's worktrees with their git state and the run that created them.
+func (s *Service) Workspaces() ([]Workspace, error) {
+	if s.Worktrees == nil {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), worktree.Timeout)
+	defer cancel()
+	entries, err := s.Worktrees.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []Workspace
+	for _, e := range entries {
+		w := Workspace{Path: e.Path, Branch: e.Branch, Head: e.Head}
+		w.Run, _ = s.DB.LatestRunForWorkDir(e.Path)
+		if w.Run != nil && w.Run.Active() {
+			w.Active = true
+		}
+		status, _ := s.Worktrees.Status(ctx, e.Path)
+		w.Dirty = strings.TrimSpace(status) != ""
+		w.Unpushed, w.HasUpstream = s.Worktrees.Unpushed(ctx, e.Path)
+		switch {
+		case w.Active:
+			w.State = "active"
+		case w.Dirty:
+			w.State = "dirty"
+		case w.HasUpstream && w.Unpushed == 0:
+			w.State = "pushed"
+		default:
+			w.State = "clean"
+		}
+		out = append(out, w)
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------------- worktree actions

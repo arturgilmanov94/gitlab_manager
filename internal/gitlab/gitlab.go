@@ -137,6 +137,7 @@ type Client interface {
 	AuthStatus(host string) (bool, string)
 	CurrentUser(host string) (string, error)
 	GetMR(ref Ref) (map[string]any, error)
+	GetApprovals(ref Ref) (given, required int64, err error)
 	CountUnresolved(ref Ref) (int64, error)
 	ListOpenMRs(host, username string, roles []string, projectPath string) ([]map[string]any, error)
 	GetIssue(ref Ref) (map[string]any, error)
@@ -275,9 +276,9 @@ func (g *Glab) CurrentUser(host string) (string, error) {
 	return username, nil
 }
 
-// GetMR fetches one merge request.
+// GetMR fetches one merge request, including how far the target branch has moved ahead of it.
 func (g *Glab) GetMR(ref Ref) (map[string]any, error) {
-	obj, err := g.apiObject(ref.Host, fmt.Sprintf("projects/%s/merge_requests/%d", ref.EncodedProject(), ref.IID))
+	obj, err := g.apiObject(ref.Host, fmt.Sprintf("projects/%s/merge_requests/%d?include_diverged_commits_count=true", ref.EncodedProject(), ref.IID))
 	if err != nil {
 		return nil, err
 	}
@@ -285,6 +286,30 @@ func (g *Glab) GetMR(ref Ref) (map[string]any, error) {
 		return nil, fmt.Errorf("merge request %s!%d not found", ref.ProjectPath, ref.IID)
 	}
 	return obj, nil
+}
+
+// GetApprovals returns how many approvals the MR has and how many it needs (0 when the instance has no rules).
+func (g *Glab) GetApprovals(ref Ref) (int64, int64, error) {
+	obj, err := g.apiObject(ref.Host, fmt.Sprintf("projects/%s/merge_requests/%d/approvals", ref.EncodedProject(), ref.IID))
+	if err != nil {
+		return 0, 0, err
+	}
+	approvedBy, _ := obj["approved_by"].([]any)
+	return int64(len(approvedBy)), Int(obj, "approvals_required"), nil
+}
+
+// PipelineStatus reads the head pipeline status of an MR payload ("" when none).
+func PipelineStatus(obj map[string]any) string {
+	if s := Str(Nested(obj, "head_pipeline"), "status"); s != "" {
+		return s
+	}
+	return Str(Nested(obj, "pipeline"), "status")
+}
+
+// Bool reads a boolean field.
+func Bool(obj map[string]any, key string) bool {
+	v, _ := obj[key].(bool)
+	return v
 }
 
 // CountUnresolved counts unresolved, resolvable discussions of a merge request.

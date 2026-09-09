@@ -25,7 +25,8 @@ func MRPayload(iid int64, sha string) map[string]any {
 		"web_url":       fmt.Sprintf("https://gitlab.example.com/group/sub/project/-/merge_requests/%d", iid),
 		"author":        map[string]any{"username": "alice"},
 		"source_branch": "feature", "target_branch": "develop", "state": "opened", "sha": sha,
-		"diff_refs":  map[string]any{"head_sha": sha},
+		"diff_refs":     map[string]any{"head_sha": sha},
+		"head_pipeline": map[string]any{"status": "failed"}, "diverged_commits_count": 3.0, "draft": false, "changes_count": "7",
 		"references": map[string]any{"full": fmt.Sprintf("group/sub/project!%d", iid)},
 		"updated_at": "2026-09-01T10:00:00+03:00",
 	}
@@ -90,6 +91,12 @@ func (f *FakeGitLab) GetMR(ref gitlab.Ref) (map[string]any, error) {
 }
 func (f *FakeGitLab) CountUnresolved(ref gitlab.Ref) (int64, error) {
 	return f.Unresolved[ref.IID], nil
+}
+func (f *FakeGitLab) GetApprovals(ref gitlab.Ref) (int64, int64, error) {
+	if ref.IID == 42 {
+		return 1, 2, nil
+	}
+	return 0, 0, nil
 }
 func (f *FakeGitLab) ListOpenMRs(host, username string, roles []string, projectPath string) ([]map[string]any, error) {
 	f.Calls = append(f.Calls, fmt.Sprintf("list-mrs %s %v", projectPath, roles))

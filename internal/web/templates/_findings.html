@@ -1,18 +1,37 @@
 {{define "findings"}}
 {{if .Findings}}
 <table class="table findings">
-  <thead><tr><th>Severity</th><th>Статус</th><th>Где</th><th>Замечание</th></tr></thead>
+  <thead><tr><th>Severity</th><th>Статус</th><th>Где</th><th>Замечание</th><th></th></tr></thead>
   <tbody>
   {{range .Findings}}
-  <tr class="finding f-{{.Status}}">
+  {{$link := fileLink $.Blob $.SHA .File (deref .Line)}}
+  <tr class="finding f-{{.Status}}" id="finding-{{.ID}}">
     <td><span class="sev sev-{{.Severity}}">{{.Severity}}</span><div class="muted small">{{.Category}}</div></td>
-    <td><span class="fstatus fstatus-{{.Status}}">{{if eq .Status "open"}}открыто{{else if eq .Status "fixed"}}исправлено{{else}}неактуально{{end}}</span></td>
-    <td class="mono small">{{if .File}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{else}}—{{end}}</td>
+    <td><span class="fstatus fstatus-{{.Status}}">{{fstatusLabel .Status}}</span></td>
+    <td class="mono small">{{if .File}}{{if $link}}<a class="file-ref tip" data-tip="Открыть файл в GitLab на проверенном коммите" href="{{$link}}" target="_blank" rel="noopener">{{.File}}{{if .Line}}:{{deref .Line}}{{end}}</a>{{else}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{end}}{{else}}—{{end}}</td>
     <td>
       <b>{{.Title}}</b>
-      <div class="prewrap">{{.Description}}</div>
-      {{if .Suggestion}}<details><summary>Предлагаемый фикс</summary><pre>{{.Suggestion}}</pre></details>{{end}}
+      {{md .Description $.Blob $.SHA}}
+      {{if .Suggestion}}<details class="fix"><summary>Предлагаемый фикс</summary>{{md .Suggestion $.Blob $.SHA}}</details>{{end}}
       {{if .VerifyNote}}<div class="small muted">проверка: {{.VerifyNote}}</div>{{end}}
+    </td>
+    <td class="actions-cell">
+      <details class="menu">
+        <summary title="Действия с замечанием">⋯</summary>
+        <div class="menu-items">
+          {{if $link}}<a class="item ext" href="{{$link}}" target="_blank" rel="noopener">Код</a>{{end}}
+          <button class="item" onclick="copyText({{printf "%s — %s:%s\n%s" .Title .File (deref .Line) .Description}})">Скопировать текст</button>
+          {{if eq .Status "open"}}
+            <div class="divider"></div>
+            <button class="item tip" data-tip="Замечание неверно: агент ошибся. Не считается открытым и не попадёт в проверку изменений." onclick="post('/api/findings/{{.ID}}/status', {status: 'false_positive'}, this).then(r => r && reload())">Ложное срабатывание</button>
+            <button class="item tip" data-tip="Замечание по делу, но исправлять не будем. Не считается открытым." onclick="post('/api/findings/{{.ID}}/status', {status: 'ignored'}, this).then(r => r && reload())">Игнорировать</button>
+            <button class="item tip" data-tip="Исправлено вручную, без проверки агентом." onclick="post('/api/findings/{{.ID}}/status', {status: 'resolved'}, this).then(r => r && reload())">Отметить решённым</button>
+          {{else if or (eq .Status "false_positive") (eq .Status "ignored") (eq .Status "resolved")}}
+            <div class="divider"></div>
+            <button class="item" onclick="post('/api/findings/{{.ID}}/status', {status: 'open'}, this).then(r => r && reload())">Вернуть в открытые</button>
+          {{end}}
+        </div>
+      </details>
     </td>
   </tr>
   {{end}}
@@ -26,11 +45,12 @@
   <thead><tr><th>Автор</th><th>Где</th><th>Комментарий</th><th>Оценка AI</th></tr></thead>
   <tbody>
   {{range .Discussions}}
+  {{$dlink := fileLink $.Blob $.SHA .File (deref .Line)}}
   <tr>
     <td>{{.Author}}</td>
-    <td class="mono small">{{if .File}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{else}}—{{end}}</td>
-    <td class="prewrap">{{.Body}}</td>
-    <td>{{if .Addressed}}<span class="fstatus fstatus-fixed">учтено</span>{{else}}<span class="fstatus fstatus-open">открыто</span>{{end}} <div class="small">{{.Assessment}}</div></td>
+    <td class="mono small">{{if .File}}{{if $dlink}}<a class="file-ref" href="{{$dlink}}" target="_blank" rel="noopener">{{.File}}{{if .Line}}:{{deref .Line}}{{end}}</a>{{else}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{end}}{{else}}—{{end}}</td>
+    <td>{{md .Body $.Blob $.SHA}}</td>
+    <td>{{if .Addressed}}<span class="fstatus fstatus-fixed">учтено</span>{{else}}<span class="fstatus fstatus-open">открыто</span>{{end}} <div class="small">{{md .Assessment $.Blob $.SHA}}</div></td>
   </tr>
   {{end}}
   </tbody>

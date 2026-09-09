@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -111,8 +112,15 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 			}
 			return s
 		},
-		"errorTitle": errorTitle,
-		"tokens":     formatTokens,
+		"errorTitle":    errorTitle,
+		"md":            renderMarkdown,
+		"hasPrefix":     strings.HasPrefix,
+		"blobBase":      blobBase,
+		"fileLink":      fileLink,
+		"pipelineLabel": pipelineLabel,
+		"pipelineTone":  pipelineTone,
+		"fstatusLabel":  findingStatusLabel,
+		"tokens":        formatTokens,
 		"tokensTip": func(in, out, read, write int64) string {
 			return fmt.Sprintf("Токены за запуск, суммарно по всем моделям (агент + субагенты)\nвход: %s · выход: %s · чтение кэша: %s · запись кэша: %s",
 				formatTokens(in), formatTokens(out), formatTokens(read), formatTokens(write))
@@ -122,7 +130,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 	if err != nil {
 		return nil, err
 	}
-	for _, page := range []string{"index", "issues", "mr", "issue", "run", "doctor"} {
+	for _, page := range []string{"overview", "index", "issues", "mr", "issue", "run", "runs", "workspaces", "doctor"} {
 		files := append([]string{"templates/layout.html", "templates/" + page + ".html"}, partials...)
 		t, err := template.New("layout").Funcs(funcs).ParseFS(assets, files...)
 		if err != nil {
@@ -144,8 +152,11 @@ func (s *Server) routes() {
 		http.Redirect(w, r, "/static/favicon.svg", http.StatusFound)
 	})
 
-	s.mux.HandleFunc("GET /{$}", s.index)
+	s.mux.HandleFunc("GET /{$}", s.overview)
+	s.mux.HandleFunc("GET /mrs", s.index)
 	s.mux.HandleFunc("GET /issues", s.issues)
+	s.mux.HandleFunc("GET /runs", s.runs)
+	s.mux.HandleFunc("GET /workspaces", s.workspaces)
 	s.mux.HandleFunc("GET /mr/{id}", s.mrPage)
 	s.mux.HandleFunc("GET /issue/{id}", s.issuePage)
 	s.mux.HandleFunc("GET /run/{id}", s.runPage)
@@ -229,6 +240,9 @@ func (s *Server) routes() {
 		body := readBody(r)
 		s.result(w, map[string]any{}, s.svc.Decide(pathID(r), body["decision"], body["note"]))
 	})
+	s.mux.HandleFunc("POST /api/findings/{id}/status", func(w http.ResponseWriter, r *http.Request) {
+		s.result(w, map[string]any{}, s.svc.SetFindingStatus(pathID(r), readBody(r)["status"]))
+	})
 }
 
 // ---------------------------------------------------------------------------------- pages
@@ -263,6 +277,142 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, "index", map[string]any{"Base": s.base("mrs", "Merge requests"), "MRs": mrs})
+}
+
+// inboxItem is one line of the overview's "Нужно от меня" block: a state, a text and exactly one action.
+type inboxItem struct {
+	Tone    string // warning | danger | neutral | info | success
+	Glyph   string
+	Title   string
+	Detail  string
+	Href    string // primary action as a link, or
+	Action  string // primary action label
+	Onclick string // primary action as JS (startRun / post)
+}
+
+// overview is the home page: what needs the developer, which agents are working, how my MRs are doing.
+func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
+	mrs, _ := s.svc.DB.ListMRs()
+	issues, _ := s.svc.DB.ListIssues()
+	runs, _ := s.svc.DB.ListRuns(300)
+	username := s.svc.CurrentUser()
+	var inbox []inboxItem
+	var active []db.RunListItem
+	for _, run := range runs {
+		if !run.Active() {
+			continue
+		}
+		active = append(active, run)
+		if run.Status == db.StatusWaiting {
+			inbox = append(inbox, inboxItem{Tone: "warning", Glyph: "⚠", Title: runObjectLabel(run) + " · агенту нужен ваш ответ",
+				Detail: strings.TrimPrefix(run.Progress, "Нужен ваш ответ: "), Href: fmt.Sprintf("/run/%d#approval", run.ID), Action: "Ответить"})
+		}
+	}
+	mine := struct{ Total, PipelineFailed, Unresolved, Approved, Stale, NeverReviewed int }{}
+	for _, mr := range mrs {
+		if mr.Closed() {
+			continue
+		}
+		isMine := username != "" && mr.Author == username
+		st := aiState(mr)
+		if isMine {
+			mine.Total++
+			if mr.PipelineStatus == "failed" {
+				mine.PipelineFailed++
+				inbox = append(inbox, inboxItem{Tone: "danger", Glyph: "✕", Title: fmt.Sprintf("!%d · Pipeline failed", mr.IID), Detail: mr.Title,
+					Href: mr.WebURL, Action: "Открыть pipeline ↗"})
+			}
+			if mr.Unresolved > 0 {
+				mine.Unresolved++
+			}
+			if mr.ApprovalsRequired > 0 && mr.ApprovalsGiven >= mr.ApprovalsRequired {
+				mine.Approved++
+			}
+		}
+		switch st {
+		case "stale":
+			mine.Stale++
+			inbox = append(inbox, inboxItem{Tone: "warning", Glyph: "⚠", Title: fmt.Sprintf("!%d · есть новые коммиты после ревью", mr.IID), Detail: mr.Title,
+				Action: "Проверить изменения", Onclick: fmt.Sprintf("startRun('/api/mrs/%d/runs', 'verify', this)", mr.ID)})
+		case "failed":
+			inbox = append(inbox, inboxItem{Tone: "danger", Glyph: "✕", Title: fmt.Sprintf("!%d · ревью не удалось", mr.IID), Detail: mr.Title,
+				Action: "Повторить", Onclick: fmt.Sprintf("post('/api/runs/%d/retry', {}, this).then(r => r && reload())", mr.Last.ID)})
+		case "never":
+			if !isMine {
+				mine.NeverReviewed++
+				inbox = append(inbox, inboxItem{Tone: "neutral", Glyph: "○", Title: fmt.Sprintf("!%d · ещё не проверен", mr.IID), Detail: mr.Title + " · " + mr.Author,
+					Action: "Запустить ревью", Onclick: fmt.Sprintf("startRun('/api/mrs/%d/runs', 'full', this)", mr.ID)})
+			}
+		}
+	}
+	for _, issue := range issues {
+		if issue.Last != nil && issue.Last.Status == db.StatusDone && issue.Last.Kind == db.KindImplement {
+			inbox = append(inbox, inboxItem{Tone: "success", Glyph: "✓", Title: fmt.Sprintf("#%d · готово к MR", issue.IID), Detail: issue.Title,
+				Href: fmt.Sprintf("/run/%d", issue.Last.ID), Action: "Подготовить MR"})
+		}
+		if issue.Last != nil && issue.Last.Status == db.StatusFailed {
+			inbox = append(inbox, inboxItem{Tone: "danger", Glyph: "✕", Title: fmt.Sprintf("#%d · %s не удалось", issue.IID, strings.ToLower(kindLabel(issue.Last.Kind))), Detail: issue.Title,
+				Action: "Повторить", Onclick: fmt.Sprintf("post('/api/runs/%d/retry', {}, this).then(r => r && reload())", issue.Last.ID)})
+		}
+	}
+	sort.SliceStable(inbox, func(i, j int) bool { return inboxRank(inbox[i]) < inboxRank(inbox[j]) })
+	s.render(w, "overview", map[string]any{
+		"Base": s.base("overview", "Обзор"), "Inbox": inbox, "Active": active, "Mine": mine,
+		"MRCount": len(mrs), "IssueCount": len(issues),
+	})
+}
+
+func inboxRank(item inboxItem) int {
+	switch {
+	case strings.Contains(item.Title, "нужен ваш ответ"):
+		return 0
+	case strings.Contains(item.Title, "Pipeline failed"):
+		return 1
+	case strings.Contains(item.Title, "новые коммиты"):
+		return 2
+	case item.Tone == "danger":
+		return 3
+	case item.Tone == "success":
+		return 4
+	}
+	return 5
+}
+
+// runObjectLabel names the MR or issue a run belongs to.
+func runObjectLabel(run db.RunListItem) string {
+	switch {
+	case run.MRIID != 0:
+		return fmt.Sprintf("!%d %s", run.MRIID, run.MRTitle)
+	case run.IssueIID != 0:
+		return fmt.Sprintf("#%d %s", run.IssueIID, run.IssueTitle)
+	}
+	return fmt.Sprintf("сессия #%d", run.ID)
+}
+
+func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
+	runs, err := s.svc.DB.ListRuns(300)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	var active, finished []db.RunListItem
+	for _, run := range runs {
+		if run.Active() {
+			active = append(active, run)
+		} else {
+			finished = append(finished, run)
+		}
+	}
+	s.render(w, "runs", map[string]any{"Base": s.base("runs", "Сессии"), "Active": active, "Finished": finished})
+}
+
+func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
+	items, err := s.svc.Workspaces()
+	data := map[string]any{"Base": s.base("workspaces", "Workspaces"), "Workspaces": items}
+	if err != nil {
+		data["Error"] = err.Error()
+	}
+	s.render(w, "workspaces", data)
 }
 
 func (s *Server) issues(w http.ResponseWriter, r *http.Request) {
@@ -320,12 +470,17 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 			info++
 		}
 	}
+	sha := mr.HeadSHA
+	if latest != nil && latest.HeadSHA != "" {
+		sha = latest.HeadSHA
+	}
 	s.render(w, "mr", map[string]any{
 		"Base": s.base("mrs", fmt.Sprintf("!%d %s", mr.IID, mr.Title)), "MR": mr, "Runs": runs, "Latest": latest,
 		"Findings": findings, "Discussions": discussions, "Active": active, "LastRun": lastRun,
 		"Stale": stale, "State": state, "OpenMajor": major, "OpenMinor": minor, "OpenInfo": info,
 		"IsMine": username != "" && mr.Author == username,
 		"Closed": mr.State == "merged" || mr.State == "closed",
+		"Blob":   blobBase(mr.WebURL), "SHA": sha,
 	})
 }
 
@@ -384,12 +539,26 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	data := map[string]any{"Base": s.base("", fmt.Sprintf("Run #%d", run.ID)), "Run": run}
+	data := map[string]any{"Base": s.base("runs", fmt.Sprintf("Run #%d", run.ID)), "Run": run, "Blob": "", "SHA": run.HeadSHA}
 	if run.MRID != nil {
-		data["MR"], _ = s.svc.DB.GetMR(*run.MRID)
+		mr, _ := s.svc.DB.GetMR(*run.MRID)
+		data["MR"] = mr
+		if mr != nil {
+			data["Blob"] = blobBase(mr.WebURL)
+		}
 	}
 	if run.IssueID != nil {
-		data["Issue"], _ = s.svc.DB.GetIssue(*run.IssueID)
+		issue, _ := s.svc.DB.GetIssue(*run.IssueID)
+		data["Issue"] = issue
+		if issue != nil {
+			data["Blob"] = blobBase(issue.WebURL)
+		}
+	}
+	if chain, _ := s.svc.DB.ListRunsBySession(run.SessionID); len(chain) > 1 {
+		data["Chain"] = chain
+		if chain[0].ID != run.ID {
+			data["ContinuedFrom"] = chain[0]
+		}
 	}
 	if run.IsReview() {
 		data["Findings"], _ = s.svc.DB.ListFindings(run.ID)
@@ -689,6 +858,54 @@ func kindTip(kind string) string {
 		return "Загрузить из GitLab по ссылке и добавить в dashboard. Ничего не запускается."
 	}
 	return ""
+}
+
+// pipelineLabel / pipelineTone render the GitLab head pipeline status.
+func pipelineLabel(status string) string {
+	switch status {
+	case "success":
+		return "Pipeline passed"
+	case "failed":
+		return "Pipeline failed"
+	case "running", "pending", "created", "preparing", "waiting_for_resource":
+		return "Pipeline идёт"
+	case "canceled", "skipped":
+		return "Pipeline " + status
+	case "":
+		return "Pipeline нет"
+	}
+	return "Pipeline " + status
+}
+
+func pipelineTone(status string) string {
+	switch status {
+	case "success":
+		return "success"
+	case "failed":
+		return "danger"
+	case "running", "pending", "created", "preparing", "waiting_for_resource":
+		return "info"
+	}
+	return "neutral"
+}
+
+// findingStatusLabel is the human label of a finding status.
+func findingStatusLabel(status string) string {
+	switch status {
+	case "open":
+		return "открыто"
+	case "fixed":
+		return "исправлено"
+	case "obsolete":
+		return "неактуально"
+	case "false_positive":
+		return "ложное срабатывание"
+	case "ignored":
+		return "игнорируется"
+	case "resolved":
+		return "решено вручную"
+	}
+	return status
 }
 
 func verdictLabel(v string) string {

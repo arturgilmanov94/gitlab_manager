@@ -12,8 +12,11 @@
   <div class="navbar-inner">
     <a class="brand" href="/"><span class="brand-mark"></span>MR Review</a>
     <nav class="tabs">
-      <a href="/" class="{{if eq .Base.Nav "mrs"}}active{{end}}">Merge requests <span class="pill">{{index .Base.Counts "merge_requests"}}</span></a>
+      <a href="/" class="{{if eq .Base.Nav "overview"}}active{{end}}">Обзор</a>
+      <a href="/mrs" class="{{if eq .Base.Nav "mrs"}}active{{end}}">Merge requests <span class="pill">{{index .Base.Counts "merge_requests"}}</span></a>
       <a href="/issues" class="{{if eq .Base.Nav "issues"}}active{{end}}">Задачи <span class="pill">{{index .Base.Counts "issues"}}</span></a>
+      <a href="/runs" class="{{if eq .Base.Nav "runs"}}active{{end}}">Сессии <span class="pill">{{index .Base.Counts "runs"}}</span></a>
+      <a href="/workspaces" class="{{if eq .Base.Nav "workspaces"}}active{{end}}">Workspaces</a>
     </nav>
     <div class="nav-context">
       {{if .Base.Pending}}<a class="chip attention tip" href="/run/{{(index .Base.Pending 0).RunID}}" data-tip="Агент ждёт вашего разрешения на действие. Откройте сессию и ответьте, как в терминале.">⚠ Нужен ваш ответ{{if gt (len .Base.Pending) 1}} ({{len .Base.Pending}}){{end}}</a>{{end}}

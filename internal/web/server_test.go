@@ -60,8 +60,11 @@ func get(t *testing.T, url string) (int, string) {
 
 func TestPagesAndFlow(t *testing.T) {
 	ts, svc, fr := newServer(t)
-	if code, body := get(t, ts.URL+"/"); code != 200 || !strings.Contains(body, "Пока нет merge requests") || !strings.Contains(body, "skill: mr-review") {
+	if code, body := get(t, ts.URL+"/mrs"); code != 200 || !strings.Contains(body, "Пока нет merge requests") || !strings.Contains(body, "skill: mr-review") {
 		t.Fatalf("%d %s", code, body[:200])
+	}
+	if code, body := get(t, ts.URL+"/"); code != 200 || !strings.Contains(body, "Сейчас ничего не требует вашего внимания") || !strings.Contains(body, "Мои MR") {
+		t.Fatalf("overview %d", code)
 	}
 	if code, body := get(t, ts.URL+"/api/health"); code != 200 || !strings.Contains(body, svc.Settings.ProjectRoot) {
 		t.Fatalf("%d %s", code, body)
@@ -74,11 +77,18 @@ func TestPagesAndFlow(t *testing.T) {
 	if code, body := get(t, ts.URL+redirect); code != 200 || !strings.Contains(body, "Исправить замечания ревьюеров (2)") || !strings.Contains(body, "Запустить ревью") || !strings.Contains(body, "Ещё не проверен") {
 		t.Fatalf("mr page: %d (own MR with 2 unresolved threads, never reviewed)", code)
 	}
-	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "Запустить ревью") || strings.Contains(body, ">Быстрое<") {
-		t.Fatal("list must show a state-driven primary action, not bare mode buttons")
+	if _, body := get(t, ts.URL+redirect); !strings.Contains(body, "Pipeline failed") || !strings.Contains(body, "approvals 1/2") || !strings.Contains(body, "отстаёт от develop на 3") {
+		t.Fatal("mr page must show GitLab state: pipeline, approvals, divergence")
 	}
-	if code, body := get(t, ts.URL+"/"); code != 200 || !strings.Contains(body, "MR 42") || !strings.Contains(body, "data-tip=") {
+	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, "Запустить ревью") || strings.Contains(body, ">Быстрое<") || !strings.Contains(body, "Pipeline failed") {
+		t.Fatal("list must show a state-driven primary action and the GitLab state")
+	}
+	if code, body := get(t, ts.URL+"/mrs"); code != 200 || !strings.Contains(body, "MR 42") || !strings.Contains(body, "data-tip=") || !strings.Contains(body, `data-filter="#mrs-table"`) {
 		t.Fatalf("%d", code)
+	}
+	// The overview lists the own MR with a failed pipeline; the never-reviewed MR is not offered for review (own MR).
+	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "Pipeline failed") || !strings.Contains(body, "Открыть pipeline") {
+		t.Fatal("overview must surface the failed pipeline of my MR")
 	}
 
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
@@ -94,8 +104,29 @@ func TestPagesAndFlow(t *testing.T) {
 	if code, body := get(t, ts.URL+runURL); code != 200 || !strings.Contains(body, "Null deref") || !strings.Contains(body, "Нужны правки") || !strings.Contains(body, "Продолжить сессию") {
 		t.Fatalf("run page %d", code)
 	}
-	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "Открыть замечания") || !strings.Contains(body, "1 major") || !strings.Contains(body, "Проверен") {
+	// Markdown rendering and file links to GitLab at the reviewed commit.
+	if _, body := get(t, ts.URL+runURL); !strings.Contains(body, `<div class="md">`) || !strings.Contains(body, "/-/blob/sha-1/src/A.php#L10") || !strings.Contains(body, `data-format="log"`) {
+		t.Fatal("run page must render markdown, link findings to GitLab and mark the log for formatting")
+	}
+	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, "Открыть замечания") || !strings.Contains(body, "1 major") || !strings.Contains(body, "Проверен") {
 		t.Fatal("list must show CURRENT state with findings summary and «Открыть замечания»")
+	}
+	// Manual finding statuses.
+	findings, _ := svc.DB.ListFindings(1)
+	if code, out := postJSON(t, ts.URL+"/api/findings/"+strconvI(findings[0].ID)+"/status", map[string]any{"status": "false_positive"}); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if code, _ := postJSON(t, ts.URL+"/api/findings/"+strconvI(findings[0].ID)+"/status", map[string]any{"status": "bogus"}); code != 400 {
+		t.Fatal("unknown status must be rejected")
+	}
+	if _, body := get(t, ts.URL+redirect); !strings.Contains(body, "ложное срабатывание") || strings.Contains(body, "1 major") || !strings.Contains(body, "1 info") {
+		t.Fatal("a false positive is not an open finding any more")
+	}
+	if code, body := get(t, ts.URL+"/runs"); code != 200 || !strings.Contains(body, "Полное ревью") || !strings.Contains(body, "MR 42") {
+		t.Fatalf("sessions page %d", code)
+	}
+	if code, body := get(t, ts.URL+"/workspaces"); code != 200 || !strings.Contains(body, "Workspaces пока нет") {
+		t.Fatalf("workspaces page %d", code)
 	}
 	if _, body := get(t, ts.URL+redirect); !strings.Contains(body, "Нет изменений после последнего ревью") {
 		t.Fatal("disabled «Проверить изменения» must explain why")
@@ -147,8 +178,11 @@ func TestPermissionPromptPage(t *testing.T) {
 	if _, body := get(t, ts.URL+runURL); !strings.Contains(body, "Нужен ваш ответ: агент просит разрешение") || !strings.Contains(body, "/tmp/claude/probe.txt") || !strings.Contains(body, "Разрешить и не спрашивать") {
 		t.Fatal("run page must show the permission prompt with allow/allow_always/deny")
 	}
-	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "Ответить агенту") || !strings.Contains(body, "⚠ Нужен ваш ответ") {
+	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, "Ответить агенту") || !strings.Contains(body, "⚠ Нужен ваш ответ") {
 		t.Fatal("list and header must point at the waiting run")
+	}
+	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "агенту нужен ваш ответ") || !strings.Contains(body, ">Ответить<") {
+		t.Fatal("overview inbox must lead with the pending approval")
 	}
 	pending, _ := svc.DB.PendingApproval(1)
 	if code, out := postJSON(t, ts.URL+"/api/approvals/"+strings.TrimSpace(strconvI(pending.ID)), map[string]any{"decision": "bogus"}); code != 400 || out["error"] == nil {
@@ -252,6 +286,12 @@ func TestIssuesPages(t *testing.T) {
 	}
 	if _, body := get(t, ts.URL+"/issue/1"); !strings.Contains(body, "Готово к MR") || !strings.Contains(body, "Подготовить MR") {
 		t.Fatal("issue page must show ready state")
+	}
+	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "готово к MR") {
+		t.Fatal("overview must list the implemented task")
+	}
+	if code, body := get(t, ts.URL+"/workspaces"); code != 200 || !strings.Contains(body, "group/sub/project#7") || !strings.Contains(body, "Есть незакоммиченные изменения") {
+		t.Fatalf("workspaces page must list the dirty worktree: %d", code)
 	}
 	// Retry a failed run.
 	fr.FailWith = "boom"

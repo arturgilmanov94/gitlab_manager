@@ -2,7 +2,7 @@
 <section class="page-head">
   <div>
     <div class="crumbs">
-      {{if .MR}}<a href="/">Merge requests</a> · <a href="/mr/{{.MR.ID}}">!{{.MR.IID}} {{.MR.Title}}</a>{{else if .Issue}}<a href="/issues">Задачи</a> · <a href="/issue/{{.Issue.ID}}">#{{.Issue.IID}} {{.Issue.Title}}</a>{{else}}Сессия{{end}}
+      {{if .MR}}<a href="/mrs">Merge requests</a> · <a href="/mr/{{.MR.ID}}">!{{.MR.IID}} {{.MR.Title}}</a>{{else if .Issue}}<a href="/issues">Задачи</a> · <a href="/issue/{{.Issue.ID}}">#{{.Issue.IID}} {{.Issue.Title}}</a>{{else}}Сессия{{end}}
     </div>
     <h1>{{kindLabel .Run.Kind}} <span class="muted">· сессия #{{.Run.ID}}</span></h1>
     <div class="meta">
@@ -30,8 +30,13 @@
 <section class="status-panel">
   <div class="status-block tone-neutral">
     <div class="label">Контекст сессии</div>
-    <div class="value">{{if .Messages}}Продолжалась{{else}}Новая сессия{{end}}</div>
-    <div class="detail">{{if .Run.SessionID}}агент помнит этот запуск{{if .Messages}} и {{len .Messages}} сообщений диалога{{end}}; можно продолжить ниже{{else}}агент не вернул идентификатор сессии — продолжить нельзя{{end}}</div>
+    <div class="value">{{if .ContinuedFrom}}Продолжение сессии #{{.ContinuedFrom.ID}}{{else if .Messages}}Новая сессия, был диалог{{else}}Новая сессия{{end}}</div>
+    <div class="detail">
+      {{if .ContinuedFrom}}агент продолжил контекст «{{kindLabel .ContinuedFrom.Kind}}» ({{tokens .ContinuedFrom.TotalTokens}} токенов){{if .Messages}} и помнит {{len .Messages}} сообщений диалога{{end}}
+      {{else if .Run.SessionID}}агент начал с пустого контекста и помнит этот запуск{{if .Messages}} и {{len .Messages}} сообщений диалога{{end}}; можно продолжить ниже
+      {{else}}агент не вернул идентификатор сессии — продолжить нельзя{{end}}
+      {{if .Chain}}<div class="small" style="margin-top:4px">цепочка: {{range $i, $r := .Chain}}{{if $i}} → {{end}}{{if eq $r.ID $.Run.ID}}<b>#{{$r.ID}} {{kindLabel $r.Kind}}</b>{{else}}<a href="/run/{{$r.ID}}">#{{$r.ID}} {{kindLabel $r.Kind}}</a>{{end}}{{end}}</div>{{end}}
+    </div>
   </div>
   {{if .Run.WorkDir}}
   <div class="status-block tone-neutral">
@@ -82,7 +87,7 @@
 {{if and (eq .Run.Status "done") .Run.IsReview}}
 <section class="card">
   <div class="card-head"><h2>Результат ревью</h2><span class="verdict-{{.Run.Verdict}}">{{verdict .Run.Verdict}}</span></div>
-  <p class="prewrap summary">{{.Run.Summary}}</p>
+  <div class="summary">{{md .Run.Summary .Blob .SHA}}</div>
   {{template "findings" .}}
 </section>
 {{end}}
@@ -90,12 +95,12 @@
 {{if and (eq .Run.Status "done") .Plan}}
 <section class="card">
   <div class="card-head"><h2>План решения</h2><span class="badge">оценка: {{index .Plan "estimate"}}</span></div>
-  <p class="prewrap summary">{{index .Plan "summary"}}</p>
-  <h3>Шаги</h3><ol>{{range index .Plan "steps"}}<li class="prewrap">{{.}}</li>{{end}}</ol>
+  <div class="summary">{{md (index .Plan "summary") .Blob .SHA}}</div>
+  <h3>Шаги</h3><ol>{{range index .Plan "steps"}}<li>{{md . $.Blob $.SHA}}</li>{{end}}</ol>
   <h3>Файлы</h3>
-  <table class="table compact"><tbody>{{range index .Plan "files"}}<tr><td class="mono small nowrap">{{index . "path"}}</td><td class="prewrap">{{index . "change"}}</td></tr>{{end}}</tbody></table>
-  {{with index .Plan "risks"}}<h3>Риски</h3><ul>{{range .}}<li class="prewrap">{{.}}</li>{{end}}</ul>{{end}}
-  {{with index .Plan "questions"}}<h3>Открытые вопросы</h3><ul>{{range .}}<li class="prewrap">{{.}}</li>{{end}}</ul>{{end}}
+  <table class="table compact"><tbody>{{range index .Plan "files"}}<tr><td class="mono small nowrap">{{index . "path"}}</td><td>{{md (index . "change") $.Blob $.SHA}}</td></tr>{{end}}</tbody></table>
+  {{with index .Plan "risks"}}<h3>Риски</h3><ul>{{range .}}<li>{{md . $.Blob $.SHA}}</li>{{end}}</ul>{{end}}
+  {{with index .Plan "questions"}}<h3>Открытые вопросы</h3><ul>{{range .}}<li>{{md . $.Blob $.SHA}}</li>{{end}}</ul>{{end}}
   {{if .Issue}}<div class="actions left" style="margin-top:12px">
     <button class="btn btn-primary tip" data-tip="{{kindTip "implement_plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {plan_run: '{{.Run.ID}}'})">Реализовать этот план</button>
     <a class="btn" href="/issue/{{.Issue.ID}}#solve">Изменить указания…</a>
@@ -109,14 +114,14 @@
 <section class="card">
   <div class="card-head"><h2>Отчёт агента</h2></div>
   {{if .Report}}
-    <p class="prewrap summary">{{index .Report "summary"}}</p>
+    <div class="summary">{{md (index .Report "summary") .Blob .SHA}}</div>
     {{with index .Report "addressed"}}<h3>Замечания ревьюеров</h3>
     <table class="table compact"><thead><tr><th>Автор</th><th>Где</th><th>Комментарий</th><th>Что сделано</th></tr></thead><tbody>
-    {{range .}}<tr><td>{{index . "author"}}</td><td class="mono small">{{index . "file"}}{{with index . "line"}}:{{.}}{{end}}</td><td class="prewrap">{{index . "comment"}}</td><td>{{if index . "done"}}<span class="fstatus fstatus-fixed">сделано</span>{{else}}<span class="fstatus fstatus-open">нужно решение</span>{{end}} <div class="small prewrap">{{index . "action"}}</div></td></tr>{{end}}
+    {{range .}}<tr><td>{{index . "author"}}</td><td class="mono small">{{index . "file"}}{{with index . "line"}}:{{.}}{{end}}</td><td>{{md (index . "comment") $.Blob $.SHA}}</td><td>{{if index . "done"}}<span class="fstatus fstatus-fixed">сделано</span>{{else}}<span class="fstatus fstatus-open">нужно решение</span>{{end}} <div class="small">{{md (index . "action") $.Blob $.SHA}}</div></td></tr>{{end}}
     </tbody></table>{{end}}
-    {{with index .Report "changes"}}<h3>Изменения</h3><table class="table compact"><tbody>{{range .}}<tr><td class="mono small nowrap">{{index . "path"}}</td><td class="prewrap">{{index . "description"}}</td></tr>{{end}}</tbody></table>{{end}}
-    <h3>Проверки</h3><p class="prewrap">{{index .Report "tests"}}</p>
-    {{with index .Report "todo"}}<h3>Требует вашего решения</h3><ul>{{range .}}<li class="prewrap">{{.}}</li>{{end}}</ul>{{end}}
+    {{with index .Report "changes"}}<h3>Изменения</h3><table class="table compact"><tbody>{{range .}}<tr><td class="mono small nowrap">{{index . "path"}}</td><td>{{md (index . "description") $.Blob $.SHA}}</td></tr>{{end}}</tbody></table>{{end}}
+    <h3>Проверки</h3>{{md (index .Report "tests") .Blob .SHA}}
+    {{with index .Report "todo"}}<h3>Требует вашего решения</h3><ul>{{range .}}<li>{{md . $.Blob $.SHA}}</li>{{end}}</ul>{{end}}
   {{else if not .Run.Active}}<p class="muted">Отчёта нет.</p>{{end}}
 </section>
 
@@ -151,7 +156,7 @@
 <section class="card">
   <div class="card-head"><h2>Продолжить сессию с агентом</h2><span class="small muted tip" data-tip="Та же сессия агента (resume): у него остаётся контекст этого запуска. Режим только чтение, файлы не меняются. Вопрос и ответ сохраняются здесь.">как это работает?</span></div>
   <div id="chat">
-    {{range .Messages}}<div class="msg msg-{{.Role}}"><div class="msg-role">{{if eq .Role "user"}}вы{{else if eq .Role "assistant"}}агент{{else}}ошибка{{end}} · {{when .CreatedAt}}{{if .Tokens}} · {{tokens .Tokens}} токенов{{end}}</div><div class="prewrap">{{.Content}}</div></div>{{end}}
+    {{range .Messages}}<div class="msg msg-{{.Role}}"><div class="msg-role">{{if eq .Role "user"}}вы{{else if eq .Role "assistant"}}агент{{else}}ошибка{{end}} · {{when .CreatedAt}}{{if .Tokens}} · {{tokens .Tokens}} токенов{{end}}</div>{{md .Content $.Blob $.SHA}}</div>{{end}}
   </div>
   {{if .Run.SessionID}}
   <form class="inline" onsubmit="return ask(event, {{.Run.ID}})">
@@ -188,7 +193,7 @@
 {{end}}
 
 <section class="card">
-  <details class="section" {{if ne .Run.Status "done"}}open{{end}}><summary>Технический лог (хвост)</summary><pre class="log" id="log-tail">{{.LogTail}}</pre></details>
+  <details class="section" {{if ne .Run.Status "done"}}open{{end}}><summary>Технический лог (хвост)</summary><pre class="log" id="log-tail" data-format="log">{{.LogTail}}</pre></details>
   <details class="section"><summary>Что было передано агенту</summary><pre class="log">{{.Run.Prompt}}</pre></details>
   {{if .Run.ResultJSON}}<details class="section"><summary>Результат (JSON)</summary><pre class="log">{{prettyJSON .Run.ResultJSON}}</pre></details>{{end}}
 </section>

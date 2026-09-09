@@ -1,0 +1,62 @@
+{{define "content"}}
+<section class="page-head">
+  <div><h1>Обзор</h1><div class="meta"><span>{{.MRCount}} MR · {{.IssueCount}} задач в dashboard</span><span class="sep"></span><span>агентов работает: {{len .Active}}</span></div></div>
+  <div class="actions">
+    <button class="btn tip" data-tip="{{kindTip "sync-mrs"}}" onclick="post('/api/mrs/sync', {}, this).then(r => r && post('/api/issues/sync', {}, this)).then(r => r && (flash('Синхронизировано', true), reload()))">Синхронизировать с GitLab</button>
+    <span class="small secondary">Агент:</span> {{template "runner-picker" .Base.Runners}}
+  </div>
+</section>
+
+<div class="grid-2 overview">
+  <section class="card">
+    <div class="card-head"><h2>Нужно от меня</h2>{{if .Inbox}}<span class="badge badge-warning">{{len .Inbox}}</span>{{end}}</div>
+    {{if not .Inbox}}
+    <div class="empty small">Сейчас ничего не требует вашего внимания.</div>
+    {{else}}
+    <ul class="inbox">
+      {{range .Inbox}}
+      <li class="inbox-item tone-{{.Tone}}">
+        <span class="state state-{{.Tone}}"><span class="glyph">{{.Glyph}}</span></span>
+        <div class="inbox-text"><div class="inbox-title">{{.Title}}</div><div class="small muted clamp">{{.Detail}}</div></div>
+        {{if .Href}}<a class="btn btn-sm btn-primary{{if hasPrefix .Href "http"}} ext{{end}}" href="{{.Href}}"{{if hasPrefix .Href "http"}} target="_blank" rel="noopener"{{end}}>{{.Action}}</a>{{else}}<button class="btn btn-sm btn-primary" onclick="{{.Onclick}}">{{.Action}}</button>{{end}}
+      </li>
+      {{end}}
+    </ul>
+    {{end}}
+  </section>
+
+  <div>
+    <section class="card">
+      <div class="card-head"><h2>Агенты</h2><a class="small" href="/runs">все сессии</a></div>
+      {{if not .Active}}<p class="muted small">Сейчас ни один агент не работает.</p>{{else}}
+      <table class="table compact">
+        <tbody>
+        {{range .Active}}
+        <tr>
+          <td><a href="/run/{{.ID}}" data-run-status="{{.ID}}" data-status="{{.Status}}">{{template "status" .Status}}</a></td>
+          <td><b>{{kindLabel .Kind}}</b><div class="small muted">{{if .MRIID}}!{{.MRIID}} {{.MRTitle}}{{else if .IssueIID}}#{{.IssueIID}} {{.IssueTitle}}{{end}}</div></td>
+          <td class="small mono">{{if .Progress}}{{.Progress}}{{else}}{{.Runner}}{{end}}</td>
+          <td class="small nowrap">{{if .StartedAt}}<span data-started="{{.StartedAt}}"><span class="elapsed">—</span></span>{{else}}в очереди{{end}}</td>
+          <td class="actions-cell"><a class="btn btn-sm" href="/run/{{.ID}}{{if eq .Status "waiting"}}#approval{{end}}">{{if eq .Status "waiting"}}Ответить{{else}}Открыть{{end}}</a></td>
+        </tr>
+        {{end}}
+        </tbody>
+      </table>
+      {{end}}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Мои MR</h2><a class="small" href="/mrs">к списку</a></div>
+      {{if .Base.Username}}
+      <div class="counters">
+        <a class="counter" href="/mrs"><b>{{.Mine.Total}}</b><span>открытых</span></a>
+        <a class="counter {{if .Mine.PipelineFailed}}hot{{end}}" href="/mrs"><b>{{.Mine.PipelineFailed}}</b><span>pipeline failed</span></a>
+        <a class="counter {{if .Mine.Unresolved}}warm{{end}}" href="/mrs"><b>{{.Mine.Unresolved}}</b><span>с обсуждениями</span></a>
+        <a class="counter {{if .Mine.Approved}}good{{end}}" href="/mrs"><b>{{.Mine.Approved}}</b><span>одобрены</span></a>
+      </div>
+      <p class="small muted" style="margin-top:8px">На ревью у меня: {{.Mine.NeverReviewed}} ещё не проверено · {{.Mine.Stale}} с новыми коммитами после ревью</p>
+      {{else}}<p class="muted small">Пользователь GitLab не определён: проверьте glab в <a href="/doctor">проверке окружения</a>.</p>{{end}}
+    </section>
+  </div>
+</div>
+{{end}}

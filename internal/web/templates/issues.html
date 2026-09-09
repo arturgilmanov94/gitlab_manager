@@ -5,6 +5,8 @@
     <button type="submit" class="btn tip" data-tip="{{kindTip "add"}}">Добавить</button>
   </form>
   <button class="btn tip" data-tip="{{kindTip "sync-issues"}}" onclick="post('/api/issues/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' задач для @' + r.username, true), reload()))">Синхронизировать с GitLab</button>
+  <input type="text" data-filter="#issues-table" placeholder="Фильтр: номер, название, метки…" size="30">
+  <span class="small muted" id="filter-count"></span>
   <span class="spacer"></span>
   <span class="small secondary">Агент для запусков:</span> {{template "runner-picker" .Base.Runners}}
 </section>
@@ -13,7 +15,7 @@
 <div class="empty"><b>Пока нет задач.</b><br>Вставьте ссылку на issue или синхронизируйте назначенные вам.</div>
 {{else}}
 <div class="card table-card">
-<table class="table list">
+<table class="table list" id="issues-table">
   <thead><tr><th>Задача</th><th>Название</th><th>Состояние</th><th class="right"></th></tr></thead>
   <tbody>
   {{range .Issues}}

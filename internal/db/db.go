@@ -133,17 +133,36 @@ type MergeRequest struct {
 	GitLabUpdatedAt string
 	SyncedAt        string
 	AddedAt         string
+	// GitLab state (Phase 2): head pipeline status, approvals, commits the target is ahead by, draft flag.
+	PipelineStatus    string
+	ApprovalsGiven    int64
+	ApprovalsRequired int64
+	Diverged          int64
+	Draft             bool
+	ChangesCount      string
 }
 
 // Ref is "project!iid".
 func (m MergeRequest) Ref() string { return fmt.Sprintf("%s!%d", m.ProjectPath, m.IID) }
 
-const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at"
+// Closed reports merged or closed MRs.
+func (m MergeRequest) Closed() bool { return m.State == "merged" || m.State == "closed" }
+
+const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count"
+
+func scanMRInto(m *MergeRequest, s scanner) error {
+	var draft int
+	if err := s.Scan(&m.ID, &m.GitLabHost, &m.ProjectPath, &m.IID, &m.WebURL, &m.Title, &m.Author, &m.SourceBranch, &m.TargetBranch, &m.State, &m.HeadSHA, &m.Unresolved, &m.GitLabUpdatedAt, &m.SyncedAt, &m.AddedAt,
+		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount); err != nil {
+		return err
+	}
+	m.Draft = draft == 1
+	return nil
+}
 
 func scanMR(s scanner) (*MergeRequest, error) {
 	var m MergeRequest
-	err := s.Scan(&m.ID, &m.GitLabHost, &m.ProjectPath, &m.IID, &m.WebURL, &m.Title, &m.Author, &m.SourceBranch, &m.TargetBranch, &m.State, &m.HeadSHA, &m.Unresolved, &m.GitLabUpdatedAt, &m.SyncedAt, &m.AddedAt)
-	if err != nil {
+	if err := scanMRInto(&m, s); err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -154,15 +173,23 @@ type scanner interface{ Scan(dest ...any) error }
 // UpsertMR inserts or refreshes a merge request.
 func (d *DB) UpsertMR(m MergeRequest) (*MergeRequest, error) {
 	now := Now()
+	draft := 0
+	if m.Draft {
+		draft = 1
+	}
 	_, err := d.sql.Exec(`
-		INSERT INTO merge_requests (gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO merge_requests (gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at,
+			pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (gitlab_host, project_path, iid) DO UPDATE SET
 			web_url = excluded.web_url, title = excluded.title, author = excluded.author,
 			source_branch = excluded.source_branch, target_branch = excluded.target_branch,
 			state = excluded.state, head_sha = excluded.head_sha, unresolved = excluded.unresolved,
-			gitlab_updated_at = excluded.gitlab_updated_at, synced_at = excluded.synced_at`,
-		m.GitLabHost, m.ProjectPath, m.IID, m.WebURL, m.Title, m.Author, m.SourceBranch, m.TargetBranch, m.State, m.HeadSHA, m.Unresolved, m.GitLabUpdatedAt, now, now)
+			gitlab_updated_at = excluded.gitlab_updated_at, synced_at = excluded.synced_at,
+			pipeline_status = excluded.pipeline_status, approvals_given = excluded.approvals_given, approvals_required = excluded.approvals_required,
+			diverged = excluded.diverged, draft = excluded.draft, changes_count = excluded.changes_count`,
+		m.GitLabHost, m.ProjectPath, m.IID, m.WebURL, m.Title, m.Author, m.SourceBranch, m.TargetBranch, m.State, m.HeadSHA, m.Unresolved, m.GitLabUpdatedAt, now, now,
+		m.PipelineStatus, m.ApprovalsGiven, m.ApprovalsRequired, m.Diverged, draft, m.ChangesCount)
 	if err != nil {
 		return nil, err
 	}
@@ -247,11 +274,14 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 		var last LastRun
 		var id, open, tokens, dID, dMajor, dMinor, dInfo sql.NullInt64
 		var kind, status, verdict, sha, runner, model, finished, created, dKind, dVerdict, dSHA, dFinished sql.NullString
+		var draft int
 		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Author, &item.SourceBranch, &item.TargetBranch, &item.State, &item.HeadSHA, &item.Unresolved, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
+			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount,
 			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &open, &tokens,
 			&dID, &dKind, &dVerdict, &dSHA, &dFinished, &dMajor, &dMinor, &dInfo); err != nil {
 			return nil, err
 		}
+		item.Draft = draft == 1
 		if id.Valid {
 			last = LastRun{id.Int64, kind.String, status.String, verdict.String, sha.String, runner.String, model.String, finished.String, created.String, open.Int64, tokens.Int64}
 			item.Last = &last
@@ -527,6 +557,86 @@ func (d *DB) ListRunsForIssue(issueID int64) ([]RunSummary, error) {
 	return d.listRuns("r.issue_id = ?", issueID)
 }
 
+// ListRunsBySession returns every run that shares an agent session (the conversation chain), oldest first.
+func (d *DB) ListRunsBySession(sessionID string) ([]RunSummary, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+	runs, err := d.listRuns("r.session_id = ?", sessionID)
+	if err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(runs)-1; i < j; i, j = i+1, j-1 {
+		runs[i], runs[j] = runs[j], runs[i]
+	}
+	return runs, nil
+}
+
+// LatestRunForWorkDir returns the newest run that used a worktree directory, or nil.
+func (d *DB) LatestRunForWorkDir(dir string) (*Run, error) {
+	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE work_dir = ? ORDER BY id DESC LIMIT 1", dir))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return r, err
+}
+
+// RunListItem is a run with the object it belongs to (for the sessions page and the overview).
+type RunListItem struct {
+	RunSummary
+	MRIID         int64
+	MRTitle       string
+	MRWebURL      string
+	IssueIID      int64
+	IssueTitle    string
+	IssueWebURL   string
+	ObjectProject string
+}
+
+// ListRuns returns the newest runs of every kind with their MR/issue, active ones first.
+func (d *DB) ListRuns(limit int) ([]RunListItem, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := d.sql.Query(`SELECT `+prefixed(runColumns, "r.")+`,
+		(SELECT COUNT(*) FROM findings f WHERE f.run_id = r.id AND f.status = 'open'),
+		(SELECT COUNT(*) FROM findings f WHERE f.run_id = r.id),
+		COALESCE(mr.iid, 0), COALESCE(mr.title, ''), COALESCE(mr.web_url, ''), COALESCE(mr.project_path, ''),
+		COALESCE(i.iid, 0), COALESCE(i.title, ''), COALESCE(i.web_url, ''), COALESCE(i.project_path, '')
+		FROM runs r
+		LEFT JOIN merge_requests mr ON mr.id = r.mr_id
+		LEFT JOIN issues i ON i.id = r.issue_id
+		ORDER BY CASE WHEN r.status IN `+activeStatuses+` THEN 0 ELSE 1 END, r.id DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RunListItem
+	for rows.Next() {
+		var s RunListItem
+		var mrID, issueID, baseID sql.NullInt64
+		var mrProject, issueProject string
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &s.OpenFindings, &s.TotalFindings,
+			&s.MRIID, &s.MRTitle, &s.MRWebURL, &mrProject, &s.IssueIID, &s.IssueTitle, &s.IssueWebURL, &issueProject); err != nil {
+			return nil, err
+		}
+		if mrID.Valid {
+			s.MRID = &mrID.Int64
+			s.ObjectProject = mrProject
+		}
+		if issueID.Valid {
+			s.IssueID = &issueID.Int64
+			s.ObjectProject = issueProject
+		}
+		if baseID.Valid {
+			s.BaseRunID = &baseID.Int64
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // LatestDoneReview returns the newest completed review run for an MR.
 func (d *DB) LatestDoneReview(mrID int64) (*Run, error) {
 	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE mr_id = ? AND status = 'done' AND kind IN ('review_full', 'review_verify', 'review_quick') ORDER BY id DESC LIMIT 1", mrID))
@@ -745,6 +855,48 @@ func (d *DB) ReplaceFindings(runID int64, findings []Finding) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// Manual finding statuses set by the developer (besides open / fixed / obsolete set by runs).
+var ManualFindingStatuses = map[string]bool{"open": true, "false_positive": true, "ignored": true, "resolved": true}
+
+// SetFindingStatus stores the developer's decision about a finding.
+func (d *DB) SetFindingStatus(id int64, status string) error {
+	if !ManualFindingStatuses[status] {
+		return fmt.Errorf("unknown finding status %q", status)
+	}
+	res, err := d.sql.Exec("UPDATE findings SET status = ? WHERE id = ?", status, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("finding #%d not found", id)
+	}
+	return nil
+}
+
+// GetFinding returns a finding or nil.
+func (d *DB) GetFinding(id int64) (*Finding, error) {
+	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note FROM findings WHERE id = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, nil
+	}
+	var f Finding
+	var origin, line sql.NullInt64
+	if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.VerifyNote); err != nil {
+		return nil, err
+	}
+	if origin.Valid {
+		f.OriginFindingID = &origin.Int64
+	}
+	if line.Valid {
+		f.Line = &line.Int64
+	}
+	return &f, nil
 }
 
 // ListFindings returns a run's findings in order.

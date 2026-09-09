@@ -298,6 +298,16 @@ func TestAddSyncReviewVerify(t *testing.T) {
 	if !strings.Contains(fr.Requests[1].Prompt, "Previously reviewed SHA: sha-1") {
 		t.Fatal("verify prompt")
 	}
+	// Verify continues the review's agent session (same runner): resume instead of a fresh --agent start.
+	if fr.Requests[1].ResumeSessionID != "sess-1" || fr.Requests[1].Agent != "" {
+		t.Fatalf("verify must resume the base run's session: %+v", fr.Requests[1])
+	}
+	if chain, _ := svc.DB.ListRunsBySession("sess-1"); len(chain) < 2 || chain[0].ID != runID {
+		t.Fatalf("session chain: %+v", chain)
+	}
+	if mr.PipelineStatus != "failed" || mr.Diverged != 3 || mr.ApprovalsGiven != 1 || mr.ApprovalsRequired != 2 || mr.ChangesCount != "7" {
+		t.Fatalf("GitLab state not stored: %+v", mr)
+	}
 	items, _ := svc.DB.ListMRs()
 	if items[0].Last.OpenFindings != 2 || items[0].Stale {
 		t.Fatalf("%+v", items[0])

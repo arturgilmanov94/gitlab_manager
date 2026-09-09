@@ -77,7 +77,7 @@
 
 <section class="card">
   <div class="card-head"><h2>Описание задачи</h2></div>
-  <pre class="description">{{if .Issue.Description}}{{.Issue.Description}}{{else}}(описание в GitLab пустое){{end}}</pre>
+  <div class="description-md">{{if .Issue.Description}}{{md .Issue.Description (blobBase .Issue.WebURL) ""}}{{else}}<span class="muted">(описание в GitLab пустое)</span>{{end}}</div>
 </section>
 
 <section class="card" id="solve">

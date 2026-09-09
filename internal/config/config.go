@@ -179,7 +179,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		GitLabSyncRoles:       splitList(str("GITLAB_SYNC_ROLES", "reviewer,assignee,author")),
 		GitLabSyncOnlyProject: boolean("GITLAB_SYNC_ONLY_PROJECT", true),
 		BaseBranch:            str("BASE_BRANCH", "develop"),
-		RunConcurrency:        num("RUN_CONCURRENCY", 1),
+		RunConcurrency:        num("RUN_CONCURRENCY", 4),
 	}
 	if s.RunConcurrency < 1 {
 		s.RunConcurrency = 1

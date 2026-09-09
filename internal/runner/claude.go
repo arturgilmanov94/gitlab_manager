@@ -271,11 +271,16 @@ func (s *streamSession) consume(ctx context.Context, stdout io.Reader) map[strin
 			s.noteToolUse(event)
 		case "result":
 			result = event
-			logf(s.log, "--- result ---\n%s\n", truncate(line, 20000))
+			logf(s.log, "--- result --- status=%s turns=%v duration=%vms cost=$%.2f (full JSON is stored with the run)\n%s\n",
+				str(event["subtype"]), event["num_turns"], event["duration_ms"], num(event["total_cost_usd"]), truncate(str(event["result"]), 4000))
 			s.closeStdin()
 		case "system":
-			if sub := str(event["subtype"]); sub == "permission_denied" || sub == "init" {
-				logf(s.log, "[%s] %s\n", sub, truncate(line, 2000))
+			switch str(event["subtype"]) {
+			case "init":
+				logf(s.log, "[init] session=%s model=%s permissions=%s claude=%s cwd=%s\n",
+					str(event["session_id"]), str(event["model"]), str(event["permissionMode"]), str(event["claude_code_version"]), str(event["cwd"]))
+			case "permission_denied":
+				logf(s.log, "[denied] %s\n", ToolNote(str(event["tool_name"]), event["tool_input"]))
 			}
 		}
 	}

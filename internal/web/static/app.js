@@ -79,11 +79,42 @@
     quick: 'Быстрое ревью поставлено в очередь', full: 'Полное ревью поставлено в очередь', verify: 'Проверка изменений поставлена в очередь',
     fix: 'Исправление замечаний запущено, создаю workspace', plan: 'Исследование поставлено в очередь', implement: 'Решение задачи запущено, создаю workspace',
   };
+  // Start a run and stay on the current page: the row/page shows the new state, several runs can be
+  // started from a list one after another. The run page is one click away («Открыть прогресс»).
   window.startRun = async function (url, kind, button, extra) {
     const body = Object.assign({ kind, runner: selectedRunner() }, extra || {});
     const data = await call('POST', url, body, button);
-    if (data && data.redirect) { flash(startedLabels[kind] || 'Запуск поставлен в очередь', true); go(data.redirect); }
+    if (data && data.redirect) { flash(startedLabels[kind] || 'Запуск поставлен в очередь', true); setTimeout(reload, 500); }
   };
+
+  // ---- client-side filter for lists (input[data-filter="<table selector>"])
+  document.querySelectorAll('input[data-filter]').forEach((input) => {
+    const rows = () => Array.from(document.querySelectorAll(input.dataset.filter + ' tbody tr'));
+    const apply = () => {
+      const q = input.value.trim().toLowerCase();
+      let shown = 0;
+      rows().forEach((row) => { const hit = !q || row.textContent.toLowerCase().includes(q); row.hidden = !hit; if (hit) shown++; });
+      const counter = document.getElementById('filter-count');
+      if (counter) counter.textContent = q ? `${shown} из ${rows().length}` : '';
+    };
+    input.addEventListener('input', apply);
+    try { const saved = sessionStorage.getItem('filter:' + location.pathname); if (saved) { input.value = saved; apply(); } } catch (e) { /* ignore */ }
+    input.addEventListener('input', () => { try { sessionStorage.setItem('filter:' + location.pathname, input.value); } catch (e) { /* ignore */ } });
+  });
+
+  // ---- technical log: light syntax colouring by line prefix
+  const logClasses = [
+    [/^\[tool\]/, 'l-tool'], [/^\[permission\?\]/, 'l-ask'], [/^\[permission\]/, 'l-perm'], [/^\[denied\]/, 'l-denied'],
+    [/^\[init\]/, 'l-init'], [/^\[\d{4}-\d\d-\d\dT/, 'l-time'], [/^\$ /, 'l-cmd'], [/^--- /, 'l-sep'],
+  ];
+  function formatLog(text) {
+    return text.split('\n').map((line) => {
+      const safe = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const cls = (logClasses.find(([re]) => re.test(line)) || [])[1];
+      return cls ? `<span class="${cls}">${safe}</span>` : safe;
+    }).join('\n');
+  }
+  document.querySelectorAll('pre.log[data-format="log"]').forEach((pre) => { pre.innerHTML = formatLog(pre.textContent); pre.scrollTop = pre.scrollHeight; });
 
   window.ask = async function (event, runId) {
     event.preventDefault();
@@ -195,7 +226,7 @@
       if (logTail && ids.length === 1) {
         try {
           const text = await (await fetch(`/run/${ids[0]}/log`)).text();
-          logTail.textContent = text.slice(-12000);
+          logTail.innerHTML = formatLog(text.slice(-12000));
           logTail.scrollTop = logTail.scrollHeight;
         } catch (error) { /* ignore */ }
       }

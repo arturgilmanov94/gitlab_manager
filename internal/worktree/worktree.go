@@ -173,6 +173,57 @@ func (m *Manager) Remove(ctx context.Context, path string) error {
 	return err
 }
 
+// Entry is one worktree registered in the main checkout under Dir.
+type Entry struct {
+	Path   string
+	Branch string
+	Head   string
+}
+
+// List returns the worktrees the dashboard created (those under Dir), from `git worktree list --porcelain`.
+func (m *Manager) List(ctx context.Context) ([]Entry, error) {
+	out, err := m.git(ctx, m.Root, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var entries []Entry
+	var current *Entry
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			entries = append(entries, Entry{Path: strings.TrimPrefix(line, "worktree ")})
+			current = &entries[len(entries)-1]
+		case current != nil && strings.HasPrefix(line, "HEAD "):
+			current.Head = strings.TrimPrefix(line, "HEAD ")
+		case current != nil && strings.HasPrefix(line, "branch "):
+			current.Branch = strings.TrimPrefix(strings.TrimPrefix(line, "branch "), "refs/heads/")
+		}
+	}
+	dir := filepath.Clean(m.Dir) + string(filepath.Separator)
+	var mine []Entry
+	for _, e := range entries {
+		if strings.HasPrefix(filepath.Clean(e.Path)+string(filepath.Separator), dir) {
+			mine = append(mine, e)
+		}
+	}
+	return mine, nil
+}
+
+// Unpushed reports how many commits of the worktree branch are not on its upstream; hasUpstream is false when
+// the branch was never pushed.
+func (m *Manager) Unpushed(ctx context.Context, path string) (count int, hasUpstream bool) {
+	if _, err := m.git(ctx, path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); err != nil {
+		return 0, false
+	}
+	out, err := m.git(ctx, path, "rev-list", "--count", "@{u}..HEAD")
+	if err != nil {
+		return 0, true
+	}
+	n := 0
+	fmt.Sscanf(strings.TrimSpace(out), "%d", &n)
+	return n, true
+}
+
 // Exists reports whether the worktree directory is present.
 func (m *Manager) Exists(path string) bool {
 	_, err := os.Stat(filepath.Join(path, ".git"))

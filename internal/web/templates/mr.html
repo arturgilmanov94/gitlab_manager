@@ -1,7 +1,7 @@
 {{define "content"}}
 <section class="page-head">
   <div>
-    <div class="crumbs"><a href="/">Merge requests</a> · {{.MR.ProjectPath}}</div>
+    <div class="crumbs"><a href="/mrs">Merge requests</a> · {{.MR.ProjectPath}}</div>
     <h1><a class="ref" href="{{.MR.WebURL}}" target="_blank" rel="noopener">!{{.MR.IID}}</a> {{.MR.Title}}</h1>
     <div class="meta">
       <span>{{.MR.Author}}{{if .IsMine}} <span class="badge badge-info">мой</span>{{end}}</span>
@@ -43,17 +43,19 @@
         <button class="item" onclick="copyText('{{.MR.WebURL}}')">Скопировать ссылку</button>
         <div class="divider"></div>
         {{if .Active}}<button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Active.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
-        <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="confirm('Убрать MR и историю запусков из dashboard?') && del('/api/mrs/{{.MR.ID}}', this).then(r => r && go('/'))">Убрать из dashboard</button>
+        <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="confirm('Убрать MR и историю запусков из dashboard?') && del('/api/mrs/{{.MR.ID}}', this).then(r => r && go('/mrs'))">Убрать из dashboard</button>
       </div>
     </details>
   </div>
 </section>
 
 <section class="status-panel">
-  <div class="status-block tone-{{if .Closed}}neutral{{else}}success{{end}}">
+  <div class="status-block tone-{{if .Closed}}neutral{{else}}{{pipelineTone .MR.PipelineStatus}}{{end}}">
     <div class="label">GitLab</div>
-    <div class="value"><span class="glyph">{{if .Closed}}—{{else}}✓{{end}}</span> {{if eq .MR.State "merged"}}Merged{{else if eq .MR.State "closed"}}Closed{{else}}Открыт{{end}}</div>
-    <div class="detail">{{if .MR.Unresolved}}{{.MR.Unresolved}} нерешённых обсуждений ревьюеров{{else}}нет нерешённых обсуждений{{end}} · GitLab обновлён {{when .MR.GitLabUpdatedAt}}</div>
+    <div class="value">{{if .Closed}}<span class="glyph">—</span> {{if eq .MR.State "merged"}}Merged{{else}}Closed{{end}}{{else}}<span class="glyph">{{glyph (pipelineTone .MR.PipelineStatus)}}</span> {{pipelineLabel .MR.PipelineStatus}}{{if .MR.Draft}} <span class="badge">Draft</span>{{end}}{{end}}</div>
+    <div class="detail">
+      {{if .MR.ApprovalsRequired}}approvals {{.MR.ApprovalsGiven}}/{{.MR.ApprovalsRequired}}{{if ge .MR.ApprovalsGiven .MR.ApprovalsRequired}} ✓{{end}} · {{else if .MR.ApprovalsGiven}}approvals {{.MR.ApprovalsGiven}} · {{end}}{{if .MR.Unresolved}}{{.MR.Unresolved}} нерешённых обсуждений{{else}}нет нерешённых обсуждений{{end}}{{if .MR.Diverged}} · <span class="tip" data-tip="На сколько коммитов {{.MR.TargetBranch}} ушёл вперёд с момента ветвления.">отстаёт от {{.MR.TargetBranch}} на {{.MR.Diverged}}</span>{{end}}{{if .MR.ChangesCount}} · {{.MR.ChangesCount}} файлов{{end}} · обновлён {{when .MR.GitLabUpdatedAt}}
+    </div>
   </div>
   <div class="status-block tone-{{aiTone .State}}">
     <div class="label">AI review</div>
@@ -96,7 +98,7 @@
     <h2>Результат AI review · <a href="/run/{{.Latest.ID}}">сессия #{{.Latest.ID}}</a> · {{kindLabel .Latest.Kind}}</h2>
     <div>{{if .Stale}}<span class="badge badge-warning tip" data-tip="Результат относится к коммиту {{shortSHA .Latest.HeadSHA}}; с тех пор появились новые коммиты. Нажмите «Проверить изменения».">по коммиту {{shortSHA .Latest.HeadSHA}} · есть новые изменения</span>{{else}}<span class="badge badge-success">актуально для HEAD {{shortSHA .Latest.HeadSHA}}</span>{{end}}</div>
   </div>
-  <p class="summary prewrap"><span class="verdict-{{.Latest.Verdict}}">{{verdict .Latest.Verdict}}.</span> {{.Latest.Summary}}</p>
+  <div class="summary"><span class="verdict-{{.Latest.Verdict}}">{{verdict .Latest.Verdict}}.</span> {{md .Latest.Summary .Blob .SHA}}</div>
   {{template "findings" .}}
 </section>
 {{else if not .Active}}
