@@ -43,7 +43,12 @@
         <button class="item" onclick="copyText('{{.MR.WebURL}}')">Скопировать ссылку</button>
         <div class="divider"></div>
         {{if .Active}}<button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Active.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
-        <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="confirm('Убрать MR и историю запусков из dashboard?') && del('/api/mrs/{{.MR.ID}}', this).then(r => r && go('/mrs'))">Убрать из dashboard</button>
+        {{if .MR.Hidden}}
+          <button class="item tip" data-tip="{{kindTip "restore"}}" onclick="post('/api/mrs/{{.MR.ID}}/unhide', {}, this).then(r => r && (flash('MR возвращён в список', true), reload()))">Вернуть в список</button>
+        {{else if .MR.Relevant}}
+          <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="post('/api/mrs/{{.MR.ID}}/hide', {}, this).then(r => r && go('/history'))">Убрать в историю</button>
+        {{end}}
+        <button class="item danger tip" data-tip="{{kindTip "delete"}}" onclick="confirm('Удалить MR и историю запусков из dashboard окончательно?') && del('/api/mrs/{{.MR.ID}}', this).then(r => r && go('/mrs'))">Удалить окончательно</button>
       </div>
     </details>
   </div>

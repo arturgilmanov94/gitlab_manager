@@ -47,6 +47,7 @@ func IssuePayload(iid int64) map[string]any {
 
 // FakeGitLab is an in-memory gitlab.Client.
 type FakeGitLab struct {
+	mu         sync.Mutex
 	MRs        map[int64]map[string]any
 	Issues     map[int64]map[string]any
 	Unresolved map[int64]int64
@@ -87,6 +88,8 @@ func (f *FakeGitLab) AuthStatus(host string) (bool, string) {
 }
 func (f *FakeGitLab) CurrentUser(host string) (string, error) { return "alice", nil }
 func (f *FakeGitLab) GetMR(ref gitlab.Ref) (map[string]any, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, fmt.Sprintf("mr %s!%d@%s", ref.ProjectPath, ref.IID, ref.Host))
 	if mr, ok := f.MRs[ref.IID]; ok {
 		return mr, nil
@@ -94,9 +97,13 @@ func (f *FakeGitLab) GetMR(ref gitlab.Ref) (map[string]any, error) {
 	return nil, errors.New("404 Not Found")
 }
 func (f *FakeGitLab) CountUnresolved(ref gitlab.Ref) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.Unresolved[ref.IID], nil
 }
 func (f *FakeGitLab) GetApprovals(ref gitlab.Ref) (gitlab.Approvals, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if by, ok := f.ApprovedBy[ref.IID]; ok {
 		return gitlab.Approvals{Given: int64(len(by)), Required: 2, ApprovedBy: by}, nil
 	}
@@ -106,6 +113,8 @@ func (f *FakeGitLab) GetApprovals(ref gitlab.Ref) (gitlab.Approvals, error) {
 	return gitlab.Approvals{}, nil
 }
 func (f *FakeGitLab) ListOpenMRs(host, username string, roles []string, projectPath string) ([]map[string]any, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, fmt.Sprintf("list-mrs %s %v", projectPath, roles))
 	var out []map[string]any
 	for iid, mr := range f.MRs {

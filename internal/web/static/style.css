@@ -221,6 +221,15 @@ details.section summary { padding: 6px 0; }
 .summary { font-size: 14px; }
 .summary .md { display: inline; } .summary .md p:first-child { display: inline; }
 .summary > .verdict-approve, .summary > .verdict-approve_with_comments, .summary > .verdict-request_changes, .summary > .verdict-blocked { display: block; margin-bottom: 8px; font-size: 15px; }
+/* fixed layout: a long code line in an expanded fix scrolls inside its cell instead of widening the table */
+.table.findings { table-layout: fixed; width: 100%; }
+.table.findings th:nth-child(1), .table.findings td:nth-child(1) { width: 96px; }
+.table.findings th:nth-child(2), .table.findings td:nth-child(2) { width: 110px; }
+.table.findings th:nth-child(3), .table.findings td:nth-child(3) { width: 24%; }
+.table.findings th:nth-child(5), .table.findings td:nth-child(5) { width: 48px; }
+.table.findings td { min-width: 0; overflow-wrap: anywhere; }
+.table.findings td:nth-child(3) { white-space: normal; word-break: break-all; }
+.findings td .md pre { max-width: 100%; }
 .findings td { padding-top: 14px; padding-bottom: 14px; }
 .findings td .md { font-size: 13.5px; }
 .findings td .md p { margin-bottom: 8px; }
@@ -262,6 +271,12 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
   .table.list tbody td { display: block; padding: 0; border: 0; }
   .table.list tbody td.actions-cell { grid-column: 2; grid-row: 1 / span 6; align-self: start; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
   .table.list tbody td[data-label]::before { content: attr(data-label); display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-top: 6px; }
+  /* findings stack vertically on narrow screens: severity/status/where in one line, text below */
+  .table.findings thead { display: none; }
+  .table.findings tbody tr { display: grid; grid-template-columns: auto auto 1fr auto; gap: 4px 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .table.findings tbody td { display: block; width: auto !important; padding: 0; border: 0; }
+  .table.findings tbody td:nth-child(4) { grid-column: 1 / span 4; }
+  .table.findings tbody td:nth-child(5) { grid-column: 4; grid-row: 1; }
   .table.list tbody td.title-cell::before, .table.list tbody td.ref-cell::before { display: none; }
   .actions { flex-wrap: wrap; }
 }

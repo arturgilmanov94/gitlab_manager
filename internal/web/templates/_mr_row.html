@@ -9,7 +9,7 @@
   <td class="nowrap ref-cell"><a class="ref" href="{{mrPath .ID}}">!{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
   <td class="title-cell">
     <a class="title" href="{{mrPath .ID}}">{{.Title}}</a>
-    <div class="sub">{{.Author}}{{if and $username (eq .Author $username)}}<span class="badge badge-info tip" data-tip="Автор MR — вы.">мой</span>{{end}}{{if .Draft}}<span class="badge">Draft</span>{{end}}{{if .ApprovedByMe}}<span class="badge badge-success tip" data-tip="Вы одобрили этот MR.">одобрен мной</span>{{end}}{{if and (not .MyRoles) (not .Manual)}}<span class="badge tip" data-tip="Вы больше не автор, assignee и не reviewer этого MR.">без роли</span>{{end}} · обновлён {{when .GitLabUpdatedAt}}{{if .ChangesCount}} · {{.ChangesCount}} файлов{{end}}</div>
+    <div class="sub">{{.Author}}{{if and $username (eq .Author $username)}}<span class="badge badge-info tip" data-tip="Автор MR — вы.">мой</span>{{end}}{{if .Draft}}<span class="badge">Draft</span>{{end}}{{if .Hidden}}<span class="badge badge-warning tip" data-tip="Вы убрали этот MR из основного списка. Вернуть — в меню ⋯.">скрыт вами</span>{{end}}{{if .ApprovedByMe}}<span class="badge badge-success tip" data-tip="Вы одобрили этот MR.">одобрен мной</span>{{end}}{{if and (not .MyRoles) (not .Manual)}}<span class="badge tip" data-tip="Вы больше не автор, assignee и не reviewer этого MR.">без роли</span>{{end}} · обновлён {{when .GitLabUpdatedAt}}{{if .ChangesCount}} · {{.ChangesCount}} файлов{{end}}</div>
   </td>
   <td class="mono small hide-lg" data-label="Ветка">{{.SourceBranch}}<div class="muted">→ {{.TargetBranch}}</div></td>
   <td data-label="GitLab">
@@ -64,7 +64,12 @@
           <button class="item" onclick="copyText('{{.WebURL}}')">Скопировать ссылку</button>
           <div class="divider"></div>
           {{if $busy}}<button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Last.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
-          <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="confirm('Убрать MR и историю его запусков из dashboard?') && del('/api/mrs/{{.ID}}', this).then(r => r && reload())">Убрать из dashboard</button>
+          {{if .Hidden}}
+            <button class="item tip" data-tip="{{kindTip "restore"}}" onclick="post('/api/mrs/{{.ID}}/unhide', {}, this).then(r => r && (flash('MR возвращён в список', true), reload()))">Вернуть в список</button>
+          {{else if .Relevant}}
+            <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="post('/api/mrs/{{.ID}}/hide', {}, this).then(r => r && (flash('MR убран в историю', true), reload()))">Убрать в историю</button>
+          {{end}}
+          <button class="item danger tip" data-tip="{{kindTip "delete"}}" onclick="confirm('Удалить MR и историю его запусков из dashboard окончательно?') && del('/api/mrs/{{.ID}}', this).then(r => r && reload())">Удалить окончательно</button>
         </div>
       </details>
     </div>

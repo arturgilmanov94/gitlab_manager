@@ -298,7 +298,11 @@ type SyncResult struct {
 	Pruned   int // MRs that no longer concern me and had no runs: removed
 	Archived int // MRs that no longer concern me but have runs: kept in the history
 	Project  string
+	Duration time.Duration
 }
+
+// syncConcurrency is how many glab processes a sync runs at once (each MR costs three API calls of ~0.7 s).
+const syncConcurrency = 6
 
 // SyncMRs pulls open MRs where the current user has one of the configured roles.
 func (s *Service) SyncMRs() (SyncResult, error) {
@@ -318,10 +322,12 @@ func (s *Service) SyncMRs() (SyncResult, error) {
 	if err != nil {
 		return SyncResult{}, &UserError{err.Error()}
 	}
+	started := time.Now()
 	result := SyncResult{Username: username, Project: firstOf(filter, "*")}
-	// Every MR GitLab lists for me plus every MR already in the dashboard is refreshed individually (the list
-	// payload lacks pipeline/divergence/approval details), then classified: still mine → main list; no longer
-	// mine (approved by me, role removed, merged/closed) → history when it has runs, otherwise removed.
+	// Every MR GitLab lists for me plus every open MR already in the dashboard is refreshed individually (the
+	// list payload lacks pipeline/divergence/approval details), then classified: still mine → main list; no
+	// longer mine (approved by me, role removed, merged/closed) → history when it has runs, otherwise removed.
+	// Merged/closed MRs already in the history are not refreshed again: they do not change.
 	refs := map[string]gitlab.Ref{}
 	for _, item := range items {
 		itemHost, itemProject, ok := gitlab.ProjectPathOf(item, "!")
@@ -334,39 +340,72 @@ func (s *Service) SyncMRs() (SyncResult, error) {
 	known, _ := s.DB.ListMRs()
 	for _, mr := range known {
 		key := fmt.Sprintf("%s|%s|%d", mr.GitLabHost, mr.ProjectPath, mr.IID)
-		if _, ok := refs[key]; !ok {
+		if _, ok := refs[key]; !ok && !mr.Closed() {
 			refs[key] = gitlab.Ref{Host: mr.GitLabHost, ProjectPath: mr.ProjectPath, IID: mr.IID}
 		}
 	}
+	s.CurrentUser() // resolve once before the workers start
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, syncConcurrency)
 	for _, ref := range refs {
-		fresh, err := s.fetchMR(ref, false)
-		if err != nil {
-			continue
-		}
-		switch {
-		case fresh.Relevant():
-			result.Synced++
-		case s.DB.CountRunsForMR(fresh.ID) > 0:
-			result.Archived++
-		default:
-			if active, _ := s.DB.ActiveRunForMR(fresh.ID); active != nil {
+		wg.Add(1)
+		go func(ref gitlab.Ref) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			fresh, err := s.fetchMR(ref, false)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case fresh.Relevant():
+				result.Synced++
+			case fresh.Hidden || s.DB.CountRunsForMR(fresh.ID) > 0:
 				result.Archived++
-				continue
+			default:
+				if active, _ := s.DB.ActiveRunForMR(fresh.ID); active != nil {
+					result.Archived++
+					return
+				}
+				if err := s.DB.DeleteMR(fresh.ID); err == nil {
+					result.Pruned++
+				}
 			}
-			if err := s.DB.DeleteMR(fresh.ID); err == nil {
-				result.Pruned++
-			}
-		}
+		}(ref)
 	}
+	wg.Wait()
+	result.Duration = time.Since(started)
 	return result, nil
 }
 
-// DeleteMR removes an MR (cancelling an active run first).
+// DeleteMR removes an MR for good, with its runs (cancelling an active run first).
 func (s *Service) DeleteMR(id int64) error {
 	if active, _ := s.DB.ActiveRunForMR(id); active != nil {
 		s.Cancel(active.ID)
 	}
 	return s.DB.DeleteMR(id)
+}
+
+// HideMR moves an MR into the history (its runs are kept); an active run is stopped.
+func (s *Service) HideMR(id int64) error {
+	if mr, _ := s.DB.GetMR(id); mr == nil {
+		return userErr("merge request #%d is not in the dashboard", id)
+	}
+	if active, _ := s.DB.ActiveRunForMR(id); active != nil {
+		s.Cancel(active.ID)
+	}
+	return s.DB.SetMRHidden(id, true)
+}
+
+// UnhideMR brings a hidden MR back to the main list (as long as it still concerns me).
+func (s *Service) UnhideMR(id int64) error {
+	if mr, _ := s.DB.GetMR(id); mr == nil {
+		return userErr("merge request #%d is not in the dashboard", id)
+	}
+	return s.DB.SetMRHidden(id, false)
 }
 
 // ---------------------------------------------------------------------------------- issues

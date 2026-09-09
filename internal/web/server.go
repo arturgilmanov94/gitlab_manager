@@ -203,7 +203,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/mrs", s.apiAddMR)
 	s.mux.HandleFunc("POST /api/mrs/sync", func(w http.ResponseWriter, r *http.Request) {
 		res, err := s.svc.SyncMRs()
-		s.result(w, map[string]any{"synced": res.Synced, "archived": res.Archived, "pruned": res.Pruned, "username": res.Username, "project": res.Project}, err)
+		s.result(w, map[string]any{"synced": res.Synced, "archived": res.Archived, "pruned": res.Pruned, "username": res.Username, "project": res.Project, "seconds": int(res.Duration.Seconds())}, err)
 	})
 	s.mux.HandleFunc("POST /api/mrs/{id}/refresh", func(w http.ResponseWriter, r *http.Request) {
 		mr, err := s.svc.RefreshMR(pathID(r))
@@ -211,6 +211,12 @@ func (s *Server) routes() {
 	})
 	s.mux.HandleFunc("DELETE /api/mrs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s.result(w, map[string]any{}, s.svc.DeleteMR(pathID(r)))
+	})
+	s.mux.HandleFunc("POST /api/mrs/{id}/hide", func(w http.ResponseWriter, r *http.Request) {
+		s.result(w, map[string]any{}, s.svc.HideMR(pathID(r)))
+	})
+	s.mux.HandleFunc("POST /api/mrs/{id}/unhide", func(w http.ResponseWriter, r *http.Request) {
+		s.result(w, map[string]any{}, s.svc.UnhideMR(pathID(r)))
 	})
 	s.mux.HandleFunc("POST /api/mrs/{id}/runs", s.apiStartMRRun)
 
@@ -947,7 +953,11 @@ func kindTip(kind string) string {
 	case "stop":
 		return "Остановить агента. Частичный результат не сохраняется; можно запустить снова."
 	case "remove":
-		return "Убрать из dashboard вместе с историей запусков. В GitLab ничего не меняется."
+		return "Убрать MR из основного списка в «Историю» с пометкой «скрыт вами». Запуски сохраняются, вернуть можно оттуда. В GitLab ничего не меняется."
+	case "restore":
+		return "Вернуть MR в основной список, если он всё ещё вас касается (открыт, вы автор, assignee или reviewer, вы его не одобряли)."
+	case "delete":
+		return "Удалить MR из dashboard окончательно вместе с историей запусков. В GitLab ничего не меняется."
 	case "refresh":
 		return "Перечитать данные из GitLab. Ничего не запускается."
 	case "sync-mrs":

@@ -56,7 +56,7 @@ claude            # залогиниться и выйти
 
 # распаковать рядом с проектом
 cd ~/projects                                    # здесь лежит tradernet/
-tar -xzf mr-review-0.7.1-linux-amd64.tar.gz      # появится ~/projects/mr-review/
+tar -xzf mr-review-0.7.2-linux-amd64.tar.gz      # появится ~/projects/mr-review/
 
 cd mr-review
 ./mr-review doctor                               # всё ли найдено

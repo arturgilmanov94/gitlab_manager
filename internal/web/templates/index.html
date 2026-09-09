@@ -4,7 +4,7 @@
     <input type="text" name="ref" placeholder="Ссылка на MR или !123" size="34" required>
     <button type="submit" class="btn tip" data-tip="{{kindTip "add"}}">Добавить</button>
   </form>
-  <button class="btn tip" data-tip="{{kindTip "sync-mrs"}}" onclick="post('/api/mrs/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' MR для @' + r.username + (r.archived ? ', в историю: ' + r.archived : '') + (r.pruned ? ', убрано: ' + r.pruned : ''), true), reload()))">Синхронизировать с GitLab</button>
+  <button class="btn tip" data-tip="{{kindTip "sync-mrs"}}" onclick="post('/api/mrs/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' MR для @' + r.username + (r.archived ? ', в историю: ' + r.archived : '') + (r.pruned ? ', убрано: ' + r.pruned : '') + ' · ' + r.seconds + ' с', true), reload()))">Синхронизировать с GitLab</button>
   <input type="text" data-filter="#mrs-table" placeholder="Фильтр: номер, название, автор, ветка…" size="30">
   <span class="small muted" id="filter-count"></span>
   <span class="spacer"></span>

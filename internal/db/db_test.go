@@ -21,7 +21,7 @@ func open(t *testing.T) *DB {
 func TestMigrateIdempotent(t *testing.T) {
 	d := open(t)
 	applied, err := d.Migrate()
-	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 5 {
+	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 6 {
 		t.Fatalf("%v %v %v", applied, err, d.SchemaVersion())
 	}
 }
@@ -101,8 +101,17 @@ func TestMRRunFindingsFlow(t *testing.T) {
 	if _, err := d.AddMessage(runID, "user", "q", 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	if c := d.Counts(); c["merge_requests"] != 1 || c["runs"] != 1 || c["findings"] != 2 || c["tokens"] != 100 {
+	// The fixture MR has no role of mine: it counts as history, not as the main list.
+	if c := d.Counts(); c["merge_requests"] != 0 || c["history"] != 1 || c["runs"] != 1 || c["findings"] != 2 || c["tokens"] != 100 {
 		t.Fatalf("%v", c)
+	}
+	_, _ = d.UpsertMR(MergeRequest{GitLabHost: "gl", ProjectPath: "g/p", IID: 1, WebURL: "u", State: "opened", MyRoles: "reviewer"})
+	if c := d.Counts(); c["merge_requests"] != 1 || c["history"] != 0 {
+		t.Fatalf("relevant MR must be counted in the main list: %v", c)
+	}
+	_ = d.SetMRHidden(mr.ID, true)
+	if c := d.Counts(); c["merge_requests"] != 0 || c["history"] != 1 {
+		t.Fatalf("hidden MR moves to the history count: %v", c)
 	}
 	_ = d.DeleteMR(mr.ID)
 	if run, _ := d.GetRun(runID); run != nil {

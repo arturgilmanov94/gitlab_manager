@@ -273,6 +273,32 @@ func TestHistoryAndPrettyURLs(t *testing.T) {
 	}
 }
 
+func TestHideAndRestoreMR(t *testing.T) {
+	ts, _, _ := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, "Merge requests <span class=\"pill\">1</span>") || !strings.Contains(body, "Убрать в историю") {
+		t.Fatal("header counts the main list; the row offers to hide the MR")
+	}
+	if code, out := postJSON(t, ts.URL+"/api/mrs/1/hide", map[string]any{}); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if _, body := get(t, ts.URL+"/mrs"); strings.Contains(body, "MR 42") || !strings.Contains(body, "Merge requests <span class=\"pill\">0</span>") || !strings.Contains(body, "История <span class=\"pill\">1</span>") {
+		t.Fatal("a hidden MR leaves the main list and the counters follow")
+	}
+	if _, body := get(t, ts.URL+"/history"); !strings.Contains(body, "MR 42") || !strings.Contains(body, "скрыт вами") || !strings.Contains(body, "Вернуть в список") {
+		t.Fatal("history shows the hidden MR with a restore action")
+	}
+	if code, out := postJSON(t, ts.URL+"/api/mrs/sync", map[string]any{}); code != 200 || out["archived"].(float64) != 1 || out["pruned"].(float64) != 0 {
+		t.Fatalf("sync must keep a hidden MR: %d %v", code, out)
+	}
+	if code, _ := postJSON(t, ts.URL+"/api/mrs/1/unhide", map[string]any{}); code != 200 {
+		t.Fatal("unhide")
+	}
+	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, "MR 42") {
+		t.Fatal("restored MR is back in the main list")
+	}
+}
+
 func fmtInt(v int64) string {
 	const digits = "0123456789"
 	if v == 0 {

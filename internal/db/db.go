@@ -144,6 +144,7 @@ type MergeRequest struct {
 	MyRoles      string
 	ApprovedByMe bool
 	Manual       bool
+	Hidden       bool // hidden by the developer ("Убрать из dashboard"): lives in the history until brought back
 }
 
 // Ref is "project!iid".
@@ -152,22 +153,35 @@ func (m MergeRequest) Ref() string { return fmt.Sprintf("%s!%d", m.ProjectPath, 
 // Closed reports merged or closed MRs.
 func (m MergeRequest) Closed() bool { return m.State == "merged" || m.State == "closed" }
 
-// Relevant reports whether the MR still belongs in the main list: open, not approved by me, and I am still
-// author / assignee / reviewer (or it was added by hand).
+// Relevant reports whether the MR still belongs in the main list: open, not hidden, not approved by me, and
+// I am still author / assignee / reviewer (or it was added by hand).
 func (m MergeRequest) Relevant() bool {
-	return !m.Closed() && !m.ApprovedByMe && (m.MyRoles != "" || m.Manual)
+	return !m.Closed() && !m.Hidden && !m.ApprovedByMe && (m.MyRoles != "" || m.Manual)
 }
 
-const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual"
+// relevantWhere is the SQL form of Relevant().
+const relevantWhere = "state NOT IN ('merged', 'closed') AND hidden = 0 AND approved_by_me = 0 AND (my_roles != '' OR manual = 1)"
+
+const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, hidden"
 
 func scanMRInto(m *MergeRequest, s scanner) error {
-	var draft, approved, manual int
+	var draft, approved, manual, hidden int
 	if err := s.Scan(&m.ID, &m.GitLabHost, &m.ProjectPath, &m.IID, &m.WebURL, &m.Title, &m.Author, &m.SourceBranch, &m.TargetBranch, &m.State, &m.HeadSHA, &m.Unresolved, &m.GitLabUpdatedAt, &m.SyncedAt, &m.AddedAt,
-		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount, &m.MyRoles, &approved, &manual); err != nil {
+		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount, &m.MyRoles, &approved, &manual, &hidden); err != nil {
 		return err
 	}
-	m.Draft, m.ApprovedByMe, m.Manual = draft == 1, approved == 1, manual == 1
+	m.Draft, m.ApprovedByMe, m.Manual, m.Hidden = draft == 1, approved == 1, manual == 1, hidden == 1
 	return nil
+}
+
+// SetMRHidden hides an MR into the history or brings it back to the main list.
+func (d *DB) SetMRHidden(id int64, hidden bool) error {
+	v := 0
+	if hidden {
+		v = 1
+	}
+	_, err := d.sql.Exec("UPDATE merge_requests SET hidden = ? WHERE id = ?", v, id)
+	return err
 }
 
 func scanMR(s scanner) (*MergeRequest, error) {
@@ -295,14 +309,14 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 		var last LastRun
 		var id, open, tokens, dID, dMajor, dMinor, dInfo sql.NullInt64
 		var kind, status, verdict, sha, runner, model, finished, created, dKind, dVerdict, dSHA, dFinished sql.NullString
-		var draft, approved, manual int
+		var draft, approved, manual, hidden int
 		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Author, &item.SourceBranch, &item.TargetBranch, &item.State, &item.HeadSHA, &item.Unresolved, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
-			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual,
+			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual, &hidden,
 			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &open, &tokens,
 			&dID, &dKind, &dVerdict, &dSHA, &dFinished, &dMajor, &dMinor, &dInfo); err != nil {
 			return nil, err
 		}
-		item.Draft, item.ApprovedByMe, item.Manual = draft == 1, approved == 1, manual == 1
+		item.Draft, item.ApprovedByMe, item.Manual, item.Hidden = draft == 1, approved == 1, manual == 1, hidden == 1
 		if id.Valid {
 			last = LastRun{id.Int64, kind.String, status.String, verdict.String, sha.String, runner.String, model.String, finished.String, created.String, open.Int64, tokens.Int64}
 			item.Last = &last
@@ -1052,6 +1066,11 @@ func (d *DB) Counts() map[string]int64 {
 		_ = d.sql.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n)
 		out[table] = n
 	}
+	// The header counts what the main MR list shows; the rest is the history.
+	var relevant int64
+	_ = d.sql.QueryRow("SELECT COUNT(*) FROM merge_requests WHERE " + relevantWhere).Scan(&relevant)
+	out["history"] = out["merge_requests"] - relevant
+	out["merge_requests"] = relevant
 	var cost float64
 	_ = d.sql.QueryRow("SELECT COALESCE(SUM(cost_usd), 0) FROM runs").Scan(&cost)
 	out["cost_cents"] = int64(cost * 100)
