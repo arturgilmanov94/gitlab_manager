@@ -1,4 +1,8 @@
-// Package skill discovers the project-local Claude review skill without copying it.
+// Package skill discovers the project-local Claude agents, commands and skills without copying them.
+//
+// Every dashboard action maps to an expected project skill name (see Actions). The dashboard never ships
+// its own workflow: it finds the project's agent/command/skill and hands the run to it, falling back to
+// CLAUDE.md / AGENTS.md plus a minimal orchestration prompt when the project has no skill for the action.
 package skill
 
 import (
@@ -16,6 +20,87 @@ const (
 	KindCommand = "command"
 	KindSkill   = "skill"
 )
+
+// Dashboard actions. The strings equal the run kinds stored in the database (package db must not be imported here).
+const (
+	ActionReviewFull   = "review_full"
+	ActionReviewQuick  = "review_quick"
+	ActionReviewVerify = "review_verify"
+	ActionFixComments  = "fix_comments"
+	ActionPlan         = "plan"
+	ActionImplement    = "implement"
+)
+
+// Action is one dashboard action and the project skill it looks for.
+type Action struct {
+	Kind      string // run kind, e.g. review_full
+	SkillName string // default project skill/agent/command name
+	EnvKey    string // .env variable that overrides SkillName
+	Fallback  string // action whose skill is used when this one is missing ("" = none)
+	Title     string // human-readable title (UI language)
+	Contract  string // what the project skill is expected to do (UI language)
+}
+
+// Actions is the ordered map "action → expected project skill". Documented in docs/SKILLS.md.
+var Actions = []Action{
+	{
+		Kind: ActionReviewFull, SkillName: "mr-review", EnvKey: "SKILL_REVIEW_FULL",
+		Title: "Полное ревью MR",
+		Contract: "Получает ссылку на MR и head SHA. Читает MR, diff и обсуждения через glab, изучает затронутый код, " +
+			"находит реальные проблемы всех уровней (CRITICAL…INFO) с файлом, строкой и предложением фикса, оценивает нерешённые обсуждения. Ничего не меняет.",
+	},
+	{
+		Kind: ActionReviewQuick, SkillName: "mr-review-quick", EnvKey: "SKILL_REVIEW_QUICK", Fallback: ActionReviewFull,
+		Title: "Быстрое ревью MR",
+		Contract: "То же, что полное ревью, но только по diff и обсуждениям, без обхода кодовой базы; в отчёт идут CRITICAL/HIGH/MEDIUM. " +
+			"Без своего skill используется skill полного ревью с пометкой «быстрый проход».",
+	},
+	{
+		Kind: ActionReviewVerify, SkillName: "mr-review-verify", EnvKey: "SKILL_REVIEW_VERIFY", Fallback: ActionReviewFull,
+		Title: "Проверка изменений после ревью",
+		Contract: "Получает прежний SHA, текущий head и список открытых замечаний. По каждому решает: исправлено / открыто / неактуально " +
+			"с доказательством, и ищет только новые проблемы из новых коммитов. Без своего skill используется skill полного ревью.",
+	},
+	{
+		Kind: ActionFixComments, SkillName: "mr-fix-comments", EnvKey: "SKILL_FIX_COMMENTS",
+		Title: "Исправление замечаний ревьюеров",
+		Contract: "Работает в worktree на ветке MR. Читает нерешённые обсуждения через glab, правит код по правилам проекта, " +
+			"прогоняет проверки; вопросы и бизнес-решения оставляет человеку. Не коммитит, не пушит, не пишет в GitLab.",
+	},
+	{
+		Kind: ActionPlan, SkillName: "task-plan", EnvKey: "SKILL_PLAN",
+		Title: "Исследование задачи",
+		Contract: "Получает задачу GitLab (ссылка, описание) и указания разработчика. Без изменений кода составляет план: шаги, файлы и что в них меняется, " +
+			"риски, открытые вопросы, оценка размера.",
+	},
+	{
+		Kind: ActionImplement, SkillName: "task-implement", EnvKey: "SKILL_IMPLEMENT",
+		Title: "Решение задачи",
+		Contract: "Работает в worktree на новой ветке от базовой. Реализует задачу по правилам проекта, добавляет/обновляет тесты, " +
+			"прогоняет проверки и отчитывается: изменения, что прогнал, что осталось, предложенное сообщение коммита. Не коммитит и не пушит.",
+	},
+}
+
+// ActionFor returns the action for a run kind (nil for unknown kinds).
+func ActionFor(kind string) *Action {
+	for i := range Actions {
+		if Actions[i].Kind == kind {
+			return &Actions[i]
+		}
+	}
+	return nil
+}
+
+// Resolution is the outcome of looking up the skill for one action.
+type Resolution struct {
+	Action Action
+	Wanted string // name that was looked for (override or default)
+	Skill  *Skill // nil: no project skill, the run uses CLAUDE.md / AGENTS.md plus the dashboard prompt
+	Via    string // kind of the fallback action whose skill is used ("" when found directly or not found)
+}
+
+// Found reports whether a project skill backs the action (directly or through the fallback).
+func (r Resolution) Found() bool { return r.Skill != nil }
 
 var kindPriority = map[string]int{KindAgent: 0, KindCommand: 1, KindSkill: 2}
 
@@ -41,7 +126,7 @@ func (s Skill) Invocation() string {
 	if s.Kind == KindAgent {
 		return "claude --agent " + s.Name
 	}
-	return "/" + s.Name + " <mr-url> (slash command in the prompt)"
+	return "/" + s.Name + " <url> (slash command in the prompt)"
 }
 
 // AbsPath joins the project root and the relative path.
@@ -61,16 +146,25 @@ type Validation struct {
 
 // Resolver scans PROJECT_ROOT.
 type Resolver struct {
-	Root      string
-	Preferred string
+	Root  string
+	Names map[string]string // action kind → skill name override (from .env); missing = Action.SkillName
 }
 
-// New creates a resolver; preferred "" means DefaultName.
+// New creates a resolver; preferred overrides the full-review skill name ("" = default).
 func New(root, preferred string) *Resolver {
-	if preferred == "" {
-		preferred = DefaultName
+	names := map[string]string{}
+	if preferred != "" {
+		names[ActionReviewFull] = preferred
 	}
-	return &Resolver{Root: root, Preferred: preferred}
+	return &Resolver{Root: root, Names: names}
+}
+
+// NewWithNames creates a resolver with per-action skill name overrides.
+func NewWithNames(root string, names map[string]string) *Resolver {
+	if names == nil {
+		names = map[string]string{}
+	}
+	return &Resolver{Root: root, Names: names}
 }
 
 // ParseFrontmatter parses a simple `key: value` YAML frontmatter block.
@@ -113,14 +207,47 @@ func (r *Resolver) Candidates() []Skill {
 	return found
 }
 
-// Resolve picks the preferred skill, then a review+MR match, then any review match.
-func (r *Resolver) Resolve() *Skill {
-	candidates := r.Candidates()
+// Wanted returns the skill name looked for by an action: the .env override or the default.
+func (r *Resolver) Wanted(action Action) string {
+	if name := strings.TrimSpace(r.Names[action.Kind]); name != "" {
+		return name
+	}
+	return action.SkillName
+}
+
+// ForAction resolves the project skill for a run kind: exact name first, then the fallback action's skill,
+// then (for the full review only) any candidate whose name/description mentions reviewing merge requests.
+func (r *Resolver) ForAction(kind string) Resolution {
+	action := ActionFor(kind)
+	if action == nil {
+		return Resolution{Action: Action{Kind: kind}}
+	}
+	return r.resolve(*action, r.Candidates())
+}
+
+func (r *Resolver) resolve(action Action, candidates []Skill) Resolution {
+	res := Resolution{Action: action, Wanted: r.Wanted(action)}
 	for i := range candidates {
-		if candidates[i].Name == r.Preferred {
-			return &candidates[i]
+		if candidates[i].Name == res.Wanted {
+			res.Skill = &candidates[i]
+			return res
 		}
 	}
+	if action.Fallback != "" {
+		if fallback := ActionFor(action.Fallback); fallback != nil {
+			if via := r.resolve(*fallback, candidates); via.Skill != nil {
+				res.Skill, res.Via = via.Skill, firstOf(via.Via, fallback.Kind)
+				return res
+			}
+		}
+	}
+	if action.Kind == ActionReviewFull {
+		res.Skill = heuristicReview(candidates)
+	}
+	return res
+}
+
+func heuristicReview(candidates []Skill) *Skill {
 	for i := range candidates {
 		text := candidates[i].Name + " " + candidates[i].Description
 		if reviewWords.MatchString(text) && mrWords.MatchString(text) {
@@ -134,6 +261,19 @@ func (r *Resolver) Resolve() *Skill {
 	}
 	return nil
 }
+
+// Map resolves every dashboard action in the documented order.
+func (r *Resolver) Map() []Resolution {
+	candidates := r.Candidates()
+	out := make([]Resolution, 0, len(Actions))
+	for _, action := range Actions {
+		out = append(out, r.resolve(action, candidates))
+	}
+	return out
+}
+
+// Resolve returns the full-review skill (nil when none). Kept for callers that only care about reviews.
+func (r *Resolver) Resolve() *Skill { return r.ForAction(ActionReviewFull).Skill }
 
 // Validate checks that the skill file exists and has usable frontmatter.
 func (r *Resolver) Validate(s Skill) Validation {
@@ -248,4 +388,13 @@ func readFrontmatter(path string) map[string]string {
 		return map[string]string{}
 	}
 	return ParseFrontmatter(string(data))
+}
+
+func firstOf(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

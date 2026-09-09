@@ -15,4 +15,28 @@
   </table>
   <p class="{{if .Report.Ready}}text-success{{else}}text-danger{{end}}">{{if .Report.Ready}}✓ Готово к работе.{{else}}✕ Не готово: исправьте пункты FAIL.{{end}}</p>
 </section>
+
+{{if .Skills}}
+<section class="card" id="skills">
+  <div class="card-head"><h2>Действия dashboard → skills проекта</h2><span class="small muted">каждое действие сначала ищет свой skill в <span class="mono">.claude/</span> проекта</span></div>
+  <p class="secondary small">Dashboard не несёт своих правил: он находит в проекте агента, команду или skill с ожидаемым именем и отдаёт ему запуск. Нет своего skill — действие работает по CLAUDE.md / AGENTS.md и минимальному промпту dashboard (или по skill-у запасного действия). Имя можно переопределить переменной в <span class="mono">.env</span>. Подробности и шаблоны — в <span class="mono">docs/SKILLS.md</span>.</p>
+  <table class="table compact">
+    <thead><tr><th>Действие</th><th>Ожидаемое имя</th><th>Найдено в проекте</th><th>Что должен делать skill</th></tr></thead>
+    <tbody>
+    {{range .Skills}}
+    <tr>
+      <td class="nowrap"><b>{{.Action.Title}}</b><div class="small muted mono">{{.Action.Kind}}</div></td>
+      <td class="mono small">{{.Wanted}}<div class="muted">{{.Action.EnvKey}}</div></td>
+      <td class="small">
+        {{if not .Skill}}<span class="badge badge-warning">○ нет</span> CLAUDE.md + промпт dashboard
+        {{else if .Via}}<span class="badge badge-warning">⚠ запасной</span> skill действия <span class="mono">{{.Via}}</span>: <span class="mono">{{.Skill.Identifier}}</span>
+        {{else}}<span class="badge badge-success">✓ есть</span> <span class="mono">{{.Skill.Identifier}}</span><div class="muted mono">{{.Skill.RelPath}}</div>{{end}}
+      </td>
+      <td class="small">{{.Action.Contract}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}
 {{end}}

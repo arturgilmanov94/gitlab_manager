@@ -66,7 +66,7 @@
   <div class="status-block tone-neutral">
     <div class="label">Агент для запусков</div>
     <div class="value">{{template "runner-picker" .Base.Runners}}</div>
-    <div class="detail">{{if .Base.Skill}}skill проекта: <span class="mono">{{.Base.Skill.Identifier}}</span>{{else}}review-skill проекта не найден, работают правила CLAUDE.md{{end}}</div>
+    <div class="detail">{{if .Base.Skill}}skill ревью проекта: <span class="mono">{{.Base.Skill.Identifier}}</span>{{else}}review-skill проекта не найден, работают правила CLAUDE.md{{end}} · <a href="/doctor#skills">все действия</a></div>
   </div>
 </section>
 

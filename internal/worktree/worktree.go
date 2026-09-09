@@ -11,14 +11,18 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
-// Manager creates worktrees of Root under Dir.
+// Manager creates worktrees of Root under Dir. Operations that touch the shared .git of the main checkout
+// (fetch, worktree add/remove/prune) are serialised: runs on different branches may prepare in parallel.
 type Manager struct {
 	Root       string // main project checkout (shares .git with the worktrees)
 	Dir        string // where worktrees live (inside the dashboard's runtime dir)
 	BaseBranch string // e.g. develop
+
+	mu sync.Mutex
 }
 
 var unsafe = regexp.MustCompile(`[^A-Za-z0-9._#/-]+`)
@@ -49,12 +53,15 @@ func (m *Manager) git(ctx context.Context, dir string, args ...string) (string, 
 	return stdout.String(), nil
 }
 
-// Prepare creates (or reuses) a worktree on `branch`, branched from origin/BaseBranch.
-// The main checkout's branch is not changed. .claude/ is linked in when the project keeps it out of git.
+// Prepare creates (or reuses) a worktree on `branch`: an existing local branch, else the branch on origin
+// (fetched first, so an MR branch never seen by this checkout is still picked up), else a new branch from
+// origin/BaseBranch. The main checkout's branch is not changed. .claude/ is linked in when the project keeps it out of git.
 func (m *Manager) Prepare(ctx context.Context, branch string, log func(string)) (string, error) {
 	if strings.TrimSpace(branch) == "" {
 		return "", errors.New("branch name is empty")
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	path := m.Path(branch)
 	if err := os.MkdirAll(m.Dir, 0o755); err != nil {
 		return "", err
@@ -75,7 +82,14 @@ func (m *Manager) Prepare(ctx context.Context, branch string, log func(string)) 
 		if _, err := m.git(ctx, m.Root, "worktree", "add", path, branch); err != nil {
 			return "", err
 		}
-	} else if _, err := m.git(ctx, m.Root, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch); err == nil {
+		m.linkClaudeConfig(path, log)
+		return path, nil
+	}
+	// The branch may exist on origin without ever having been fetched here (an MR branch of a colleague).
+	if _, err := m.git(ctx, m.Root, "fetch", "--quiet", "origin", branch); err != nil {
+		log("git fetch origin " + branch + ": " + err.Error() + " (assuming the branch does not exist on origin)")
+	}
+	if _, err := m.git(ctx, m.Root, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch); err == nil {
 		log("branch exists on origin; tracking it in " + path)
 		if _, err := m.git(ctx, m.Root, "worktree", "add", "--track", "-b", branch, path, "origin/"+branch); err != nil {
 			return "", err
@@ -152,6 +166,8 @@ func (m *Manager) Remove(ctx context.Context, path string) error {
 	if !strings.HasPrefix(filepath.Clean(path), filepath.Clean(m.Dir)) {
 		return errors.New("refusing to remove a directory outside the worktree dir")
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	_, err := m.git(ctx, m.Root, "worktree", "remove", "--force", path)
 	_, _ = m.git(ctx, m.Root, "worktree", "prune")
 	return err

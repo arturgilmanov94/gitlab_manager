@@ -10,6 +10,30 @@
 - Watch-режим: опрос GitLab по отслеживаемым MR, автоматическая проверка исправлений при новых коммитах, уведомление.
 - Сводка расходов по дням и агентам.
 
+## [0.4.0] — 2026-09-09
+
+Dashboard — интерфейс поверх агентов проекта: каждое действие ищет свой skill в `.claude/` проекта.
+
+### Добавлено
+- **Карта «действие → skill проекта»** (`docs/SKILLS.md`). Каждое действие dashboard сначала ищет в `.claude/`
+  проекта свой агент/команду/skill: `review_full` → `mr-review`, `review_quick` → `mr-review-quick`,
+  `review_verify` → `mr-review-verify`, `fix_comments` → `mr-fix-comments`, `plan` → `task-plan`,
+  `implement` → `task-implement`. Имена переопределяются `SKILL_*` в `.env` (`REVIEW_SKILL` остался алиасом).
+  Быстрое ревью и проверка изменений без своего skill используют skill полного ревью; остальные действия без
+  skill идут по CLAUDE.md / AGENTS.md и промпту dashboard. Агент подключается через `--agent`, команда/skill —
+  slash-командой в промпте. Раньше skill проекта участвовал только в ревью.
+- Doctor показывает строку `Skill: <действие>` на каждое действие (OK — свой skill, WARN — запасной или нет,
+  FAIL — файл skill непригоден); на странице проверки окружения — таблица с ожидаемыми именами и тем, что должен
+  делать каждый skill. `./mr-review skill` печатает ту же карту; идентификатор skill сохраняется у всех запусков.
+- Тесты на параллельные запуски: при `RUN_CONCURRENCY>1` разные MR/задачи выполняются одновременно, один и тот
+  же объект — никогда; создание worktree сериализовано замком на общий `.git`.
+
+### Исправлено
+- Worktree для «Исправить замечания» на ветке MR, которую этот чекаут никогда не фетчил, молча создавался
+  от `origin/develop`. Теперь ветка сначала фетчится с origin и берётся оттуда.
+- Запрошенный, но не найденный агент (`runner`) больше не подменяется случайным из доступных — возвращается ошибка.
+- Тестовая фикстура работала только с git ≥ 2.28 (`git init -b`).
+
 ## [0.3.0] — 2026-09-08
 
 Фаза D плана «engineering cockpit»: дизайн-система и контракт действий применены к существующим экранам.
@@ -106,7 +130,8 @@
   через `PROJECT_ROOT`, git и родительские каталоги.
 - Doctor, лаунчер `./mr-review`, `bootstrap.sh`, release-архив с проверкой на абсолютные пути и секреты.
 
-[Unreleased]: https://github.com/arturgilmanov94/gitlab_manager/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/arturgilmanov94/gitlab_manager/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/arturgilmanov94/gitlab_manager/releases/tag/v0.4.0
 [0.3.0]: https://github.com/arturgilmanov94/gitlab_manager/releases/tag/v0.3.0
 [0.2.2]: https://github.com/arturgilmanov94/gitlab_manager/releases/tag/v0.2.2
 [0.2.1]: https://github.com/arturgilmanov94/gitlab_manager/releases/tag/v0.2.1

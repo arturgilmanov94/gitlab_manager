@@ -113,8 +113,8 @@ func TestPagesAndFlow(t *testing.T) {
 	if code, out := postJSON(t, ts.URL+"/api/runs/1/ask", map[string]any{"question": "why?"}); code != 200 || out["answer"] != "Because." {
 		t.Fatalf("%d %v", code, out)
 	}
-	if code, body := get(t, ts.URL+"/doctor"); code != 200 || !strings.Contains(body, "Review skill") {
-		t.Fatalf("doctor %d", code)
+	if code, body := get(t, ts.URL+"/doctor"); code != 200 || !strings.Contains(body, "Skill: review_full") || !strings.Contains(body, "Действия dashboard → skills проекта") || !strings.Contains(body, "task-plan") {
+		t.Fatalf("doctor %d: must list the action → skill map", code)
 	}
 	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/mrs/1", nil)
 	resp, _ := http.DefaultClient.Do(req)

@@ -6,14 +6,21 @@ import (
 	"strings"
 	"testing"
 
+	"mr-review/internal/config"
 	"mr-review/internal/db"
 	"mr-review/internal/runner"
+	"mr-review/internal/skill"
 	"mr-review/internal/testutil"
 )
 
 func newService(t *testing.T) (*Service, *testutil.FakeGitLab, *testutil.FakeRunner) {
 	t.Helper()
 	settings, _ := testutil.Settings(t)
+	return newServiceWith(t, settings)
+}
+
+func newServiceWith(t *testing.T, settings *config.Settings) (*Service, *testutil.FakeGitLab, *testutil.FakeRunner) {
+	t.Helper()
 	database, err := db.Open(settings.DatabasePath)
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +55,63 @@ func TestDefaultProjectAndUser(t *testing.T) {
 	if svc.Skill() == nil || svc.Skill().Name != "mr-review" {
 		t.Fatal("skill not resolved from project")
 	}
+	// Every action is mapped; only the review ones are backed by the fixture project.
+	if m := svc.SkillMap(); len(m) != len(skill.Actions) || !m[0].Found() || m[0].Action.Kind != db.KindReviewFull {
+		t.Fatalf("%+v", m)
+	}
+	if svc.SkillFor(db.KindReviewQuick) == nil || svc.SkillFor(db.KindPlan) != nil {
+		t.Fatal("quick review must fall back to the review agent; plan has no project skill in the fixture")
+	}
+}
+
+func TestParallelRunsOnDifferentMRs(t *testing.T) {
+	settings, _ := testutil.Settings(t)
+	settings.RunConcurrency = 2
+	svc, gl, fr := newServiceWith(t, settings)
+	gl.MRs[43] = testutil.MRPayload(43, "sha-43")
+	a, _ := svc.AddMR("!42")
+	b, _ := svc.AddMR("!43")
+	fr.Block = make(chan struct{})
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1"), testutil.FullReviewOutput("sha-43")}
+	runA, err := svc.StartReview(a.ID, db.KindReviewFull, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runB, err := svc.StartReview(b.ID, db.KindReviewFull, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both agents are running at the same time: two requests reached the runner while both are blocked.
+	testutil.WaitFor(t, func() bool { return status(svc, runA) == db.StatusRunning && status(svc, runB) == db.StatusRunning })
+	fr.Lock()
+	inFlight := len(fr.Requests)
+	fr.Unlock()
+	if inFlight != 2 {
+		t.Fatalf("expected 2 concurrent agent invocations, got %d", inFlight)
+	}
+	// A second run on the same MR is still refused while the first is active.
+	if _, err := svc.StartReview(a.ID, db.KindReviewQuick, ""); err == nil || !strings.Contains(err.Error(), "already queued or running") {
+		t.Fatalf("%v", err)
+	}
+	close(fr.Block)
+	testutil.WaitFor(t, func() bool { return status(svc, runA) == db.StatusDone && status(svc, runB) == db.StatusDone })
+}
+
+func TestConcurrencyOneQueuesSecondMR(t *testing.T) {
+	svc, gl, fr := newService(t) // RUN_CONCURRENCY defaults to 1
+	gl.MRs[43] = testutil.MRPayload(43, "sha-43")
+	a, _ := svc.AddMR("!42")
+	b, _ := svc.AddMR("!43")
+	fr.Block = make(chan struct{})
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1"), testutil.FullReviewOutput("sha-43")}
+	runA, _ := svc.StartReview(a.ID, db.KindReviewFull, "")
+	runB, _ := svc.StartReview(b.ID, db.KindReviewFull, "")
+	testutil.WaitFor(t, func() bool { return status(svc, runA) == db.StatusRunning })
+	if status(svc, runB) != db.StatusQueued {
+		t.Fatalf("second MR must wait in the queue, got %s", status(svc, runB))
+	}
+	close(fr.Block)
+	testutil.WaitFor(t, func() bool { return status(svc, runA) == db.StatusDone && status(svc, runB) == db.StatusDone })
 }
 
 func TestAddSyncReviewVerify(t *testing.T) {
@@ -185,7 +249,13 @@ func TestPlanImplementAndWorktreeActions(t *testing.T) {
 	if plan.Summary != "Plan summary" || !strings.Contains(plan.Prompt, "be careful") || fr.Requests[0].Mode != runner.ModeReadOnly {
 		t.Fatalf("%+v", plan)
 	}
+	// No project skill for "plan" in the fixture: the prompt says so and no agent is selected.
+	if plan.SkillIdentifier != "" || fr.Requests[0].Agent != "" || !strings.Contains(plan.Prompt, "No dedicated project skill") {
+		t.Fatalf("plan without project skill: %+v", plan)
+	}
 
+	// The project provides an implementation agent: the run is handed to it.
+	testutil.AddProjectAgent(t, svc.Settings.ProjectRoot, "task-implement", "Implement a GitLab task")
 	fr.Outputs = []map[string]any{testutil.ImplementOutput()}
 	implID, err := svc.StartImplement(issue.ID, "", "", "")
 	if err != nil {
@@ -195,6 +265,9 @@ func TestPlanImplementAndWorktreeActions(t *testing.T) {
 	impl, _ := svc.DB.GetRun(implID)
 	if impl.Branch != "group/sub/project#7" || impl.WorkDir == "" || fr.Requests[1].Mode != runner.ModeEdit || fr.Requests[1].Dir != impl.WorkDir {
 		t.Fatalf("%+v", impl)
+	}
+	if impl.SkillIdentifier != "agent:task-implement" || fr.Requests[1].Agent != "task-implement" || !strings.Contains(impl.Prompt, "`task-implement` agent") {
+		t.Fatalf("implement must run as the project's task-implement agent: %+v", impl)
 	}
 	if _, err := os.Stat(filepath.Join(impl.WorkDir, "CHANGED.txt")); err != nil {
 		t.Fatal("agent edit not in worktree")
@@ -233,6 +306,8 @@ func TestPlanImplementAndWorktreeActions(t *testing.T) {
 
 func TestFixCommentsUsesMRBranchWorktree(t *testing.T) {
 	svc, _, fr := newService(t)
+	// A project skill (slash command) for comment fixes: invoked inside the prompt, no --agent.
+	testutil.AddProjectSkill(t, svc.Settings.ProjectRoot, "mr-fix-comments", "Address reviewer comments")
 	mr, _ := svc.AddMR("!42")
 	fr.Outputs = []map[string]any{testutil.ImplementOutput()}
 	// The MR branch does not exist on origin in this fixture; Prepare must create it from origin/develop.
@@ -247,6 +322,9 @@ func TestFixCommentsUsesMRBranchWorktree(t *testing.T) {
 	}
 	if run.Branch != "feature" || !strings.Contains(run.Prompt, "FIX REVIEW COMMENTS") || !strings.Contains(run.Prompt, "only file A") {
 		t.Fatalf("%+v", run)
+	}
+	if run.SkillIdentifier != "skill:mr-fix-comments" || !strings.HasPrefix(run.Prompt, "/mr-fix-comments https://") || fr.Requests[0].Agent != "" {
+		t.Fatalf("fix-comments must invoke the project skill as a slash command: %+v", run)
 	}
 }
 

@@ -1,0 +1,108 @@
+# Карта действий → skills проекта
+
+Dashboard — это интерфейс поверх агентов **вашего проекта**, а не отдельный ревьюер. Каждое действие
+сначала ищет в `.claude/` проекта агента, команду или skill с ожидаемым именем и отдаёт ему запуск.
+Своих правил у dashboard нет: он добавляет к промпту только ссылку на MR/задачу, режим, ограничения
+(read-only или «правки только в worktree») и JSON-схему результата.
+
+Проверить, что нашлось, можно тремя способами: `./mr-review skill`, `./mr-review doctor`
+(строки `Skill: <действие>`), страница «Проверка окружения» в браузере (таблица «Действия dashboard → skills проекта»).
+На странице каждого запуска показан идентификатор skill, с которым он выполнялся.
+
+## Карта
+
+| Действие (кнопка) | `kind` | Ожидаемое имя | Переменная `.env` | Если skill нет |
+|---|---|---|---|---|
+| Запустить ревью / Полное ревью | `review_full` | `mr-review` | `SKILL_REVIEW_FULL` (алиас `REVIEW_SKILL`) | любой агент/skill, чьё имя или описание упоминают review + merge request; иначе CLAUDE.md + промпт dashboard |
+| Быстрое ревью | `review_quick` | `mr-review-quick` | `SKILL_REVIEW_QUICK` | skill `review_full` с пометкой «быстрый проход: только diff» |
+| Проверить изменения | `review_verify` | `mr-review-verify` | `SKILL_REVIEW_VERIFY` | skill `review_full` с прежними findings в промпте |
+| Исправить замечания ревьюеров | `fix_comments` | `mr-fix-comments` | `SKILL_FIX_COMMENTS` | CLAUDE.md + промпт dashboard |
+| Исследовать | `plan` | `task-plan` | `SKILL_PLAN` | CLAUDE.md + промпт dashboard |
+| Решить задачу / Реализовать этот план | `implement` | `task-implement` | `SKILL_IMPLEMENT` | CLAUDE.md + промпт dashboard |
+
+Где ищется имя (в порядке приоритета при совпадении имён):
+
+1. `.claude/agents/<name>.md` — запускается как `claude --agent <name>`; frontmatter обязан содержать `name:`.
+2. `.claude/commands/**/<name>.md` — вызывается slash-командой `/<name> <url>` первой строкой промпта.
+3. `.claude/skills/<name>/SKILL.md` — так же, slash-командой `/<name> <url>`.
+
+Имя берётся из `name:` во frontmatter, при его отсутствии — из имени файла/каталога.
+
+## Что dashboard передаёт и что ждёт назад
+
+Ниже — контракт для автора skill: входные данные, которые кладёт dashboard, и поля результата, которые он
+разбирает. Всё остальное (как ревьюить, какие правила проекта применять, что считать критичным) — дело skill.
+
+### `review_full` — полное ревью MR
+
+**Вход:** ссылка на MR, project path, IID, заголовок, ветки, head SHA. Режим read-only: файлы не менять,
+git-состояние не трогать, в GitLab не писать.
+
+**Результат (JSON по схеме):** `summary`, `verdict` (`approve` | `approve_with_comments` | `request_changes` | `blocked`),
+`reviewed_sha`, `findings[]` (`severity` CRITICAL…INFO, `category`, `file`, `line`, `title`, `description`, `suggestion`),
+`unresolved_discussions[]` (`author`, `file`, `line`, `body`, `assessment`, `addressed`).
+
+Пример в tradernet: `.claude/agents/mr-review.md`.
+
+### `review_quick` — быстрое ревью
+
+Тот же вход и результат. Ожидается лёгкий проход: diff и обсуждения, соседний код только когда без него
+не понять правку, в отчёт — CRITICAL/HIGH/MEDIUM. Без своего skill dashboard берёт skill полного ревью и
+добавляет в промпт «Mode: QUICK REVIEW (light pass)».
+
+### `review_verify` — проверка изменений после ревью
+
+**Вход:** как у полного ревью, плюс `Previously reviewed SHA` и JSON-список прежних открытых findings
+(`finding_id`, `severity`, `file`, `line`, `title`, `description`).
+
+**Результат:** `summary`, `verdict`, `reviewed_sha`, `verified[]` (`finding_id`, `status` `open` | `fixed` | `obsolete`, `note`),
+`new_findings[]` (только проблемы из новых коммитов), `unresolved_discussions[]`.
+
+### `fix_comments` — исправление замечаний ревьюеров
+
+**Вход:** данные MR, указания разработчика. Агент уже находится в worktree на ветке MR (`cwd`), правки
+разрешены только там; commit/push/запись в GitLab запрещены — это делает разработчик кнопками dashboard.
+
+**Результат:** `summary`, `addressed[]` (`author`, `file`, `line`, `comment`, `action`, `done`), `changes[]` (`path`, `description`),
+`tests`, `todo[]` (что требует решения человека), `commit_message`.
+
+### `plan` — исследование задачи
+
+**Вход:** ссылка на задачу, project path, IID, заголовок, описание, указания разработчика. Режим read-only, `cwd` = корень проекта.
+
+**Результат:** `summary`, `steps[]`, `files[]` (`path`, `change`), `risks[]`, `questions[]`, `estimate`.
+
+### `implement` — решение задачи
+
+**Вход:** как у `plan`, плюс имя ветки и базовая ветка; если запуск сделан кнопкой «Реализовать этот план»,
+в указания добавлен текст плана. Агент в worktree на новой ветке; commit/push запрещены.
+
+**Результат:** `summary`, `changes[]` (`path`, `description`), `tests`, `todo[]`, `commit_message`.
+
+## Шаблон skill
+
+Минимальный `.claude/skills/task-plan/SKILL.md`:
+
+```markdown
+---
+name: task-plan
+description: Исследование задачи GitLab перед реализацией — план, файлы, риски, вопросы.
+---
+
+Ты исследуешь задачу GitLab в этом репозитории. Ссылка и описание задачи приходят в промпте.
+
+1. Прочитай задачу; при необходимости подтяни связанные issue/MR через `glab api` (только GET).
+2. Найди затронутые модули по `.agents/rules/project-map.mdc` и описаниям модулей.
+3. Составь план: шаги, файлы и что в них меняется, риски и регрессии, открытые вопросы, оценка.
+4. Код не меняй. Ответ — строго JSON по схеме, которую даёт dashboard.
+```
+
+Агент вместо skill (`.claude/agents/task-implement.md`) отличается только тем, что dashboard запустит его через
+`claude --agent task-implement`; frontmatter обязан содержать `name:`.
+
+## Параллельная работа
+
+`RUN_CONCURRENCY` в `.env` задаёт, сколько агентов работают одновременно. По разным MR и задачам запуски идут
+параллельно; по одному и тому же MR/задаче второй запуск отклоняется, пока активен первый. Worktree создаются
+под общим замком на `.git` основного чекаута, чтобы параллельные `git fetch`/`git worktree add` не мешали друг другу;
+сам агент после этого работает в своём каталоге независимо.

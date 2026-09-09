@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"mr-review/internal/projectroot"
+	"mr-review/internal/skill"
 )
 
 // Settings is the effective runtime configuration.
@@ -28,7 +29,8 @@ type Settings struct {
 	RuntimeDir   string
 	WorktreeDir  string
 
-	ReviewSkill string
+	ReviewSkill string            // full-review skill name override (REVIEW_SKILL / SKILL_REVIEW_FULL)
+	SkillNames  map[string]string // action kind → project skill name override (SKILL_* variables)
 
 	ClaudeBin          string
 	ClaudeModels       []string
@@ -157,7 +159,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		LogDir:                path("LOG_DIR", "./logs"),
 		RuntimeDir:            path("RUNTIME_DIR", "./runtime"),
 		WorktreeDir:           path("WORKTREE_DIR", "./runtime/worktrees"),
-		ReviewSkill:           strings.TrimSpace(get("REVIEW_SKILL")),
+		SkillNames:            skillNames(get),
 		ClaudeBin:             str("CLAUDE_BIN", "claude"),
 		ClaudeModels:          splitList(str("CLAUDE_MODELS", "default,fable,opus,sonnet")),
 		ClaudeMaxBudgetUSD:    strings.TrimSpace(get("CLAUDE_MAX_BUDGET_USD")),
@@ -177,6 +179,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 	if s.RunConcurrency < 1 {
 		s.RunConcurrency = 1
 	}
+	s.ReviewSkill = s.SkillNames[skill.ActionReviewFull]
 
 	root, err := projectroot.Resolve(baseDir, get("PROJECT_ROOT"), "")
 	if err != nil {
@@ -186,6 +189,21 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		s.ProjectRootSource = root.Source
 	}
 	return s
+}
+
+// skillNames reads the per-action skill name overrides (SKILL_REVIEW_FULL, SKILL_PLAN, ...).
+// REVIEW_SKILL is the legacy alias of SKILL_REVIEW_FULL.
+func skillNames(get Lookup) map[string]string {
+	names := map[string]string{}
+	for _, action := range skill.Actions {
+		if name := strings.TrimSpace(get(action.EnvKey)); name != "" {
+			names[action.Kind] = name
+		}
+	}
+	if legacy := strings.TrimSpace(get("REVIEW_SKILL")); legacy != "" && names[skill.ActionReviewFull] == "" {
+		names[skill.ActionReviewFull] = legacy
+	}
+	return names
 }
 
 func resolvePath(value, base string) string {

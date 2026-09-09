@@ -158,18 +158,20 @@ type PrevFinding struct {
 	Description string `json:"description"`
 }
 
+// skillLine tells the agent which project skill governs this run. The project skill is authoritative;
+// without one the run follows CLAUDE.md / AGENTS.md plus the dashboard constraints below.
 func skillLine(s *skill.Skill) string {
 	switch {
 	case s == nil:
-		return "No dedicated project review skill was detected; follow the review rules from the project's CLAUDE.md / AGENTS.md instructions."
+		return "No dedicated project skill was detected for this action; follow the rules from the project's CLAUDE.md / AGENTS.md instructions."
 	case s.Kind == skill.KindAgent:
-		return fmt.Sprintf("You are running as the project's `%s` review agent; follow its workflow.", s.Name)
+		return fmt.Sprintf("You are running as the project's `%s` agent; follow its workflow.", s.Name)
 	default:
-		return fmt.Sprintf("Apply the project's `/%s` review skill workflow.", s.Name)
+		return fmt.Sprintf("Apply the project's `/%s` skill workflow.", s.Name)
 	}
 }
 
-// SlashPrefix returns the slash-command invocation for non-agent skills.
+// SlashPrefix returns the slash-command invocation for non-agent skills (agents are selected with --agent).
 func SlashPrefix(s *skill.Skill, url string) string {
 	if s == nil || s.Kind == skill.KindAgent {
 		return ""
@@ -221,17 +223,18 @@ func issueBlock(issue Issue, notes string) string {
 }
 
 // Plan builds the read-only task analysis prompt.
-func Plan(issue Issue, notes string) string {
-	return "Mode: PLAN (read-only analysis of a task)\n\n" + issueBlock(issue, notes) + "\n" +
+func Plan(issue Issue, notes string, s *skill.Skill) string {
+	return SlashPrefix(s, issue.WebURL) + "Mode: PLAN (read-only analysis of a task)\n\n" + issueBlock(issue, notes) + "\n" + skillLine(s) + "\n\n" +
 		"Study the task and the relevant code in this repository (you are in the project root). Produce a concrete implementation plan: " +
 		"ordered steps, files to change with what changes, risks/regressions to watch, open questions, and a rough size estimate. " +
 		"You may fetch more context from GitLab with read-only `glab api` calls (linked issues, related MRs).\n\n" + readOnlyRules
 }
 
 // Implement builds the editing prompt for a worktree run.
-func Implement(issue Issue, notes, branch, baseBranch string) string {
-	return "Mode: IMPLEMENT (edit files in a dedicated worktree)\n\n" + issueBlock(issue, notes) +
+func Implement(issue Issue, notes, branch, baseBranch string, s *skill.Skill) string {
+	return SlashPrefix(s, issue.WebURL) + "Mode: IMPLEMENT (edit files in a dedicated worktree)\n\n" + issueBlock(issue, notes) +
 		fmt.Sprintf("\nYou are in a git worktree on branch `%s` created from `origin/%s`. Implement the task here.\n", branch, baseBranch) +
+		skillLine(s) + "\n\n" +
 		"Follow the project's rules and conventions, keep the change focused on the task, add or update tests where the project covers the area, " +
 		"and run the project's style/test checks that apply to the touched files. Report what you changed, what you ran, and what is left.\n\n" + editRules
 }
@@ -276,12 +279,13 @@ var FixSchema = []byte(`{
 }`)
 
 // FixComments builds the prompt for addressing unresolved reviewer discussions in a worktree of the MR branch.
-func FixComments(mr MR, notes string) string {
+func FixComments(mr MR, notes string, s *skill.Skill) string {
 	var extra string
 	if strings.TrimSpace(notes) != "" {
 		extra = "\n--- additional instructions from the developer ---\n" + strings.TrimSpace(notes) + "\n--- end instructions ---\n"
 	}
-	return "Mode: FIX REVIEW COMMENTS (edit files in a dedicated worktree of the MR branch)\n\n" + mrBlock(mr) + extra +
+	return SlashPrefix(s, mr.WebURL) + "Mode: FIX REVIEW COMMENTS (edit files in a dedicated worktree of the MR branch)\n\n" + mrBlock(mr) + extra +
+		"\n" + skillLine(s) + "\n" +
 		fmt.Sprintf("\nYou are in a git worktree checked out on the MR source branch `%s`. ", mr.SourceBranch) +
 		"Fetch the unresolved discussions of this MR with `glab api` (discussions where notes[0].resolvable == true and resolved == false), " +
 		"read each reviewer's request in the context of the current code, and change the code to address it, following the project's rules. " +

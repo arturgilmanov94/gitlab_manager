@@ -78,6 +78,60 @@ func TestPreferredCommandAndFallbacks(t *testing.T) {
 	}
 }
 
+func TestActionMapAndFallbacks(t *testing.T) {
+	root := project(t)
+	r := NewWithNames(root, nil)
+	byKind := map[string]Resolution{}
+	for _, res := range r.Map() {
+		byKind[res.Action.Kind] = res
+	}
+	if len(byKind) != len(Actions) {
+		t.Fatalf("map must cover every action: %d != %d", len(byKind), len(Actions))
+	}
+	// Full review: the project agent, found directly.
+	if res := byKind[ActionReviewFull]; res.Skill == nil || res.Skill.Name != "mr-review" || res.Via != "" || res.Wanted != "mr-review" {
+		t.Fatalf("%+v", res)
+	}
+	// Quick review and verify: no own skill → the full-review agent via fallback.
+	for _, kind := range []string{ActionReviewQuick, ActionReviewVerify} {
+		if res := byKind[kind]; res.Skill == nil || res.Skill.Name != "mr-review" || res.Via != ActionReviewFull {
+			t.Fatalf("%s: %+v", kind, res)
+		}
+	}
+	// Task actions: nothing in the project → CLAUDE.md only.
+	for _, kind := range []string{ActionPlan, ActionImplement, ActionFixComments} {
+		if res := byKind[kind]; res.Skill != nil || res.Found() {
+			t.Fatalf("%s must be unresolved: %+v", kind, res)
+		}
+	}
+	if byKind[ActionPlan].Wanted != "task-plan" || byKind[ActionImplement].Wanted != "task-implement" || byKind[ActionFixComments].Wanted != "mr-fix-comments" {
+		t.Fatalf("default names: %+v", byKind)
+	}
+
+	// The project adds its own skills: they win over the fallback.
+	write(t, filepath.Join(root, ".claude", "skills", "task-plan", "SKILL.md"), "---\nname: task-plan\ndescription: Plan a task\n---\n")
+	write(t, filepath.Join(root, ".claude", "agents", "mr-review-quick.md"), "---\nname: mr-review-quick\ndescription: Quick diff review\n---\n")
+	if res := r.ForAction(ActionPlan); res.Skill == nil || res.Skill.Kind != KindSkill || res.Skill.Name != "task-plan" || res.Via != "" {
+		t.Fatalf("%+v", res)
+	}
+	if res := r.ForAction(ActionReviewQuick); res.Skill == nil || res.Skill.Kind != KindAgent || res.Skill.Name != "mr-review-quick" || res.Via != "" {
+		t.Fatalf("%+v", res)
+	}
+
+	// Names can be overridden per action (.env SKILL_* variables).
+	r = NewWithNames(root, map[string]string{ActionImplement: "task-plan", ActionReviewFull: "missing-one"})
+	if res := r.ForAction(ActionImplement); res.Skill == nil || res.Skill.Name != "task-plan" || res.Wanted != "task-plan" {
+		t.Fatalf("%+v", res)
+	}
+	// An override that does not exist falls back to the review heuristic for the full review.
+	if res := r.ForAction(ActionReviewFull); res.Skill == nil || res.Skill.Name != "mr-review" || res.Wanted != "missing-one" {
+		t.Fatalf("%+v", res)
+	}
+	if r.ForAction("unknown_kind").Skill != nil || ActionFor("unknown_kind") != nil {
+		t.Fatal("unknown kinds resolve to nothing")
+	}
+}
+
 func TestValidateMissingName(t *testing.T) {
 	root := project(t)
 	write(t, filepath.Join(root, ".claude", "agents", "mr-review.md"), "---\ndescription: x\n---\nbody")

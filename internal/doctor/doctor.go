@@ -94,7 +94,7 @@ func Run(s *config.Settings, version string, gl gitlab.Client, runners []rn.Runn
 		} else {
 			add(Check{"Git repository", FAIL, root + " has no .git", "PROJECT_ROOT must point at the main project's git working copy."})
 		}
-		resolver := skill.New(root, s.ReviewSkill)
+		resolver := skill.NewWithNames(root, s.SkillNames)
 		var instructions []string
 		for _, f := range resolver.InstructionFiles() {
 			if f.Kind == "claude-md" || f.Kind == "agents-md" {
@@ -114,19 +114,8 @@ func Run(s *config.Settings, version string, gl gitlab.Client, runners []rn.Runn
 		} else {
 			add(Check{"Project Claude config", WARN, ".claude/ not found", "Project-local agents/skills live in .claude/. Sync it to this machine if the project keeps it out of git."})
 		}
-		if sk := resolver.Resolve(); sk == nil {
-			name := s.ReviewSkill
-			if name == "" {
-				name = skill.DefaultName
-			}
-			add(Check{"Review skill", WARN, "none detected", fmt.Sprintf("Expected .claude/agents/%s.md (or a command/skill mentioning MR review). Reviews fall back to CLAUDE.md rules plus the dashboard prompt.", name)})
-		} else {
-			v := resolver.Validate(*sk)
-			status := OK
-			if !v.OK {
-				status = FAIL
-			}
-			add(Check{"Review skill", status, fmt.Sprintf("%s  (%s; run as `%s`)", sk.Identifier(), sk.RelPath, sk.Invocation()), strings.Join(v.Problems, "; ")})
+		for _, res := range resolver.Map() {
+			add(SkillCheck(resolver, res))
 		}
 		if host, path, ok := gitlab.ProjectFromGitRemote(root); ok {
 			add(Check{"GitLab project", OK, path + " @ " + host, ""})
@@ -205,6 +194,27 @@ func Run(s *config.Settings, version string, gl gitlab.Client, runners []rn.Runn
 	}
 	add(Check{"Server", OK, s.URL(), ""})
 	return report
+}
+
+// SkillCheck describes how one dashboard action is backed by the project: its own skill (OK), the fallback
+// action's skill or no skill at all (WARN: the run works on CLAUDE.md plus the dashboard prompt), or a skill
+// file that Claude Code cannot use (FAIL).
+func SkillCheck(resolver *skill.Resolver, res skill.Resolution) Check {
+	name := "Skill: " + res.Action.Kind
+	howTo := fmt.Sprintf("Create .claude/skills/%s/SKILL.md or .claude/agents/%s.md in the project (or point %s at an existing one). Expected behaviour: %s",
+		res.Wanted, res.Wanted, res.Action.EnvKey, res.Action.Contract)
+	switch {
+	case res.Skill == nil:
+		return Check{name, WARN, fmt.Sprintf("%s not found; runs use CLAUDE.md / AGENTS.md + dashboard prompt", res.Wanted), howTo}
+	case res.Via != "":
+		return Check{name, WARN, fmt.Sprintf("%s not found; using the %s skill %s (%s)", res.Wanted, res.Via, res.Skill.Identifier(), res.Skill.RelPath), howTo}
+	}
+	v := resolver.Validate(*res.Skill)
+	status := OK
+	if !v.OK {
+		status = FAIL
+	}
+	return Check{name, status, fmt.Sprintf("%s  (%s; run as `%s`)", res.Skill.Identifier(), res.Skill.RelPath, res.Skill.Invocation()), strings.Join(v.Problems, "; ")}
 }
 
 func writable(dir string) error {

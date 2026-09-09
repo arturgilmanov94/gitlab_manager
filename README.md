@@ -31,7 +31,10 @@ skills, соглашения о ветках и коммитах. Этот ин�
 
 - каждый запуск агента стартует **из корня проекта** (`cwd = PROJECT_ROOT`), поэтому Claude Code загружает
   `CLAUDE.md`, агентов, skills и settings проекта ровно как в интерактивной сессии;
-- review-skill **обнаруживается, а не копируется**: после `git pull` проекта поведение ревью меняется само;
+- **каждое действие ищет свой skill в проекте**: ревью → `mr-review`, быстрое ревью → `mr-review-quick`,
+  проверка изменений → `mr-review-verify`, исправление замечаний → `mr-fix-comments`, исследование задачи →
+  `task-plan`, решение задачи → `task-implement`. Skill **обнаруживается, а не копируется**: после `git pull`
+  проекта поведение меняется само. Полная карта и контракт для авторов skill — [docs/SKILLS.md](docs/SKILLS.md);
 - GitLab — только через уже авторизованный `glab`; токены не хранятся и не переносятся между машинами;
 - всё, что агент меняет в коде, происходит в **отдельных git worktree** внутри `runtime/`; ваша рабочая
   копия и текущая ветка никогда не трогаются;
@@ -53,7 +56,7 @@ claude            # залогиниться и выйти
 
 # распаковать рядом с проектом
 cd ~/projects                                    # здесь лежит tradernet/
-tar -xzf mr-review-0.2.0-linux-amd64.tar.gz      # появится ~/projects/mr-review/
+tar -xzf mr-review-0.4.0-linux-amd64.tar.gz      # появится ~/projects/mr-review/
 
 cd mr-review
 ./mr-review doctor                               # всё ли найдено
@@ -77,7 +80,12 @@ Project root           OK    /home/me/projects/tradernet  (via sibling)
 Git repository         OK
 Project instructions   OK    .claude/CLAUDE.md, AGENTS.md
 Project Claude config  OK    .claude/  (agents: 1, skills: 2)
-Review skill           OK    agent:mr-review  (.claude/agents/mr-review.md; run as `claude --agent mr-review`)
+Skill: review_full     OK    agent:mr-review  (.claude/agents/mr-review.md; run as `claude --agent mr-review`)
+Skill: review_quick    WARN  mr-review-quick not found; using the review_full skill agent:mr-review (...)
+Skill: review_verify   WARN  mr-review-verify not found; using the review_full skill agent:mr-review (...)
+Skill: fix_comments    WARN  mr-fix-comments not found; runs use CLAUDE.md / AGENTS.md + dashboard prompt
+Skill: plan            WARN  task-plan not found; runs use CLAUDE.md / AGENTS.md + dashboard prompt
+Skill: implement       WARN  task-implement not found; runs use CLAUDE.md / AGENTS.md + dashboard prompt
 GitLab project         OK    tn/core/tradernet @ gitlab.example.com
 Worktree directory     OK    /home/me/projects/mr-review/runtime/worktrees  (branches start from origin/develop)
 Agent: claude          OK    /home/me/.local/bin/claude  2.1.263 (Claude Code)
@@ -91,6 +99,10 @@ Server                 OK    http://127.0.0.1:8765
 
 Ready to run.
 ```
+
+WARN у `Skill:` не мешает работать: действие без своего skill идёт по правилам `CLAUDE.md` и промпту dashboard
+(быстрое ревью и проверка изменений берут skill полного ревью). Чтобы действие работало «как ваш агент»,
+опишите в проекте skill с ожидаемым именем — что он должен делать, написано в `docs/SKILLS.md` и в самой строке doctor.
 
 ## С чего начать
 
@@ -134,6 +146,9 @@ Ready to run.
 
 - Переключатель агента **Claude / Codex / Cursor** на каждый запуск; показываются только установленные.
   Модель специально не выбирается: за неё отвечают правила и агенты проекта.
+- Параллельная работа: `RUN_CONCURRENCY` агентов одновременно по **разным** MR и задачам; по одному и тому же
+  объекту второй запуск отклоняется, пока активен первый. Каждый запуск в своём каталоге (корень проекта или
+  собственный worktree) и со своим логом.
 - У каждой кнопки подсказка при наведении: что произойдёт после нажатия. Недоступные действия объясняют причину.
 - Полный контракт действий по состояниям: [docs/UX_ACTIONS.md](docs/UX_ACTIONS.md); аудит и план: [docs/UX_AUDIT.md](docs/UX_AUDIT.md), [docs/ROADMAP.md](docs/ROADMAP.md).
 - Состояния запусков: в очереди, выполняется (спиннер, полоса прогресса, таймер), завершён, не вышло, отменён.
@@ -158,11 +173,14 @@ Ready to run.
    родительские каталоги → единственный соседний репозиторий с инструкциями для агентов (`CLAUDE.md`,
    `AGENTS.md`, `.claude/CLAUDE.md` или `.claude/{agents,commands,skills,rules}`). При нескольких кандидатах
    doctor перечислит их готовыми командами.
-2. **Обнаружение review-skill.** Сканируются `.claude/agents/*.md` (запуск `claude --agent <name>`),
-   `.claude/commands/**/*.md` и `.claude/skills/*/SKILL.md` (slash-команда в промпте). Берётся `mr-review`
-   (`REVIEW_SKILL=` переопределяет), иначе первая запись, чьё имя/описание упоминают ревью merge request.
-   Хранится только идентификатор вида `agent:mr-review` и относительный путь; файл валидируется при каждом doctor.
-   Без skill ревью работает по `CLAUDE.md`/`AGENTS.md` плюс минимальный промпт dashboard.
+2. **Обнаружение skill проекта для каждого действия.** Сканируются `.claude/agents/*.md` (запуск
+   `claude --agent <name>`), `.claude/commands/**/*.md` и `.claude/skills/*/SKILL.md` (slash-команда первой
+   строкой промпта). Для каждого действия ищется своё имя (`mr-review`, `mr-review-quick`, `mr-review-verify`,
+   `mr-fix-comments`, `task-plan`, `task-implement`; переопределяется `SKILL_*` в `.env`). Быстрое ревью и
+   проверка изменений без своего skill берут skill полного ревью; для полного ревью без точного имени подходит
+   первая запись, чьё имя/описание упоминают ревью merge request. Хранится только идентификатор вида
+   `agent:mr-review`; файл валидируется при каждом doctor. Без skill действие работает по `CLAUDE.md`/`AGENTS.md`
+   плюс минимальный промпт dashboard. Карта и контракт: [docs/SKILLS.md](docs/SKILLS.md).
 3. **Промпт dashboard** добавляет только то, что нужно интерфейсу: ссылку и head SHA, режим, требование
    read-only (или правила работы в worktree) и JSON-схему результата. Правила проекта не дублируются.
 4. **Структурированный результат.** Claude Code вызывается с `--json-schema`; findings (severity, файл, строка,
@@ -182,7 +200,7 @@ Ready to run.
 ./mr-review stop | status
 ./mr-review doctor       # проверка окружения; exit code 1 при FAIL
 ./mr-review init-db      # создать/обновить схему SQLite (делается и при старте)
-./mr-review skill        # какой review-skill и какие файлы инструкций найдены в проекте
+./mr-review skill        # карта «действие → skill проекта» и найденные файлы инструкций
 ./mr-review config       # эффективные настройки
 ./mr-review sync         # MR + задачи
 ./mr-review add <url>    # MR или issue по ссылке
@@ -201,14 +219,14 @@ Ready to run.
 | `PROJECT_ROOT` | auto | Рабочая копия основного проекта |
 | `HOST`, `PORT`, `OPEN_BROWSER` | `127.0.0.1`, `8765`, `1` | Сервер и автозапуск браузера при запуске без аргументов |
 | `DATABASE_PATH`, `LOG_DIR`, `RUNTIME_DIR`, `WORKTREE_DIR` | `./data/reviews.sqlite`, `./logs`, `./runtime`, `./runtime/worktrees` | Где хранить данные |
-| `REVIEW_SKILL` | auto (`mr-review`) | Имя review-агента/команды/скилла проекта |
+| `SKILL_REVIEW_FULL`, `SKILL_REVIEW_QUICK`, `SKILL_REVIEW_VERIFY`, `SKILL_FIX_COMMENTS`, `SKILL_PLAN`, `SKILL_IMPLEMENT` | `mr-review`, `mr-review-quick`, `mr-review-verify`, `mr-fix-comments`, `task-plan`, `task-implement` | Имена агентов/команд/skills проекта на каждое действие ([docs/SKILLS.md](docs/SKILLS.md)); `REVIEW_SKILL` — старый алиас `SKILL_REVIEW_FULL` |
 | `CLAUDE_BIN`, `CODEX_BIN`, `DEFAULT_RUNNER` | `claude`, `codex`, `claude` | Агенты (Cursor ищется как `cursor-agent`) |
 | `CLAUDE_MAX_BUDGET_USD`, `RUN_TIMEOUT_SEC` | пусто, `1800` | Лимиты на запуск (бюджет Claude Code считает по API-прайсу, даже при подписке) |
 | `CLAUDE_EXTRA_ALLOWED_TOOLS` | пусто | Дополнительные инструменты для read-only запусков, например `Bash(php *)` |
 | `GLAB_BIN`, `GITLAB_HOST`, `GITLAB_PROJECT` | `glab`, из `git remote`, из `git remote` | GitLab; host/project задаются вручную, если remote не разбирается |
 | `GITLAB_SYNC_ROLES`, `GITLAB_SYNC_ONLY_PROJECT` | `reviewer,assignee,author`, `1` | Что синхронизировать (author = мои MR) |
 | `BASE_BRANCH` | `develop` | От чего создаются ветки задач |
-| `RUN_CONCURRENCY` | `1` | Сколько запусков агентов параллельно |
+| `RUN_CONCURRENCY` | `1` | Сколько агентов работают одновременно (по разным MR/задачам; один объект — один активный запуск) |
 
 ## Безопасность относительно проекта
 
@@ -226,7 +244,7 @@ Ready to run.
 cmd/mr-review/          CLI и жизненный цикл сервера (start/stop/status, открытие браузера)
 internal/config         .env и переменные окружения
 internal/projectroot    определение PROJECT_ROOT
-internal/skill          ReviewSkillResolver: агенты, команды, skills проекта
+internal/skill          карта действий → skills проекта (Actions), resolver агентов/команд/skills
 internal/gitlab         клиент glab, разбор ссылок и remote
 internal/runner         интерфейс Runner и реализации: claude, codex, cursor
 internal/prompts        добавления dashboard к промпту и JSON-схемы результатов
@@ -263,7 +281,7 @@ CLI и включаются только при наличии бинарник�
 |---|---|
 | `… is already served by another mr-review instance` | Запущена другая копия. Остановите её там (`./mr-review stop`) или выберите порт: `PORT=8766 ./mr-review`. |
 | `Project root FAIL: Several sibling git repositories…` | Рядом несколько проектов с правилами для агентов. Укажите нужный: `PROJECT_ROOT=../tradernet` в `.env`. |
-| `Review skill WARN: none detected` | В чекауте нет `.claude/agents/mr-review.md` (в проекте `.claude/` часто вне git). Синхронизируйте `.claude/`; ревью пока идёт по `CLAUDE.md`. |
+| `Skill: <действие> WARN … not found` | В проекте нет skill с ожидаемым именем. Действие работает по `CLAUDE.md` (ревью-варианты — по skill полного ревью). Создайте `.claude/skills/<имя>/SKILL.md` или укажите своё имя в `SKILL_*` (`.env`); контракт — [docs/SKILLS.md](docs/SKILLS.md). Если `.claude/` проекта вне git — синхронизируйте его. |
 | `GitLab access FAIL` | `glab auth login --hostname <host>` на этой машине. |
 | Запуск завис или слишком дорог | Кнопка «Отменить»; лимиты `RUN_TIMEOUT_SEC`, `CLAUDE_MAX_BUDGET_USD`. |
 | Хочу посмотреть, что именно получил агент | Страница запуска → «Промпт» и «Полный лог». |

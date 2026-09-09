@@ -116,12 +116,29 @@ func (s *Service) CurrentUser() string {
 	return s.username
 }
 
-// Skill resolves the project review skill (nil when none).
-func (s *Service) Skill() *skill.Skill {
+// Skill resolves the project full-review skill (nil when none). Shown in the UI header.
+func (s *Service) Skill() *skill.Skill { return s.SkillFor(skill.ActionReviewFull) }
+
+// SkillFor resolves the project skill that backs a run kind (nil when the project has none: the run then
+// follows CLAUDE.md / AGENTS.md plus the dashboard prompt). The lookup is repeated on every run so a
+// `git pull` of the project changes behaviour without restarting the dashboard.
+func (s *Service) SkillFor(kind string) *skill.Skill {
 	if s.Settings.ProjectRoot == "" {
 		return nil
 	}
-	return skill.New(s.Settings.ProjectRoot, s.Settings.ReviewSkill).Resolve()
+	return s.resolver().ForAction(kind).Skill
+}
+
+// SkillMap resolves every dashboard action to its project skill (for doctor and the UI).
+func (s *Service) SkillMap() []skill.Resolution {
+	if s.Settings.ProjectRoot == "" {
+		return nil
+	}
+	return s.resolver().Map()
+}
+
+func (s *Service) resolver() *skill.Resolver {
+	return skill.NewWithNames(s.Settings.ProjectRoot, s.Settings.SkillNames)
 }
 
 // Recover marks runs interrupted by a restart as failed and backfills token counters of old runs.
@@ -186,10 +203,7 @@ func (s *Service) pickRunner(name string) (runner.Runner, error) {
 	if len(s.Runners) == 0 {
 		return nil, userErr("no coding agent found: install Claude Code (claude), Codex (codex) or Cursor CLI (cursor-agent)")
 	}
-	for _, r := range s.Runners {
-		return r, nil
-	}
-	return nil, userErr("runner %q is not available", name)
+	return nil, userErr("runner %q is not available on this machine", name)
 }
 
 // ---------------------------------------------------------------------------------- merge requests
@@ -399,7 +413,7 @@ func (s *Service) StartReview(mrID int64, kind, runnerName string) (int64, error
 	if err != nil {
 		return 0, err
 	}
-	run := db.Run{Kind: kind, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), SkillIdentifier: skillID(s.Skill())}
+	run := db.Run{Kind: kind, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), SkillIdentifier: skillID(s.SkillFor(kind))}
 	if kind == db.KindReviewVerify {
 		base, _ := s.DB.LatestDoneReview(mrID)
 		if base == nil {
@@ -430,7 +444,7 @@ func (s *Service) StartFixComments(mrID int64, runnerName, notes string) (int64,
 		return 0, userErr("the merge request has no source branch")
 	}
 	run := db.Run{Kind: db.KindFixComments, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), Notes: notes,
-		Branch: mr.SourceBranch, WorkDir: s.Worktrees.Path(mr.SourceBranch)}
+		Branch: mr.SourceBranch, WorkDir: s.Worktrees.Path(mr.SourceBranch), SkillIdentifier: skillID(s.SkillFor(db.KindFixComments))}
 	return s.enqueue(run)
 }
 
@@ -450,7 +464,7 @@ func (s *Service) StartPlan(issueID int64, runnerName, notes string) (int64, err
 	if err != nil {
 		return 0, err
 	}
-	return s.enqueue(db.Run{Kind: db.KindPlan, IssueID: &issue.ID, Runner: r.Name(), Notes: notes})
+	return s.enqueue(db.Run{Kind: db.KindPlan, IssueID: &issue.ID, Runner: r.Name(), Notes: notes, SkillIdentifier: skillID(s.SkillFor(db.KindPlan))})
 }
 
 // StartImplement queues an edit run in a worktree on `branch` (default: the issue reference).
@@ -477,7 +491,7 @@ func (s *Service) StartImplement(issueID int64, runnerName, notes, branch string
 		return 0, userErr("invalid branch name %q", branch)
 	}
 	return s.enqueue(db.Run{Kind: db.KindImplement, IssueID: &issue.ID, Runner: r.Name(), Notes: notes,
-		Branch: branch, WorkDir: s.Worktrees.Path(branch)})
+		Branch: branch, WorkDir: s.Worktrees.Path(branch), SkillIdentifier: skillID(s.SkillFor(db.KindImplement))})
 }
 
 func (s *Service) enqueue(run db.Run) (int64, error) {
@@ -604,8 +618,14 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 	}
 	logln(fmt.Sprintf("run #%d kind=%s runner=%s", runID, run.Kind, run.Runner))
 
-	// Build the prompt and decide where to run.
-	sk := s.Skill()
+	// Build the prompt and decide where to run. The project skill for this action is authoritative:
+	// an agent is selected with --agent, a command/skill is invoked as a slash command inside the prompt.
+	sk := s.SkillFor(run.Kind)
+	if sk != nil {
+		logln("project skill: " + sk.Identifier() + " (" + sk.RelPath + ")")
+	} else {
+		logln("project skill: none for " + run.Kind + "; using CLAUDE.md / AGENTS.md and the dashboard prompt")
+	}
 	req := runner.Request{
 		Dir:          s.Settings.ProjectRoot,
 		Mode:         runner.ModeReadOnly,
@@ -614,7 +634,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		Timeout:      time.Duration(s.Settings.RunTimeoutSec) * time.Second,
 		Log:          log,
 	}
-	if sk != nil && sk.Kind == skill.KindAgent && run.IsReview() {
+	if sk != nil && sk.Kind == skill.KindAgent {
 		req.Agent = sk.Name
 	}
 	var previous []db.Finding
@@ -662,7 +682,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			return
 		}
 		req.Dir, req.Mode = path, runner.ModeEdit
-		req.Prompt, req.Schema = prompts.FixComments(promptMR(mr), run.Notes), prompts.FixSchema
+		req.Prompt, req.Schema = prompts.FixComments(promptMR(mr), run.Notes, sk), prompts.FixSchema
 		req.SessionName = fmt.Sprintf("fix-comments !%d #%d", mr.IID, runID)
 	case db.KindPlan, db.KindImplement:
 		issue, _ := s.DB.GetIssue(*run.IssueID)
@@ -672,7 +692,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		}
 		pi := prompts.Issue{WebURL: issue.WebURL, ProjectPath: issue.ProjectPath, Host: issue.GitLabHost, IID: issue.IID, Title: issue.Title, Description: issue.Description}
 		if run.Kind == db.KindPlan {
-			req.Prompt, req.Schema = prompts.Plan(pi, run.Notes), prompts.PlanSchema
+			req.Prompt, req.Schema = prompts.Plan(pi, run.Notes, sk), prompts.PlanSchema
 			req.SessionName = fmt.Sprintf("plan #%d run %d", issue.IID, runID)
 		} else {
 			path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
@@ -681,7 +701,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 				return
 			}
 			req.Dir, req.Mode = path, runner.ModeEdit
-			req.Prompt, req.Schema = prompts.Implement(pi, run.Notes, run.Branch, s.Settings.BaseBranch), prompts.ImplementSchema
+			req.Prompt, req.Schema = prompts.Implement(pi, run.Notes, run.Branch, s.Settings.BaseBranch, sk), prompts.ImplementSchema
 			req.SessionName = fmt.Sprintf("implement #%d run %d", issue.IID, runID)
 		}
 	default:

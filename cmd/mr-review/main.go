@@ -41,7 +41,7 @@ func usage() {
   status         is the server running?
   doctor         check the environment (exit code 1 when something FAILs)
   init-db        create/upgrade the SQLite database
-  skill          show the detected project review skill and instruction files
+  skill          map of dashboard actions to project skills, plus the instruction files found
   config         print the effective settings
   sync           pull your open MRs and issues from GitLab
   add <ref>      add a merge request (URL / !iid) or an issue (URL / #iid)
@@ -242,16 +242,25 @@ func showSkill(settings *config.Settings) int {
 	if settings.ProjectRoot == "" {
 		return fail("%s", settings.ProjectRootError)
 	}
-	resolver := skill.New(settings.ProjectRoot, settings.ReviewSkill)
-	fmt.Printf("project root: %s (via %s)\n", settings.ProjectRoot, settings.ProjectRootSource)
-	if sk := resolver.Resolve(); sk == nil {
-		fmt.Println("review skill: none detected")
-	} else {
-		v := resolver.Validate(*sk)
-		fmt.Printf("review skill: %s\n  path:        %s\n  invocation:  %s\n  description: %s\n  valid:       %v %s\n",
-			sk.Identifier(), sk.RelPath, sk.Invocation(), sk.Description, v.OK, strings.Join(v.Problems, "; "))
+	resolver := skill.NewWithNames(settings.ProjectRoot, settings.SkillNames)
+	fmt.Printf("project root: %s (via %s)\n\n", settings.ProjectRoot, settings.ProjectRootSource)
+	fmt.Println("actions → project skills (every action first looks for its project skill; see docs/SKILLS.md):")
+	for _, res := range resolver.Map() {
+		found := "—  (CLAUDE.md / AGENTS.md + dashboard prompt)"
+		switch {
+		case res.Skill != nil && res.Via != "":
+			found = fmt.Sprintf("via %s → %s  (%s)", res.Via, res.Skill.Identifier(), res.Skill.RelPath)
+		case res.Skill != nil:
+			v := resolver.Validate(*res.Skill)
+			found = fmt.Sprintf("%s  (%s)", res.Skill.Identifier(), res.Skill.RelPath)
+			if !v.OK {
+				found += "  INVALID: " + strings.Join(v.Problems, "; ")
+			}
+		}
+		fmt.Printf("  %-14s wants %-18s %s\n", res.Action.Kind, res.Wanted, found)
+		fmt.Printf("  %-14s       %-18s %s\n", "", "", res.Action.Contract)
 	}
-	fmt.Println("candidates:")
+	fmt.Println("\ncandidates:")
 	for _, c := range resolver.Candidates() {
 		fmt.Printf("  - %-30s %s\n", c.Identifier(), c.RelPath)
 	}
@@ -270,7 +279,10 @@ func showConfig(settings *config.Settings) int {
 	fmt.Printf("logs:            %s\n", settings.LogDir)
 	fmt.Printf("runtime:         %s\n", settings.RuntimeDir)
 	fmt.Printf("worktrees:       %s (base branch %s)\n", settings.WorktreeDir, settings.BaseBranch)
-	fmt.Printf("review_skill:    %s\n", firstOf(settings.ReviewSkill, "(auto)"))
+	for _, action := range skill.Actions {
+		fmt.Printf("%-20s %s\n", strings.ToLower(action.EnvKey)+":", firstOf(settings.SkillNames[action.Kind], "(auto: "+action.SkillName+")"))
+	}
+	fmt.Printf("run_concurrency: %d\n", settings.RunConcurrency)
 	fmt.Printf("default_runner:  %s\n", settings.DefaultRunner)
 	fmt.Printf("gitlab_host:     %s\n", firstOf(settings.GitLabHost, "(from git remote)"))
 	return 0

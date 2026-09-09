@@ -56,6 +56,26 @@ func NewFakeGitLab() *FakeGitLab {
 	return &FakeGitLab{MRs: map[int64]map[string]any{42: MRPayload(42, "sha-1")}, Issues: map[int64]map[string]any{7: IssuePayload(7)}, Unresolved: map[int64]int64{42: 2}}
 }
 
+// AddProjectSkill writes a project skill (.claude/skills/<name>/SKILL.md) into the fixture project.
+func AddProjectSkill(t *testing.T, root, name, description string) {
+	t.Helper()
+	dir := filepath.Join(root, ".claude", "skills", name)
+	_ = os.MkdirAll(dir, 0o755)
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: "+description+"\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// AddProjectAgent writes a project agent (.claude/agents/<name>.md) into the fixture project.
+func AddProjectAgent(t *testing.T, root, name, description string) {
+	t.Helper()
+	dir := filepath.Join(root, ".claude", "agents")
+	_ = os.MkdirAll(dir, 0o755)
+	if err := os.WriteFile(filepath.Join(dir, name+".md"), []byte("---\nname: "+name+"\ndescription: "+description+"\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (f *FakeGitLab) Detect() (string, string, bool) { return "/fake/glab", "fake", true }
 func (f *FakeGitLab) AuthStatus(host string) (bool, string) {
 	return true, "Logged in to gitlab.example.com as me"
@@ -107,6 +127,10 @@ type FakeRunner struct {
 	Texts    []string // plain-text answers for follow-ups
 	Session  string
 }
+
+// Lock/Unlock guard Requests for tests that inspect them while runs are in flight.
+func (f *FakeRunner) Lock()   { f.mu.Lock() }
+func (f *FakeRunner) Unlock() { f.mu.Unlock() }
 
 func (f *FakeRunner) Name() string                   { return "claude" }
 func (f *FakeRunner) Detect() (string, string, bool) { return "/fake/claude", "fake", true }
@@ -204,7 +228,9 @@ func GitRepo(t *testing.T, dir string) string {
 		}
 	}
 	_ = os.MkdirAll(dir, 0o755)
-	run("init", "-q", "-b", "develop")
+	run("init", "-q")
+	run("symbolic-ref", "HEAD", "refs/heads/develop") // `git init -b` needs git 2.28+
+
 	_ = os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# rules\n"), 0o644)
 	_ = os.MkdirAll(filepath.Join(dir, ".claude", "agents"), 0o755)
 	_ = os.WriteFile(filepath.Join(dir, ".claude", "agents", "mr-review.md"), []byte("---\nname: mr-review\ndescription: Review merge requests\n---\nbody\n"), 0o644)

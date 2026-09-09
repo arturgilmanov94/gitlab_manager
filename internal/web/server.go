@@ -425,7 +425,7 @@ func (s *Server) runLog(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) doctorPage(w http.ResponseWriter, r *http.Request) {
 	rep := doctor.Run(s.svc.Settings, s.version, s.svc.GitLab, s.runners)
-	s.render(w, "doctor", map[string]any{"Base": s.base("doctor", "Doctor"), "Report": rep})
+	s.render(w, "doctor", map[string]any{"Base": s.base("doctor", "Doctor"), "Report": rep, "Skills": s.svc.SkillMap()})
 }
 
 // ---------------------------------------------------------------------------------- api
