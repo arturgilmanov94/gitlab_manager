@@ -126,6 +126,84 @@ func TestPagesAndFlow(t *testing.T) {
 	}
 }
 
+func TestPermissionPromptPage(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	code, out := postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	fr.AskWrite("/tmp/claude/probe.txt")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	code, out = postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "full"})
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	runURL := out["redirect"].(string)
+	runID := strings.TrimPrefix(runURL, "/run/")
+	testutil.WaitFor(t, func() bool {
+		_, body := get(t, ts.URL+"/api/runs/"+runID)
+		return strings.Contains(body, `"status":"waiting"`) && strings.Contains(body, `"pending_approval"`)
+	})
+	if _, body := get(t, ts.URL+runURL); !strings.Contains(body, "Нужен ваш ответ: агент просит разрешение") || !strings.Contains(body, "/tmp/claude/probe.txt") || !strings.Contains(body, "Разрешить и не спрашивать") {
+		t.Fatal("run page must show the permission prompt with allow/allow_always/deny")
+	}
+	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "Ответить агенту") || !strings.Contains(body, "⚠ Нужен ваш ответ") {
+		t.Fatal("list and header must point at the waiting run")
+	}
+	pending, _ := svc.DB.PendingApproval(1)
+	if code, out := postJSON(t, ts.URL+"/api/approvals/"+strings.TrimSpace(strconvI(pending.ID)), map[string]any{"decision": "bogus"}); code != 400 || out["error"] == nil {
+		t.Fatalf("%d %v", code, out)
+	}
+	if code, out := postJSON(t, ts.URL+"/api/approvals/"+strconvI(pending.ID), map[string]any{"decision": "deny", "note": "not now"}); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool {
+		_, body := get(t, ts.URL+"/api/runs/"+runID)
+		return strings.Contains(body, `"status":"done"`)
+	})
+	if _, body := get(t, ts.URL+runURL); !strings.Contains(body, "Разрешения в этой сессии") || !strings.Contains(body, "✕ отклонено: not now") || !strings.Contains(body, "Отклонено автоматически") {
+		t.Fatal("run page must list the answered prompt and the automatic denials")
+	}
+}
+
+func TestPlanFileExport(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	svc.Settings.PlansDir = t.TempDir()
+	postJSON(t, ts.URL+"/api/issues", map[string]any{"url": "#7"})
+	fr.Outputs = []map[string]any{testutil.PlanOutput()}
+	_, out := postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "plan"})
+	runURL := out["redirect"].(string)
+	testutil.WaitFor(t, func() bool {
+		_, body := get(t, ts.URL+"/api/runs/"+strings.TrimPrefix(runURL, "/run/"))
+		return strings.Contains(body, `"status":"done"`)
+	})
+	if _, body := get(t, ts.URL+runURL); !strings.Contains(body, "Сохранить план в проект") {
+		t.Fatal("plan page must offer the export")
+	}
+	code, out := postJSON(t, ts.URL+"/api/runs/"+strings.TrimPrefix(runURL, "/run/")+"/plan-file", map[string]any{})
+	if code != 200 || !strings.HasPrefix(out["path"].(string), svc.Settings.PlansDir) {
+		t.Fatalf("%d %v", code, out)
+	}
+	if _, body := get(t, ts.URL+runURL); !strings.Contains(body, "файл плана:") || !strings.Contains(body, out["path"].(string)) {
+		t.Fatal("plan page must show the exported file path")
+	}
+}
+
+func strconvI(v int64) string { return strings.TrimSpace(fmtInt(v)) }
+
+func fmtInt(v int64) string {
+	const digits = "0123456789"
+	if v == 0 {
+		return "0"
+	}
+	var buf []byte
+	for v > 0 {
+		buf = append([]byte{digits[v%10]}, buf...)
+		v /= 10
+	}
+	return string(buf)
+}
+
 func TestIssuesPages(t *testing.T) {
 	ts, _, fr := newServer(t)
 	code, out := postJSON(t, ts.URL+"/api/issues", map[string]any{"url": "https://gitlab.example.com/group/sub/project/-/issues/7"})

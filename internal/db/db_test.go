@@ -21,8 +21,44 @@ func open(t *testing.T) *DB {
 func TestMigrateIdempotent(t *testing.T) {
 	d := open(t)
 	applied, err := d.Migrate()
-	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 2 {
+	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 3 {
 		t.Fatalf("%v %v %v", applied, err, d.SchemaVersion())
+	}
+}
+
+func TestApprovalsAndWaitingRuns(t *testing.T) {
+	d := open(t)
+	mr, _ := d.UpsertMR(MergeRequest{GitLabHost: "gl", ProjectPath: "g/p", IID: 1, WebURL: "u"})
+	runID, _ := d.CreateRun(Run{Kind: KindReviewFull, MRID: &mr.ID, Runner: "claude"})
+	_ = d.UpdateRun(runID, map[string]any{"status": StatusWaiting, "progress": "Нужен ваш ответ"})
+	if active, _ := d.ActiveRunForMR(mr.ID); active == nil || !active.Active() || active.Progress == "" {
+		t.Fatal("a waiting run is active")
+	}
+	id, err := d.CreateApproval(Approval{RunID: runID, ToolName: "Write", Description: "/x", InputJSON: `{"file_path":"/x"}`, Reason: "outside"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := d.PendingApproval(runID); p == nil || p.ID != id || !p.Pending() {
+		t.Fatalf("%+v", p)
+	}
+	if all, _ := d.PendingApprovals(); len(all) != 1 {
+		t.Fatalf("%+v", all)
+	}
+	_ = d.DecideApproval(id, ApprovalAllowed, true, "")
+	if p, _ := d.PendingApproval(runID); p != nil {
+		t.Fatal("answered prompt is not pending")
+	}
+	list, _ := d.ListApprovals(runID)
+	if len(list) != 1 || list[0].Status != ApprovalAllowed || !list[0].Remember || list[0].DecidedAt == "" {
+		t.Fatalf("%+v", list)
+	}
+	// A restart fails the waiting run and expires whatever was still pending.
+	second, _ := d.CreateApproval(Approval{RunID: runID, ToolName: "Bash"})
+	if n, _ := d.FailStaleRuns("restart"); n != 1 {
+		t.Fatal("waiting run must be failed on restart")
+	}
+	if a, _ := d.GetApproval(second); a.Status != ApprovalExpired {
+		t.Fatalf("%+v", a)
 	}
 }
 

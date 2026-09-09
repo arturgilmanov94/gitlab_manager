@@ -42,9 +42,27 @@
   {{end}}
 </section>
 
+{{if .Pending}}
+<div class="approval-box" id="approval">
+  <h2>⚠ Нужен ваш ответ: агент просит разрешение</h2>
+  <div>Инструмент <b>{{.Pending.ToolName}}</b>{{if .Pending.Description}} — <span class="mono">{{.Pending.Description}}</span>{{end}}</div>
+  {{if .Pending.Reason}}<div class="small secondary">Почему спрашивает: {{.Pending.Reason}}</div>{{end}}
+  <div class="call">{{prettyJSON .Pending.InputJSON}}</div>
+  <div class="field"><label for="deny-note">Комментарий агенту</label><div style="flex:1"><textarea id="deny-note" rows="2" placeholder="Необязательно. Передаётся агенту при отказе: что сделать вместо этого."></textarea></div></div>
+  <div class="actions">
+    <button class="btn btn-primary tip" data-tip="{{kindTip "allow"}}" onclick="decide({{.Pending.ID}}, 'allow', this)">Разрешить</button>
+    {{if .Pending.SuggestionsJSON}}<button class="btn tip" data-tip="{{kindTip "allow_always"}}" onclick="decide({{.Pending.ID}}, 'allow_always', this)">Разрешить и не спрашивать в этой сессии</button>{{end}}
+    <button class="btn btn-danger tip" data-tip="{{kindTip "deny"}}" onclick="decide({{.Pending.ID}}, 'deny', this)">Отклонить</button>
+    <span class="small muted">Без ответа запрос истечёт и будет считаться отклонённым.</span>
+  </div>
+  {{if .Pending.SuggestionsJSON}}<details class="section"><summary>Правила, которые предлагает агент</summary><pre class="log">{{prettyJSON .Pending.SuggestionsJSON}}</pre></details>{{end}}
+</div>
+{{end}}
+
 {{if .Run.Active}}
 <div class="progress-box" data-started="{{.Run.StartedAt}}">
-  <div class="progress-head">{{template "status" .Run.Status}} агент работает · <span class="elapsed">—</span> · страница обновится сама</div>
+  <div class="progress-head">{{template "status" .Run.Status}} {{if eq .Run.Status "waiting"}}агент ждёт вашего решения выше{{else}}агент работает{{end}} · <span class="elapsed">—</span> · страница обновится сама</div>
+  {{if and .Run.Progress (ne .Run.Status "waiting")}}<div class="progress-now" id="progress-now">сейчас: {{.Run.Progress}}</div>{{end}}
   <div class="progress"><div class="progress-bar indeterminate"></div></div>
 </div>
 {{else if eq .Run.Status "failed"}}
@@ -81,7 +99,9 @@
   {{if .Issue}}<div class="actions left" style="margin-top:12px">
     <button class="btn btn-primary tip" data-tip="{{kindTip "implement_plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {plan_run: '{{.Run.ID}}'})">Реализовать этот план</button>
     <a class="btn" href="/issue/{{.Issue.ID}}#solve">Изменить указания…</a>
-  </div>{{end}}
+    <button class="btn tip" data-tip="{{kindTip "plan-file"}}" onclick="post('/api/runs/{{.Run.ID}}/plan-file', {}, this).then(r => r && (flash('План сохранён: ' + r.path, true), reload()))">{{if .Run.PlanPath}}Сохранить план в проект ещё раз{{else}}Сохранить план в проект{{end}}</button>
+  </div>
+  <div class="small muted" style="margin-top:6px">{{if .Run.PlanPath}}файл плана: <span class="mono">{{.Run.PlanPath}}</span> <button class="btn btn-sm btn-link" onclick="copyText('{{.Run.PlanPath}}')">скопировать путь</button>{{else}}каталог планов: <span class="mono">{{.PlansDir}}</span>{{end}}</div>{{end}}
 </section>
 {{end}}
 
@@ -139,6 +159,31 @@
     <button type="submit" class="btn btn-primary">Отправить</button>
   </form>
   {{else}}<p class="muted small">Сессия недоступна для продолжения: агент {{.Run.Runner}} не вернул её идентификатор.</p>{{end}}
+</section>
+{{end}}
+
+{{if or .Approvals .Denials}}
+<section class="card approvals">
+  <div class="card-head"><h2>Разрешения в этой сессии</h2><span class="small muted tip" data-tip="Запросы агента на действия, которые требовали вашего ответа, и вызовы, которые были отклонены автоматически по правилам dashboard или проекта.">что это?</span></div>
+  {{if .Approvals}}
+  <table class="table compact">
+    <thead><tr><th>Когда</th><th>Инструмент</th><th>Что</th><th>Решение</th></tr></thead>
+    <tbody>
+    {{range .Approvals}}
+    <tr>
+      <td class="small nowrap">{{when .CreatedAt}}</td>
+      <td><b>{{.ToolName}}</b></td>
+      <td class="mono small prewrap">{{.Description}}</td>
+      <td class="a-{{.Status}}">{{if eq .Status "allowed"}}✓ разрешено{{if .Remember}} (и запомнено){{end}}{{else if eq .Status "denied"}}✕ отклонено{{if .Note}}: {{.Note}}{{end}}{{else if eq .Status "expired"}}— без ответа{{else}}⚠ ждёт ответа{{end}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+  {{if .Denials}}<h3>Отклонено автоматически</h3>
+  <table class="table compact"><tbody>
+    {{range .Denials}}<tr><td><b>{{index . "tool_name"}}</b></td><td class="mono small prewrap">{{with index . "tool_input"}}{{or (index . "command") (index . "file_path") (index . "description") ""}}{{end}}</td></tr>{{end}}
+  </tbody></table>{{end}}
 </section>
 {{end}}
 

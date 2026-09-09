@@ -17,7 +17,8 @@
   <thead><tr><th>Задача</th><th>Название</th><th>Состояние</th><th class="right"></th></tr></thead>
   <tbody>
   {{range .Issues}}
-  {{$busy := and .Last (or (eq .Last.Status "running") (eq .Last.Status "queued"))}}
+  {{$busy := and .Last (or (eq .Last.Status "running") (eq .Last.Status "queued") (eq .Last.Status "waiting"))}}
+  {{$waiting := and .Last (eq .Last.Status "waiting")}}
   <tr>
     <td class="nowrap ref-cell"><a class="ref" href="/issue/{{.ID}}">#{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
     <td class="title-cell">
@@ -27,6 +28,7 @@
     <td data-label="Состояние">
       <div class="state-stack">
         {{if not .Last}}<span class="state state-neutral"><span class="glyph">○</span> Новая</span>
+        {{else if $waiting}}<a href="/run/{{.Last.ID}}#approval" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}"><span class="state state-warning"><span class="glyph">⚠</span> Нужен ваш ответ</span></a>
         {{else if $busy}}<a href="/run/{{.Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}"><span class="state state-info"><span class="spinner"></span> {{if eq .Last.Kind "plan"}}Исследуется{{else}}Пишется код{{end}}</span></a>
         {{else if eq .Last.Status "failed"}}<span class="state state-danger"><span class="glyph">✕</span> Ошибка</span><span class="small muted">{{kindLabel .Last.Kind}} · {{when .Last.FinishedAt}}</span>
         {{else if eq .Last.Status "cancelled"}}<span class="state state-neutral"><span class="glyph">—</span> Остановлено вами</span><span class="small muted">{{kindLabel .Last.Kind}} · {{when .Last.FinishedAt}}</span>
@@ -36,7 +38,9 @@
     </td>
     <td class="actions-cell">
       <div class="actions">
-        {{if $busy}}
+        {{if $waiting}}
+          <a class="btn btn-sm btn-primary" href="/run/{{.Last.ID}}#approval">Ответить агенту</a>
+        {{else if $busy}}
           <a class="btn btn-sm btn-primary" href="/run/{{.Last.ID}}">Открыть сессию</a>
         {{else if and .Last (eq .Last.Status "failed")}}
           <a class="btn btn-sm" href="/run/{{.Last.ID}}">Посмотреть ошибку</a>

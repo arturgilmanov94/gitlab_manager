@@ -36,24 +36,32 @@ type Service struct {
 	Runners   map[string]runner.Runner
 	Worktrees *worktree.Manager
 
-	sem      chan struct{}
-	mu       sync.Mutex
-	cancels  map[int64]context.CancelFunc
-	username string
-	userOnce sync.Once
-	project  *[2]string
-	wg       sync.WaitGroup
+	sem       chan struct{}
+	mu        sync.Mutex
+	cancels   map[int64]context.CancelFunc
+	decisions map[int64]chan approvalDecision // pending approval id → channel the run goroutine waits on
+	username  string
+	userOnce  sync.Once
+	project   *[2]string
+	wg        sync.WaitGroup
+}
+
+type approvalDecision struct {
+	allow    bool
+	remember bool
+	note     string
 }
 
 // New wires the service. Only detected runners are kept.
 func New(settings *config.Settings, database *db.DB, gl gitlab.Client, runners []runner.Runner) *Service {
 	s := &Service{
-		Settings: settings,
-		DB:       database,
-		GitLab:   gl,
-		Runners:  map[string]runner.Runner{},
-		sem:      make(chan struct{}, settings.RunConcurrency),
-		cancels:  map[int64]context.CancelFunc{},
+		Settings:  settings,
+		DB:        database,
+		GitLab:    gl,
+		Runners:   map[string]runner.Runner{},
+		sem:       make(chan struct{}, settings.RunConcurrency),
+		cancels:   map[int64]context.CancelFunc{},
+		decisions: map[int64]chan approvalDecision{},
 	}
 	for _, r := range runners {
 		if _, _, ok := r.Detect(); ok {
@@ -629,10 +637,16 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 	req := runner.Request{
 		Dir:          s.Settings.ProjectRoot,
 		Mode:         runner.ModeReadOnly,
+		Policy:       s.policy(),
+		ProtectDirs:  []string{s.Settings.ProjectRoot},
 		ExtraTools:   s.Settings.ClaudeExtraTools,
 		MaxBudgetUSD: s.Settings.ClaudeMaxBudgetUSD,
 		Timeout:      time.Duration(s.Settings.RunTimeoutSec) * time.Second,
 		Log:          log,
+		Permission:   s.permissionFunc(runID, logln),
+		Progress: func(note string) {
+			_ = s.DB.UpdateRun(runID, map[string]any{"progress": note})
+		},
 	}
 	if sk != nil && sk.Kind == skill.KindAgent {
 		req.Agent = sk.Name
@@ -681,7 +695,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "worktree: "+err.Error())
 			return
 		}
-		req.Dir, req.Mode = path, runner.ModeEdit
+		req.Dir, req.Mode, req.ProtectDirs = path, runner.ModeEdit, nil
 		req.Prompt, req.Schema = prompts.FixComments(promptMR(mr), run.Notes, sk), prompts.FixSchema
 		req.SessionName = fmt.Sprintf("fix-comments !%d #%d", mr.IID, runID)
 	case db.KindPlan, db.KindImplement:
@@ -700,7 +714,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 				s.fail(runID, "worktree: "+err.Error())
 				return
 			}
-			req.Dir, req.Mode = path, runner.ModeEdit
+			req.Dir, req.Mode, req.ProtectDirs = path, runner.ModeEdit, nil
 			req.Prompt, req.Schema = prompts.Implement(pi, run.Notes, run.Branch, s.Settings.BaseBranch, sk), prompts.ImplementSchema
 			req.SessionName = fmt.Sprintf("implement #%d run %d", issue.IID, runID)
 		}
@@ -712,7 +726,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 	_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusRunning, "started_at": db.Now(), "prompt": req.Prompt, "log_path": logPath, "work_dir": req.Dir})
 	result, runErr := r.Run(ctx, req)
 
-	fields := map[string]any{"finished_at": db.Now()}
+	fields := map[string]any{"finished_at": db.Now(), "progress": ""}
 	if result != nil {
 		fields["cost_usd"] = result.CostUSD
 		fields["duration_ms"] = result.DurationMs
@@ -721,6 +735,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		fields["cache_read_tokens"] = result.Usage.CacheRead
 		fields["cache_write_tokens"] = result.Usage.CacheWrite
 		fields["session_id"] = result.SessionID
+		fields["denials_json"] = string(result.Denials)
 		if len(result.Raw) > 0 && len(result.Raw) < 2_000_000 {
 			fields["raw_result"] = string(result.Raw)
 		}
@@ -742,6 +757,192 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 	}
 	fields["status"] = db.StatusDone
 	_ = s.DB.UpdateRun(runID, fields)
+}
+
+// policy is the permission policy for Claude runs from the settings.
+func (s *Service) policy() runner.Policy {
+	switch s.Settings.ClaudePermissions {
+	case "strict":
+		return runner.PolicyStrict
+	case "manual":
+		return runner.PolicyManual
+	}
+	return runner.PolicyAuto
+}
+
+// ---------------------------------------------------------------------------------- permission prompts
+
+// permissionFunc records the agent's permission prompt, switches the run to "waiting" and blocks until the
+// developer answers in the dashboard, the run is cancelled or the approval timeout passes (then: denied).
+func (s *Service) permissionFunc(runID int64, logln func(string)) runner.PermissionFunc {
+	return func(ctx context.Context, req runner.PermissionRequest) runner.PermissionDecision {
+		approvalID, err := s.DB.CreateApproval(db.Approval{RunID: runID, ToolName: req.ToolName, Description: req.Description,
+			InputJSON: string(req.Input), SuggestionsJSON: string(req.Suggestions), Reason: req.Reason})
+		if err != nil {
+			return runner.PermissionDecision{Message: "mr-review: cannot record the permission prompt: " + err.Error()}
+		}
+		ch := make(chan approvalDecision, 1)
+		s.mu.Lock()
+		s.decisions[approvalID] = ch
+		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			delete(s.decisions, approvalID)
+			s.mu.Unlock()
+		}()
+		_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusWaiting, "progress": "Нужен ваш ответ: " + req.ToolName + " " + req.Description})
+		logln(fmt.Sprintf("waiting for the developer: approval #%d (%s %s)", approvalID, req.ToolName, req.Description))
+		timeout := time.Duration(s.Settings.ApprovalTimeoutSec) * time.Second
+		var decision runner.PermissionDecision
+		select {
+		case d := <-ch:
+			decision = runner.PermissionDecision{Allow: d.allow, ApplySuggestions: d.remember, Message: d.note}
+		case <-ctx.Done():
+			_ = s.DB.DecideApproval(approvalID, db.ApprovalExpired, false, "run cancelled")
+			return runner.PermissionDecision{Message: "run cancelled by the developer"}
+		case <-time.After(timeout):
+			_ = s.DB.DecideApproval(approvalID, db.ApprovalExpired, false, "no answer within "+timeout.String())
+			decision = runner.PermissionDecision{Message: "mr-review: the developer did not answer within " + timeout.String() + "; treat this call as denied"}
+			logln(fmt.Sprintf("approval #%d expired after %s", approvalID, timeout))
+		}
+		if ctx.Err() == nil {
+			_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusRunning, "progress": ""})
+		}
+		return decision
+	}
+}
+
+// Decide answers a pending permission prompt: decision is allow | allow_always (allow and apply the agent's
+// suggested rules for the rest of the run) | deny (note is passed to the agent).
+func (s *Service) Decide(approvalID int64, decision, note string) error {
+	approval, _ := s.DB.GetApproval(approvalID)
+	if approval == nil {
+		return userErr("approval #%d not found", approvalID)
+	}
+	if !approval.Pending() {
+		return userErr("this prompt was already answered (%s)", approval.Status)
+	}
+	var d approvalDecision
+	status := db.ApprovalDenied
+	switch decision {
+	case "allow":
+		d.allow, status = true, db.ApprovalAllowed
+	case "allow_always":
+		d.allow, d.remember, status = true, approval.SuggestionsJSON != "", db.ApprovalAllowed
+	case "deny":
+		d.note = strings.TrimSpace(note)
+	default:
+		return userErr("decision must be allow, allow_always or deny")
+	}
+	s.mu.Lock()
+	ch := s.decisions[approvalID]
+	s.mu.Unlock()
+	if ch == nil {
+		_ = s.DB.DecideApproval(approvalID, db.ApprovalExpired, false, "the run is no longer waiting")
+		return userErr("the run is no longer waiting for this answer (dashboard restarted or run stopped)")
+	}
+	if err := s.DB.DecideApproval(approvalID, status, d.remember, d.note); err != nil {
+		return err
+	}
+	select {
+	case ch <- d:
+	default:
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------------- plan export
+
+// PlansDir is where exported plans are written: PLANS_DIR or <project>/.claude/plans.
+func (s *Service) PlansDir() string {
+	if s.Settings.PlansDir != "" {
+		return s.Settings.PlansDir
+	}
+	return filepath.Join(s.Settings.ProjectRoot, ".claude", "plans")
+}
+
+// ExportPlan writes a finished plan run as a markdown file into PlansDir and remembers the path.
+func (s *Service) ExportPlan(runID int64) (string, error) {
+	run, _ := s.DB.GetRun(runID)
+	if run == nil || run.Kind != db.KindPlan {
+		return "", userErr("run #%d is not a plan", runID)
+	}
+	if run.Status != db.StatusDone || run.ResultJSON == "" {
+		return "", userErr("the plan is not finished yet")
+	}
+	if _, err := s.requireRoot(); err != nil {
+		return "", err
+	}
+	var issue *db.Issue
+	if run.IssueID != nil {
+		issue, _ = s.DB.GetIssue(*run.IssueID)
+	}
+	if issue == nil {
+		return "", userErr("the issue of this plan is gone")
+	}
+	dir := s.PlansDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", &UserError{"cannot create " + dir + ": " + err.Error()}
+	}
+	name := fmt.Sprintf("%s-%s-run%d.md", time.Now().Format("2006-01-02"), worktree.Slug(issue.Ref()), run.ID)
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(planMarkdown(run, issue)), 0o644); err != nil {
+		return "", &UserError{"cannot write " + path + ": " + err.Error()}
+	}
+	_ = s.DB.UpdateRun(runID, map[string]any{"plan_path": path})
+	return path, nil
+}
+
+// planMarkdown renders a plan result as a markdown document in the project's plan-file style.
+func planMarkdown(run *db.Run, issue *db.Issue) string {
+	var plan struct {
+		Summary string   `json:"summary"`
+		Steps   []string `json:"steps"`
+		Files   []struct {
+			Path   string `json:"path"`
+			Change string `json:"change"`
+		} `json:"files"`
+		Risks     []string `json:"risks"`
+		Questions []string `json:"questions"`
+		Estimate  string   `json:"estimate"`
+	}
+	_ = json.Unmarshal([]byte(run.ResultJSON), &plan)
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s — %s\n\n", issue.Ref(), issue.Title)
+	fmt.Fprintf(&b, "- Задача: %s\n- Исследование: mr-review, сессия #%d, агент %s", issue.WebURL, run.ID, run.Runner)
+	if run.SkillIdentifier != "" {
+		fmt.Fprintf(&b, ", skill %s", run.SkillIdentifier)
+	}
+	fmt.Fprintf(&b, "\n- Дата: %s\n", time.Now().Format("2006-01-02"))
+	if plan.Estimate != "" {
+		fmt.Fprintf(&b, "- Оценка: %s\n", plan.Estimate)
+	}
+	if strings.TrimSpace(run.Notes) != "" {
+		fmt.Fprintf(&b, "\n## Указания разработчика\n\n%s\n", strings.TrimSpace(run.Notes))
+	}
+	fmt.Fprintf(&b, "\n## Суть\n\n%s\n\n## Шаги\n\n", strings.TrimSpace(plan.Summary))
+	for i, step := range plan.Steps {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, step)
+	}
+	if len(plan.Files) > 0 {
+		b.WriteString("\n## Файлы\n\n| Файл | Что меняется |\n|---|---|\n")
+		for _, f := range plan.Files {
+			fmt.Fprintf(&b, "| `%s` | %s |\n", f.Path, strings.ReplaceAll(f.Change, "|", "\\|"))
+		}
+	}
+	if len(plan.Risks) > 0 {
+		b.WriteString("\n## Риски\n\n")
+		for _, r := range plan.Risks {
+			fmt.Fprintf(&b, "- %s\n", r)
+		}
+	}
+	if len(plan.Questions) > 0 {
+		b.WriteString("\n## Открытые вопросы\n\n")
+		for _, q := range plan.Questions {
+			fmt.Fprintf(&b, "- %s\n", q)
+		}
+	}
+	return b.String()
 }
 
 // reviewResult mirrors prompts.ReviewSchema / VerifySchema.
@@ -870,6 +1071,8 @@ func (s *Service) Ask(runID int64, question string) (string, error) {
 		Prompt:          prompts.FollowUp(question),
 		Dir:             dir,
 		Mode:            runner.ModeReadOnly,
+		Policy:          s.policy(),
+		ProtectDirs:     []string{s.Settings.ProjectRoot},
 		ResumeSessionID: run.SessionID,
 		ExtraTools:      s.Settings.ClaudeExtraTools,
 		Timeout:         15 * time.Minute,

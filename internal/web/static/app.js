@@ -120,6 +120,17 @@
     if (data && data.url) { flash('MR создан: ' + data.url, true); window.open(data.url, '_blank'); }
   };
 
+  // Answer a permission prompt of a waiting run (allow | allow_always | deny).
+  window.decide = async function (approvalId, decision, button) {
+    const noteEl = document.getElementById('deny-note');
+    const note = decision === 'deny' && noteEl ? noteEl.value : '';
+    const data = await call('POST', `/api/approvals/${approvalId}`, { decision, note }, button);
+    if (data) {
+      flash(decision === 'deny' ? 'Отклонено, агент продолжает' : 'Разрешено, агент продолжает', true);
+      setTimeout(reload, 600);
+    }
+  };
+
   window.copyText = async function (text) {
     try { await navigator.clipboard.writeText(text); flash('Скопировано', true); } catch (e) { flash('Не удалось скопировать', false); }
   };
@@ -161,22 +172,26 @@
   tickElapsed();
   setInterval(tickElapsed, 1000);
 
-  // ---- poll active runs; reload when one finishes
-  const active = Array.from(document.querySelectorAll('[data-run-status]')).filter((el) => /queued|running/.test(el.dataset.status));
+  // ---- poll active runs; reload when a status changes (finished, or the agent asks for a permission)
+  const active = Array.from(document.querySelectorAll('[data-run-status]')).filter((el) => /queued|running|waiting/.test(el.dataset.status));
   if (active.length) {
     const ids = Array.from(new Set(active.map((el) => el.dataset.runStatus)));
+    const initial = {};
+    active.forEach((el) => { initial[el.dataset.runStatus] = el.dataset.status; });
     const logTail = document.getElementById('log-tail');
+    const progressNow = document.getElementById('progress-now');
     const tick = async () => {
-      let finished = false;
+      let changed = false;
       for (const id of ids) {
         try {
           const response = await fetch(`/api/runs/${id}`);
           if (!response.ok) continue;
           const data = await response.json();
-          if (!/queued|running/.test(data.status)) finished = true;
+          if (data.status !== initial[id]) changed = true;
+          if (progressNow && ids.length === 1 && data.progress) progressNow.textContent = 'сейчас: ' + data.progress;
         } catch (error) { /* server restarting */ }
       }
-      if (finished) { reload(); return; }
+      if (changed) { reload(); return; }
       if (logTail && ids.length === 1) {
         try {
           const text = await (await fetch(`/run/${ids[0]}/log`)).text();

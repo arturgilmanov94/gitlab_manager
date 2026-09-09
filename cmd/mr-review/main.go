@@ -283,6 +283,8 @@ func showConfig(settings *config.Settings) int {
 		fmt.Printf("%-20s %s\n", strings.ToLower(action.EnvKey)+":", firstOf(settings.SkillNames[action.Kind], "(auto: "+action.SkillName+")"))
 	}
 	fmt.Printf("run_concurrency: %d\n", settings.RunConcurrency)
+	fmt.Printf("permissions:     %s (approval timeout %ds)\n", settings.ClaudePermissions, settings.ApprovalTimeoutSec)
+	fmt.Printf("plans_dir:       %s\n", firstOf(settings.PlansDir, "(auto: <project>/.claude/plans)"))
 	fmt.Printf("default_runner:  %s\n", settings.DefaultRunner)
 	fmt.Printf("gitlab_host:     %s\n", firstOf(settings.GitLabHost, "(from git remote)"))
 	return 0
@@ -498,6 +500,40 @@ func commandExists(name string) bool {
 
 // ---------------------------------------------------------------------------------- cli review
 
+// askInTerminal answers a permission prompt of a CLI-started run the way the terminal would: y / a (allow and
+// remember) / n. Without a TTY the prompt is denied so the run does not hang.
+func askInTerminal(s *app.Service, pending *db.Approval) {
+	fmt.Printf("\nThe agent asks for a permission: %s %s\n", pending.ToolName, pending.Description)
+	if pending.Reason != "" {
+		fmt.Printf("  reason: %s\n", pending.Reason)
+	}
+	fmt.Printf("  input:  %s\n", short120(pending.InputJSON))
+	if info, err := os.Stdin.Stat(); err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		fmt.Println("  no terminal to answer -> denied")
+		_ = s.Decide(pending.ID, "deny", "no terminal to answer the prompt")
+		return
+	}
+	fmt.Print("Allow? [y]es / [a]lways for this session / [n]o: ")
+	var answer string
+	_, _ = fmt.Scanln(&answer)
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		_ = s.Decide(pending.ID, "allow", "")
+	case "a", "always":
+		_ = s.Decide(pending.ID, "allow_always", "")
+	default:
+		_ = s.Decide(pending.ID, "deny", "denied in the terminal")
+	}
+}
+
+func short120(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	if len(s) > 120 {
+		return s[:120] + "…"
+	}
+	return s
+}
+
 func review(settings *config.Settings, args []string) int {
 	if len(args) == 0 {
 		return fail("usage: mr-review review <mr-url|id> [--kind quick|full|verify] [--runner claude|codex|cursor]")
@@ -546,6 +582,7 @@ func review(settings *config.Settings, args []string) int {
 		fmt.Printf("run #%d started (%s); log: %s\n", runID, kind, filepath.Join(settings.RunLogDir(), fmt.Sprintf("run-%d.log", runID)))
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt)
+		answered := map[int64]bool{}
 		for {
 			select {
 			case <-sig:
@@ -555,6 +592,10 @@ func review(settings *config.Settings, args []string) int {
 			run, _ := s.DB.GetRun(runID)
 			if run == nil || !run.Active() {
 				break
+			}
+			if pending, _ := s.DB.PendingApproval(runID); pending != nil && !answered[pending.ID] {
+				answered[pending.ID] = true
+				askInTerminal(s, pending)
 			}
 			continue
 		}

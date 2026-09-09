@@ -42,6 +42,7 @@ type pageBase struct {
 	Runners     []runner.Info
 	Username    string
 	Counts      map[string]int64
+	Pending     []db.Approval // open permission prompts across all runs (header badge)
 	Nav         string
 	Title       string
 	Started     time.Time
@@ -220,11 +221,20 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/runs/{id}/worktree", func(w http.ResponseWriter, r *http.Request) {
 		s.result(w, map[string]any{}, s.svc.RemoveWorktree(pathID(r)))
 	})
+	s.mux.HandleFunc("POST /api/runs/{id}/plan-file", func(w http.ResponseWriter, r *http.Request) {
+		path, err := s.svc.ExportPlan(pathID(r))
+		s.result(w, map[string]any{"path": path}, err)
+	})
+	s.mux.HandleFunc("POST /api/approvals/{id}", func(w http.ResponseWriter, r *http.Request) {
+		body := readBody(r)
+		s.result(w, map[string]any{}, s.svc.Decide(pathID(r), body["decision"], body["note"]))
+	})
 }
 
 // ---------------------------------------------------------------------------------- pages
 
 func (s *Server) base(nav, title string) pageBase {
+	pending, _ := s.svc.DB.PendingApprovals()
 	return pageBase{
 		Version:     s.version,
 		ProjectRoot: s.svc.Settings.ProjectRoot,
@@ -232,6 +242,7 @@ func (s *Server) base(nav, title string) pageBase {
 		Runners:     s.svc.RunnerInfos(),
 		Username:    s.svc.CurrentUser(),
 		Counts:      s.svc.DB.Counts(),
+		Pending:     pending,
 		Nav:         nav,
 		Title:       title,
 		Started:     s.started,
@@ -401,6 +412,16 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 	}
 	data["Messages"], _ = s.svc.DB.ListMessages(run.ID)
 	data["LogTail"] = tail(run.LogPath, 12000)
+	data["Approvals"], _ = s.svc.DB.ListApprovals(run.ID)
+	if run.Status == db.StatusWaiting {
+		data["Pending"], _ = s.svc.DB.PendingApproval(run.ID)
+	}
+	if run.DenialsJSON != "" {
+		var denials []map[string]any
+		_ = json.Unmarshal([]byte(run.DenialsJSON), &denials)
+		data["Denials"] = denials
+	}
+	data["PlansDir"] = s.svc.PlansDir()
 	s.render(w, "run", data)
 }
 
@@ -509,11 +530,16 @@ func (s *Server) apiRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	findings, _ := s.svc.DB.ListFindings(run.ID)
-	writeJSON(w, 200, map[string]any{
+	payload := map[string]any{
 		"id": run.ID, "kind": run.Kind, "status": run.Status, "verdict": run.Verdict, "summary": run.Summary,
 		"error": run.Error, "runner": run.Runner, "cost_usd": run.CostUSD, "tokens": run.TotalTokens(), "duration_ms": run.DurationMs,
 		"started_at": run.StartedAt, "finished_at": run.FinishedAt, "findings": len(findings), "session_id": run.SessionID,
-	})
+		"progress": run.Progress,
+	}
+	if pending, _ := s.svc.DB.PendingApproval(run.ID); pending != nil {
+		payload["pending_approval"] = map[string]any{"id": pending.ID, "tool": pending.ToolName, "description": pending.Description}
+	}
+	writeJSON(w, 200, payload)
 }
 
 // ---------------------------------------------------------------------------------- helpers
@@ -641,6 +667,14 @@ func kindTip(kind string) string {
 		return "Агент реализует план из исследования в отдельном workspace на новой ветке."
 	case "retry":
 		return "Запустить то же самое ещё раз с теми же параметрами."
+	case "allow":
+		return "Разрешить только этот вызов. Агент продолжит работу; следующий такой же вызов снова спросит."
+	case "allow_always":
+		return "Разрешить и применить правила, которые предложил агент, до конца этой сессии: похожие вызовы больше не спросят."
+	case "deny":
+		return "Отклонить вызов. Агент получит ваш комментарий и продолжит без этого действия."
+	case "plan-file":
+		return "Сохранить план как markdown-файл в каталог планов проекта (.claude/plans), чтобы работать с ним из терминала или IDE."
 	case "stop":
 		return "Остановить агента. Частичный результат не сохраняется; можно запустить снова."
 	case "remove":
@@ -680,9 +714,9 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// aiState derives the AI-review state of a list item: never | queued | running | current | stale | failed.
+// aiState derives the AI-review state of a list item: never | queued | running | waiting | current | stale | failed.
 func aiState(item db.MRListItem) string {
-	if item.Last != nil && (item.Last.Status == db.StatusQueued || item.Last.Status == db.StatusRunning) {
+	if item.Last != nil && (item.Last.Status == db.StatusQueued || item.Last.Status == db.StatusRunning || item.Last.Status == db.StatusWaiting) {
 		return item.Last.Status
 	}
 	if item.Last != nil && item.Last.Status == db.StatusFailed && (item.Done == nil || item.Last.ID > item.Done.ID) {
@@ -705,6 +739,8 @@ func aiLabel(state string) string {
 		return "В очереди"
 	case "running":
 		return "Проверяется"
+	case "waiting":
+		return "Нужен ваш ответ"
 	case "current":
 		return "Проверен"
 	case "stale":
@@ -719,7 +755,7 @@ func aiTone(state string) string {
 	switch state {
 	case "current":
 		return "success"
-	case "stale":
+	case "stale", "waiting":
 		return "warning"
 	case "failed":
 		return "danger"
@@ -736,6 +772,8 @@ func statusLabel(status string) string {
 		return "В очереди"
 	case db.StatusRunning:
 		return "Выполняется"
+	case db.StatusWaiting:
+		return "Нужен ваш ответ"
 	case db.StatusDone:
 		return "Завершён"
 	case db.StatusFailed:
@@ -752,6 +790,8 @@ func statusTone(status string) string {
 		return "success"
 	case db.StatusFailed:
 		return "danger"
+	case db.StatusWaiting:
+		return "warning"
 	case db.StatusQueued, db.StatusRunning:
 		return "info"
 	}

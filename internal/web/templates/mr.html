@@ -13,6 +13,8 @@
   <div class="actions">
     {{if .Closed}}
       <span class="badge">MR {{if eq .MR.State "merged"}}merged{{else}}closed{{end}}</span>
+    {{else if and .Active (eq .Active.Status "waiting")}}
+      <a class="btn btn-primary" href="/run/{{.Active.ID}}#approval">Ответить агенту</a>
     {{else if .Active}}
       <a class="btn btn-primary" href="/run/{{.Active.ID}}">Открыть прогресс</a>
     {{else if eq .State "failed"}}

@@ -129,6 +129,15 @@ func Run(s *config.Settings, version string, gl gitlab.Client, runners []rn.Runn
 		}
 	}
 
+	switch s.ClaudePermissions {
+	case "strict":
+		add(Check{"Permissions", OK, "strict: fixed tool lists, anything else is denied without asking", ""})
+	case "manual":
+		add(Check{"Permissions", OK, fmt.Sprintf("manual: project rules + sandbox, everything else is asked in the dashboard (timeout %ds)", s.ApprovalTimeoutSec), ""})
+	default:
+		add(Check{"Permissions", OK, fmt.Sprintf("auto: agent classifier + sandbox; what it cannot decide is asked in the dashboard (timeout %ds)", s.ApprovalTimeoutSec), ""})
+	}
+
 	found := 0
 	for _, r := range runners {
 		name := "Agent: " + r.Name()

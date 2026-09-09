@@ -119,13 +119,23 @@ func (f *FakeGitLab) CreateMR(host, projectPath, sourceBranch, targetBranch, tit
 
 // FakeRunner returns canned structured outputs in order and records requests.
 type FakeRunner struct {
-	mu       sync.Mutex
-	Outputs  []map[string]any
-	Requests []runner.Request
-	Block    chan struct{} // when non-nil, Run waits for it (or cancellation)
-	FailWith string
-	Texts    []string // plain-text answers for follow-ups
-	Session  string
+	mu        sync.Mutex
+	Outputs   []map[string]any
+	Requests  []runner.Request
+	Block     chan struct{} // when non-nil, Run waits for it (or cancellation)
+	FailWith  string
+	Texts     []string // plain-text answers for follow-ups
+	Session   string
+	Ask       []runner.PermissionRequest // permission prompts the fake agent raises before answering
+	Decisions []runner.PermissionDecision
+}
+
+// AskWrite makes the next run ask for a permission to write a file (like Claude Code outside the working dir).
+func (f *FakeRunner) AskWrite(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Ask = append(f.Ask, runner.PermissionRequest{ToolName: "Write", Description: path, Input: json.RawMessage(`{"file_path":"` + path + `"}`),
+		Reason: "Path is outside allowed working directories", Suggestions: json.RawMessage(`[{"type":"setMode","mode":"acceptEdits","destination":"session"}]`)})
 }
 
 // Lock/Unlock guard Requests for tests that inspect them while runs are in flight.
@@ -142,11 +152,34 @@ func (f *FakeRunner) Run(ctx context.Context, req runner.Request) (*runner.Resul
 	if req.Log != nil {
 		fmt.Fprintln(req.Log, "fake run")
 	}
+	if req.Progress != nil {
+		req.Progress("Bash: fake command")
+	}
 	if block != nil {
 		select {
 		case <-block:
 		case <-ctx.Done():
 			return nil, runner.ErrCancelled
+		}
+	}
+	f.mu.Lock()
+	ask := f.Ask
+	f.Ask = nil
+	f.mu.Unlock()
+	var denials []map[string]any
+	for _, prompt := range ask {
+		decision := runner.PermissionDecision{Message: "no permission callback"}
+		if req.Permission != nil {
+			decision = req.Permission(ctx, prompt)
+		}
+		if ctx.Err() != nil {
+			return nil, runner.ErrCancelled
+		}
+		f.mu.Lock()
+		f.Decisions = append(f.Decisions, decision)
+		f.mu.Unlock()
+		if !decision.Allow {
+			denials = append(denials, map[string]any{"tool_name": prompt.ToolName, "tool_input": map[string]any{"file_path": prompt.Description}})
 		}
 	}
 	if f.FailWith != "" {
@@ -174,7 +207,11 @@ func (f *FakeRunner) Run(ctx context.Context, req runner.Request) (*runner.Resul
 	if req.Mode == runner.ModeEdit {
 		_ = os.WriteFile(filepath.Join(req.Dir, "CHANGED.txt"), []byte("changed by fake agent\n"), 0o644)
 	}
-	return &runner.Result{Structured: raw, SessionID: session, CostUSD: 0.1, Usage: runner.Usage{Input: 1000, Output: 200, CacheRead: 50000, CacheWrite: 3000}, DurationMs: 5, Raw: []byte(`{"ok":1}`)}, nil
+	res := &runner.Result{Structured: raw, SessionID: session, CostUSD: 0.1, Usage: runner.Usage{Input: 1000, Output: 200, CacheRead: 50000, CacheWrite: 3000}, DurationMs: 5, Raw: []byte(`{"ok":1}`)}
+	if len(denials) > 0 {
+		res.Denials, _ = json.Marshal(denials)
+	}
+	return res, nil
 }
 
 // FullReviewOutput is a canned full review.

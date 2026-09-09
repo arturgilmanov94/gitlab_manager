@@ -28,6 +28,7 @@ const (
 
 	StatusQueued    = "queued"
 	StatusRunning   = "running"
+	StatusWaiting   = "waiting" // the agent asked for a permission and waits for the developer's answer
 	StatusDone      = "done"
 	StatusFailed    = "failed"
 	StatusCancelled = "cancelled"
@@ -397,6 +398,9 @@ type Run struct {
 	CreatedAt        string
 	StartedAt        string
 	FinishedAt       string
+	Progress         string // last tool call of the agent (live)
+	DenialsJSON      string // tool calls the agent was refused, as reported by the runner
+	PlanPath         string // markdown file the plan was exported to
 }
 
 // TotalTokens is the sum of all token kinds consumed by the run.
@@ -404,8 +408,13 @@ func (r Run) TotalTokens() int64 {
 	return r.InputTokens + r.OutputTokens + r.CacheReadTokens + r.CacheWriteTokens
 }
 
-// Active reports whether the run is queued or running.
-func (r Run) Active() bool { return r.Status == StatusQueued || r.Status == StatusRunning }
+// Active reports whether the run is queued, running or waiting for the developer.
+func (r Run) Active() bool {
+	return r.Status == StatusQueued || r.Status == StatusRunning || r.Status == StatusWaiting
+}
+
+// activeStatuses is the SQL list of statuses Active() covers.
+const activeStatuses = "('queued', 'running', 'waiting')"
 
 // IsReview reports whether the run is a review kind (produces findings).
 func (r Run) IsReview() bool {
@@ -415,12 +424,12 @@ func (r Run) IsReview() bool {
 // IsEdit reports whether the run edits files in a worktree.
 func (r Run) IsEdit() bool { return r.Kind == KindImplement || r.Kind == KindFixComments }
 
-const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at"
+const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path"
 
 func scanRun(s scanner) (*Run, error) {
 	var r Run
 	var mrID, issueID, baseID sql.NullInt64
-	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.CreatedAt, &r.StartedAt, &r.FinishedAt)
+	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.CreatedAt, &r.StartedAt, &r.FinishedAt, &r.Progress, &r.DenialsJSON, &r.PlanPath)
 	if err != nil {
 		return nil, err
 	}
@@ -493,7 +502,7 @@ func (d *DB) listRuns(where string, arg any) ([]RunSummary, error) {
 	for rows.Next() {
 		var s RunSummary
 		var mrID, issueID, baseID sql.NullInt64
-		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.OpenFindings, &s.TotalFindings); err != nil {
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &s.OpenFindings, &s.TotalFindings); err != nil {
 			return nil, err
 		}
 		if mrID.Valid {
@@ -527,18 +536,18 @@ func (d *DB) LatestDoneReview(mrID int64) (*Run, error) {
 	return r, err
 }
 
-// ActiveRunForMR returns the queued/running run of an MR, if any.
+// ActiveRunForMR returns the queued/running/waiting run of an MR, if any.
 func (d *DB) ActiveRunForMR(mrID int64) (*Run, error) {
-	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE mr_id = ? AND status IN ('queued', 'running') ORDER BY id DESC LIMIT 1", mrID))
+	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE mr_id = ? AND status IN "+activeStatuses+" ORDER BY id DESC LIMIT 1", mrID))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return r, err
 }
 
-// ActiveRunForIssue returns the queued/running run of an issue, if any.
+// ActiveRunForIssue returns the queued/running/waiting run of an issue, if any.
 func (d *DB) ActiveRunForIssue(issueID int64) (*Run, error) {
-	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE issue_id = ? AND status IN ('queued', 'running') ORDER BY id DESC LIMIT 1", issueID))
+	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE issue_id = ? AND status IN "+activeStatuses+" ORDER BY id DESC LIMIT 1", issueID))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -562,13 +571,129 @@ func (d *DB) RunsWithoutTokens() ([]int64, error) {
 	return out, rows.Err()
 }
 
-// FailStaleRuns marks queued/running runs as failed (after a restart).
+// FailStaleRuns marks active runs as failed and their open permission prompts as expired (after a restart).
 func (d *DB) FailStaleRuns(message string) (int64, error) {
-	res, err := d.sql.Exec("UPDATE runs SET status = 'failed', error = ?, finished_at = ? WHERE status IN ('queued', 'running')", message, Now())
+	_, _ = d.sql.Exec("UPDATE approvals SET status = 'expired', decided_at = ? WHERE status = 'pending'", Now())
+	res, err := d.sql.Exec("UPDATE runs SET status = 'failed', error = ?, finished_at = ? WHERE status IN "+activeStatuses, message, Now())
 	if err != nil {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// ---------------------------------------------------------------------------------- approvals
+
+// Approval statuses.
+const (
+	ApprovalPending = "pending"
+	ApprovalAllowed = "allowed"
+	ApprovalDenied  = "denied"
+	ApprovalExpired = "expired"
+)
+
+// Approval is one permission prompt of an agent run.
+type Approval struct {
+	ID              int64
+	RunID           int64
+	ToolName        string
+	Description     string
+	InputJSON       string
+	SuggestionsJSON string
+	Reason          string
+	Status          string
+	Remember        bool
+	Note            string
+	CreatedAt       string
+	DecidedAt       string
+}
+
+// Pending reports whether the developer still has to answer.
+func (a Approval) Pending() bool { return a.Status == ApprovalPending }
+
+const approvalColumns = "id, run_id, tool_name, description, input_json, suggestions_json, reason, status, remember, note, created_at, decided_at"
+
+func scanApproval(s scanner) (*Approval, error) {
+	var a Approval
+	var remember int
+	if err := s.Scan(&a.ID, &a.RunID, &a.ToolName, &a.Description, &a.InputJSON, &a.SuggestionsJSON, &a.Reason, &a.Status, &remember, &a.Note, &a.CreatedAt, &a.DecidedAt); err != nil {
+		return nil, err
+	}
+	a.Remember = remember == 1
+	return &a, nil
+}
+
+// CreateApproval records a pending permission prompt and returns its id.
+func (d *DB) CreateApproval(a Approval) (int64, error) {
+	res, err := d.sql.Exec(`INSERT INTO approvals (run_id, tool_name, description, input_json, suggestions_json, reason, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`, a.RunID, a.ToolName, a.Description, a.InputJSON, a.SuggestionsJSON, a.Reason, Now())
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// DecideApproval stores the developer's answer.
+func (d *DB) DecideApproval(id int64, status string, remember bool, note string) error {
+	rem := 0
+	if remember {
+		rem = 1
+	}
+	_, err := d.sql.Exec("UPDATE approvals SET status = ?, remember = ?, note = ?, decided_at = ? WHERE id = ?", status, rem, note, Now(), id)
+	return err
+}
+
+// GetApproval returns an approval or nil.
+func (d *DB) GetApproval(id int64) (*Approval, error) {
+	a, err := scanApproval(d.sql.QueryRow("SELECT "+approvalColumns+" FROM approvals WHERE id = ?", id))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return a, err
+}
+
+// PendingApproval returns the open prompt of a run, if any.
+func (d *DB) PendingApproval(runID int64) (*Approval, error) {
+	a, err := scanApproval(d.sql.QueryRow("SELECT "+approvalColumns+" FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY id LIMIT 1", runID))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return a, err
+}
+
+// ListApprovals returns every prompt of a run in order.
+func (d *DB) ListApprovals(runID int64) ([]Approval, error) {
+	rows, err := d.sql.Query("SELECT "+approvalColumns+" FROM approvals WHERE run_id = ? ORDER BY id", runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Approval
+	for rows.Next() {
+		a, err := scanApproval(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *a)
+	}
+	return out, rows.Err()
+}
+
+// PendingApprovals lists all open prompts across runs (for the header badge), oldest first.
+func (d *DB) PendingApprovals() ([]Approval, error) {
+	rows, err := d.sql.Query("SELECT " + approvalColumns + " FROM approvals WHERE status = 'pending' ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Approval
+	for rows.Next() {
+		a, err := scanApproval(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *a)
+	}
+	return out, rows.Err()
 }
 
 // ---------------------------------------------------------------------------------- findings

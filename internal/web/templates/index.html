@@ -18,7 +18,7 @@
   <tbody>
   {{range .MRs}}
   {{$st := aiState .}}
-  {{$busy := or (eq $st "running") (eq $st "queued")}}
+  {{$busy := or (eq $st "running") (eq $st "queued") (eq $st "waiting")}}
   {{$closed := or (eq .State "merged") (eq .State "closed")}}
   <tr>
     <td class="nowrap ref-cell"><a class="ref" href="/mr/{{.ID}}">!{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
@@ -45,6 +45,8 @@
       <div class="actions">
         {{if $closed}}
           {{if .Done}}<a class="btn btn-sm" href="/mr/{{.ID}}">Открыть результаты</a>{{end}}
+        {{else if eq $st "waiting"}}
+          <a class="btn btn-sm btn-primary" href="/run/{{.Last.ID}}#approval">Ответить агенту</a>
         {{else if $busy}}
           <a class="btn btn-sm btn-primary" href="/run/{{.Last.ID}}">Открыть прогресс</a>
         {{else if eq $st "failed"}}

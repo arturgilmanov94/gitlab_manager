@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -95,6 +96,125 @@ func TestParallelRunsOnDifferentMRs(t *testing.T) {
 	}
 	close(fr.Block)
 	testutil.WaitFor(t, func() bool { return status(svc, runA) == db.StatusDone && status(svc, runB) == db.StatusDone })
+}
+
+func TestPermissionPromptAnsweredFromDashboard(t *testing.T) {
+	svc, _, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+
+	// Allowed with the agent's suggested rules: the decision reaches the runner and the run finishes.
+	fr.AskWrite("/tmp/claude/a.txt")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	runID, err := svc.StartReview(mr.ID, db.KindReviewFull, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusWaiting })
+	pending, _ := svc.DB.PendingApproval(runID)
+	if pending == nil || pending.ToolName != "Write" || pending.Description != "/tmp/claude/a.txt" || pending.SuggestionsJSON == "" {
+		t.Fatalf("%+v", pending)
+	}
+	if all, _ := svc.DB.PendingApprovals(); len(all) != 1 {
+		t.Fatalf("header badge source: %+v", all)
+	}
+	run, _ := svc.DB.GetRun(runID)
+	if !run.Active() || !strings.Contains(run.Progress, "Нужен ваш ответ") {
+		t.Fatalf("%+v", run)
+	}
+	// A second run on the same MR is still refused while this one waits.
+	if _, err := svc.StartReview(mr.ID, db.KindReviewQuick, ""); err == nil {
+		t.Fatal("waiting run must count as active")
+	}
+	if err := svc.Decide(pending.ID, "allow_always", ""); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
+	fr.Lock()
+	decision := fr.Decisions[0]
+	fr.Unlock()
+	if !decision.Allow || !decision.ApplySuggestions {
+		t.Fatalf("%+v", decision)
+	}
+	approvals, _ := svc.DB.ListApprovals(runID)
+	if len(approvals) != 1 || approvals[0].Status != db.ApprovalAllowed || !approvals[0].Remember {
+		t.Fatalf("%+v", approvals)
+	}
+	if err := svc.Decide(pending.ID, "allow", ""); err == nil {
+		t.Fatal("answering twice must fail")
+	}
+
+	// Denied with a note: the agent gets the note, the run still completes, the denial is recorded on the run.
+	fr.AskWrite("/tmp/claude/b.txt")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	runID, _ = svc.StartReview(mr.ID, db.KindReviewQuick, "")
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusWaiting })
+	pending, _ = svc.DB.PendingApproval(runID)
+	if err := svc.Decide(pending.ID, "deny", "use $TMPDIR instead"); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
+	fr.Lock()
+	decision = fr.Decisions[1]
+	fr.Unlock()
+	if decision.Allow || decision.Message != "use $TMPDIR instead" {
+		t.Fatalf("%+v", decision)
+	}
+	run, _ = svc.DB.GetRun(runID)
+	if !strings.Contains(run.DenialsJSON, "/tmp/claude/b.txt") || run.Progress != "" {
+		t.Fatalf("%+v", run)
+	}
+
+	// Cancelled while waiting: the prompt expires, the run is cancelled.
+	fr.AskWrite("/tmp/claude/c.txt")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	runID, _ = svc.StartReview(mr.ID, db.KindReviewFull, "")
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusWaiting })
+	pending, _ = svc.DB.PendingApproval(runID)
+	if !svc.Cancel(runID) {
+		t.Fatal("cancel")
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusCancelled })
+	if a, _ := svc.DB.GetApproval(pending.ID); a.Status != db.ApprovalExpired {
+		t.Fatalf("%+v", a)
+	}
+	if err := svc.Decide(pending.ID, "allow", ""); err == nil {
+		t.Fatal("an expired prompt cannot be answered")
+	}
+}
+
+func TestExportPlanWritesMarkdown(t *testing.T) {
+	svc, _, fr := newService(t)
+	svc.Settings.PlansDir = filepath.Join(t.TempDir(), "plans")
+	issue, _ := svc.AddIssue("#7")
+	fr.Outputs = []map[string]any{testutil.PlanOutput()}
+	planID, _ := svc.StartPlan(issue.ID, "", "be careful")
+	testutil.WaitFor(t, func() bool { return status(svc, planID) == db.StatusDone })
+	path, err := svc.ExportPlan(planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(path, svc.Settings.PlansDir) || !strings.HasSuffix(path, "-group__sub__project-7-run"+strconv.FormatInt(planID, 10)+".md") {
+		t.Fatalf("path %s", path)
+	}
+	data, _ := os.ReadFile(path)
+	text := string(data)
+	for _, want := range []string{"# group/sub/project#7 — Task 7", "Plan summary", "1. one", "2. two", "| `a.php` | x |", "be careful", "Оценка: S"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("plan file missing %q:\n%s", want, text)
+		}
+	}
+	run, _ := svc.DB.GetRun(planID)
+	if run.PlanPath != path {
+		t.Fatalf("plan_path not stored: %+v", run)
+	}
+	// Only finished plans can be exported.
+	mr, _ := svc.AddMR("!42")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	reviewID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "")
+	testutil.WaitFor(t, func() bool { return status(svc, reviewID) == db.StatusDone })
+	if _, err := svc.ExportPlan(reviewID); err == nil {
+		t.Fatal("a review is not a plan")
+	}
 }
 
 func TestConcurrencyOneQueuesSecondMR(t *testing.T) {

@@ -36,6 +36,9 @@ type Settings struct {
 	ClaudeModels       []string
 	ClaudeMaxBudgetUSD string
 	ClaudeExtraTools   []string
+	ClaudePermissions  string // auto (classifier + sandbox) | manual (rules + sandbox, ask the rest) | strict (fixed tool lists)
+	ApprovalTimeoutSec int    // how long a run waits for the developer's answer to a permission prompt
+	PlansDir           string // where "save plan" writes markdown; "" = <project>/.claude/plans
 	CodexBin           string
 	CodexModels        []string
 	DefaultRunner      string
@@ -164,6 +167,8 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		ClaudeModels:          splitList(str("CLAUDE_MODELS", "default,fable,opus,sonnet")),
 		ClaudeMaxBudgetUSD:    strings.TrimSpace(get("CLAUDE_MAX_BUDGET_USD")),
 		ClaudeExtraTools:      SplitTools(get("CLAUDE_EXTRA_ALLOWED_TOOLS")),
+		ClaudePermissions:     strings.ToLower(str("CLAUDE_PERMISSIONS", "auto")),
+		ApprovalTimeoutSec:    num("APPROVAL_TIMEOUT_SEC", 1800),
 		CodexBin:              str("CODEX_BIN", "codex"),
 		CodexModels:           splitList(str("CODEX_MODELS", "default,gpt-5-codex")),
 		DefaultRunner:         str("DEFAULT_RUNNER", "claude"),
@@ -178,6 +183,15 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 	}
 	if s.RunConcurrency < 1 {
 		s.RunConcurrency = 1
+	}
+	if s.ClaudePermissions != "strict" && s.ClaudePermissions != "manual" {
+		s.ClaudePermissions = "auto"
+	}
+	if s.ApprovalTimeoutSec < 60 {
+		s.ApprovalTimeoutSec = 60
+	}
+	if v := strings.TrimSpace(get("PLANS_DIR")); v != "" {
+		s.PlansDir = resolvePath(v, baseDir)
 	}
 	s.ReviewSkill = s.SkillNames[skill.ActionReviewFull]
 

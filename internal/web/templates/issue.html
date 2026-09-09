@@ -6,7 +6,9 @@
     <div class="meta"><span>{{.Issue.Author}}</span><span class="sep"></span><span>{{.Issue.State}}</span>{{if .Issue.Labels}}<span class="sep"></span><span>{{.Issue.Labels}}</span>{{end}}<span class="sep"></span><span>GitLab обновлена {{when .Issue.GitLabUpdatedAt}}</span></div>
   </div>
   <div class="actions">
-    {{if .Active}}
+    {{if and .Active (eq .Active.Status "waiting")}}
+      <a class="btn btn-primary" href="/run/{{.Active.ID}}#approval">Ответить агенту</a>
+    {{else if .Active}}
       <a class="btn btn-primary" href="/run/{{.Active.ID}}">Открыть сессию</a>
     {{else if eq .State "failed"}}
       <a class="btn" href="/run/{{.Failed.ID}}">Посмотреть ошибку</a>
@@ -41,10 +43,11 @@
 </section>
 
 <section class="status-panel">
-  <div class="status-block tone-{{if .Active}}info{{else if eq .State "failed"}}danger{{else if or (eq .State "ready") (eq .State "planned")}}success{{else}}neutral{{end}}">
+  <div class="status-block tone-{{if and .Active (eq .Active.Status "waiting")}}warning{{else if .Active}}info{{else if eq .State "failed"}}danger{{else if or (eq .State "ready") (eq .State "planned")}}success{{else}}neutral{{end}}">
     <div class="label">Состояние задачи</div>
     <div class="value">
-      {{if .Active}}<span class="spinner"></span> {{if eq .Active.Kind "plan"}}Исследуется{{else}}Пишется код{{end}}
+      {{if and .Active (eq .Active.Status "waiting")}}<span class="glyph">⚠</span> Нужен ваш ответ
+      {{else if .Active}}<span class="spinner"></span> {{if eq .Active.Kind "plan"}}Исследуется{{else}}Пишется код{{end}}
       {{else if eq .State "failed"}}<span class="glyph">✕</span> Ошибка
       {{else if eq .State "ready"}}<span class="glyph">✓</span> Готово к MR
       {{else if eq .State "planned"}}<span class="glyph">✓</span> Есть план
