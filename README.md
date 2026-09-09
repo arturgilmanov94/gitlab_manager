@@ -56,7 +56,7 @@ claude            # залогиниться и выйти
 
 # распаковать рядом с проектом
 cd ~/projects                                    # здесь лежит tradernet/
-tar -xzf mr-review-0.7.0-linux-amd64.tar.gz      # появится ~/projects/mr-review/
+tar -xzf mr-review-0.7.1-linux-amd64.tar.gz      # появится ~/projects/mr-review/
 
 cd mr-review
 ./mr-review doctor                               # всё ли найдено
@@ -236,6 +236,7 @@ Draft), метку «новые коммиты», когда MR ушёл впе�
 | `CLAUDE_EXTRA_ALLOWED_TOOLS` | пусто | Дополнительные инструменты для read-only запусков, например `Bash(php *)` |
 | `CLAUDE_PERMISSIONS`, `APPROVAL_TIMEOUT_SEC` | `auto`, `1800` | Режим прав (`auto` — классификатор + песочница; `manual` — правила проекта, остальное спрашивается; `strict` — фиксированные списки) и сколько ждать вашего ответа |
 | `PLANS_DIR` | `<проект>/.claude/plans` | Куда «Сохранить план в проект» пишет markdown |
+| `REPORT_LANGUAGE` | `ru` | Язык текстов агента в результатах (summary, замечания, планы); код, пути и сообщения коммитов не переводятся |
 | `GLAB_BIN`, `GITLAB_HOST`, `GITLAB_PROJECT` | `glab`, из `git remote`, из `git remote` | GitLab; host/project задаются вручную, если remote не разбирается |
 | `GITLAB_SYNC_ROLES`, `GITLAB_SYNC_ONLY_PROJECT` | `reviewer,assignee,author`, `1` | Что синхронизировать (author = мои MR) |
 | `BASE_BRANCH` | `develop` | От чего создаются ветки задач |

@@ -360,7 +360,7 @@ func TestAddSyncReviewVerify(t *testing.T) {
 	if req.Agent != "mr-review" || req.Mode != runner.ModeReadOnly || req.Dir != svc.Settings.ProjectRoot {
 		t.Fatalf("request: %+v", req)
 	}
-	for _, want := range []string{"Mode: FULL REVIEW", "merge_requests/42", "Head SHA to review: sha-1", "READ-ONLY"} {
+	for _, want := range []string{"Mode: FULL REVIEW", "merge_requests/42", "Head SHA to review: sha-1", "READ-ONLY", "LANGUAGE: write every human-readable field", "in Russian"} {
 		if !strings.Contains(req.Prompt, want) {
 			t.Fatalf("prompt missing %q", want)
 		}

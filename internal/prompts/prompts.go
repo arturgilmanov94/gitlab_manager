@@ -20,9 +20,9 @@ const findingSchema = `{
     "category": {"type": "string", "description": "short slug: bug, regression, security, error-handling, logic, style, test, other"},
     "file": {"type": "string", "description": "repository-relative path, empty if not file-specific"},
     "line": {"type": ["integer", "null"], "description": "line in the new version of the file, null if unknown"},
-    "title": {"type": "string"},
-    "description": {"type": "string"},
-    "suggestion": {"type": "string", "description": "concrete fix proposal; empty if none"}
+    "title": {"type": "string", "description": "one line, the problem itself"},
+    "description": {"type": "string", "description": "markdown: short paragraphs and bullets, evidence as path/file.php:line in inline code, why it matters; not one dense paragraph"},
+    "suggestion": {"type": "string", "description": "concrete fix proposal as markdown (fenced code block for code); empty if none"}
   },
   "required": ["severity", "category", "file", "line", "title", "description", "suggestion"],
   "additionalProperties": false
@@ -84,8 +84,8 @@ var VerifySchema = []byte(`{
 var PlanSchema = []byte(`{
   "type": "object",
   "properties": {
-    "summary": {"type": "string", "description": "what the task asks for and the proposed approach, 3-10 sentences"},
-    "steps": {"type": "array", "items": {"type": "string"}, "description": "ordered implementation steps"},
+    "summary": {"type": "string", "description": "markdown, 3-10 sentences in short paragraphs: what the task asks for and the proposed approach"},
+    "steps": {"type": "array", "items": {"type": "string"}, "description": "ordered implementation steps, each one self-contained (markdown, inline code for identifiers)"},
     "files": {"type": "array", "items": {"type": "object", "properties": {
       "path": {"type": "string"}, "change": {"type": "string", "description": "what changes there and why"}
     }, "required": ["path", "change"], "additionalProperties": false}},
@@ -101,7 +101,7 @@ var PlanSchema = []byte(`{
 var ImplementSchema = []byte(`{
   "type": "object",
   "properties": {
-    "summary": {"type": "string", "description": "what was implemented, 3-10 sentences"},
+    "summary": {"type": "string", "description": "markdown, 3-10 sentences in short paragraphs: what was implemented and how"},
     "changes": {"type": "array", "items": {"type": "object", "properties": {
       "path": {"type": "string"}, "description": {"type": "string"}
     }, "required": ["path", "description"], "additionalProperties": false}},
@@ -113,7 +113,25 @@ var ImplementSchema = []byte(`{
   "additionalProperties": false
 }`)
 
-const readOnlyRules = `Dashboard run constraints (orchestration only, project rules stay authoritative):
+// Language is the language of every human-readable field the agent returns (summary, titles, descriptions,
+// assessments, steps, risks, todo). Code, identifiers, file paths and commit messages stay as they are.
+// Set from REPORT_LANGUAGE at startup; "ru" by default because the dashboard UI is Russian.
+var Language = "ru"
+
+var languageNames = map[string]string{"ru": "Russian", "en": "English", "de": "German", "uk": "Ukrainian", "kk": "Kazakh"}
+
+// languageRule tells the agent which language to write the report in.
+func languageRule() string {
+	name := languageNames[strings.ToLower(Language)]
+	if name == "" {
+		name = Language
+	}
+	return "- LANGUAGE: write every human-readable field of the result (summary, titles, descriptions, suggestions prose, " +
+		"assessments, notes, steps, risks, questions, actions, tests, todo) in " + name + ", even though these instructions are in English. " +
+		"Keep code, identifiers, file paths, branch names and the commit message as they are.\n"
+}
+
+const readOnlyRulesText = `Dashboard run constraints (orchestration only, project rules stay authoritative):
 - This is a READ-ONLY run triggered from a local dashboard. Do NOT modify, create or delete any file in
   the repository. Do NOT checkout, switch, reset, stash, commit, push or otherwise change the working tree
   or branches. Skip any "apply fixes locally" step of the review workflow — put the proposed fixes into
@@ -124,7 +142,7 @@ const readOnlyRules = `Dashboard run constraints (orchestration only, project ru
 - The final answer must be ONLY the JSON object matching the provided schema, no prose around it.
 `
 
-const editRules = `Dashboard run constraints (orchestration only, project rules stay authoritative):
+const editRulesText = `Dashboard run constraints (orchestration only, project rules stay authoritative):
 - You are working in a dedicated git worktree created for this task; it is safe to edit files here.
 - Do NOT commit, push, checkout another branch, reset, stash or touch other worktrees. The developer
   reviews the diff in the dashboard and commits/pushes explicitly.
@@ -193,7 +211,7 @@ func FullReview(mr MR, s *skill.Skill) string {
 	return SlashPrefix(s, mr.WebURL) + "Mode: FULL REVIEW\n\n" + mrBlock(mr) + "\n" + skillLine(s) + "\n\n" +
 		"Review the MR at the head SHA above. Report every real problem as a finding with a severity from CRITICAL/HIGH/MEDIUM/LOW/INFO. " +
 		"Include unresolved reviewer discussions with your assessment of whether the current head addresses them. " +
-		"Set `reviewed_sha` to the SHA you actually reviewed.\n" + summaryRule + readOnlyRules
+		"Set `reviewed_sha` to the SHA you actually reviewed.\n" + summaryRule + readOnlyRules()
 }
 
 // Verify builds the verify prompt.
@@ -209,12 +227,15 @@ func Verify(mr MR, s *skill.Skill, previousSHA string, previous []PrevFinding) s
 		"Previously reviewed SHA: " + previousSHA + "\n\n" + skillLine(s) + "\n\nPrevious open findings (JSON):\n" + string(list) + "\n\n" +
 		"For EACH previous finding decide whether at the current head it is `fixed`, still `open`, or `obsolete` (the code no longer exists / the concern no longer applies), with a short evidence note. " +
 		"Compare the diff between the previously reviewed SHA and the current head where helpful. Report only genuinely new problems introduced by the newer commits in `new_findings`. " +
-		"Re-assess unresolved reviewer discussions. Set `reviewed_sha` to the SHA you actually reviewed.\n" + summaryRule + readOnlyRules
+		"Re-assess unresolved reviewer discussions. Set `reviewed_sha` to the SHA you actually reviewed.\n" + summaryRule + readOnlyRules()
 }
 
 // summaryRule makes the summary a real description: the dashboard shows it as the headline of the review.
 const summaryRule = "The `summary` MUST start with 2-5 sentences describing what the MR changes and why (subsystems, key files, scope), " +
-	"then give the overall assessment. The `verdict` MUST agree with the findings (no findings = approve).\n\n"
+	"then give the overall assessment. The `verdict` MUST agree with the findings (no findings = approve).\n" +
+	"FORMAT: `summary`, finding `description` and `suggestion` are markdown rendered in a dashboard. Write them as short " +
+	"paragraphs separated by blank lines (what the MR does / key changes as a bullet list / assessment), one idea per " +
+	"paragraph, bullets for enumerations, inline code for identifiers and paths, fenced code blocks for code. Never one dense wall of text.\n\n"
 
 func issueBlock(issue Issue, notes string) string {
 	var b strings.Builder
@@ -231,7 +252,7 @@ func Plan(issue Issue, notes string, s *skill.Skill) string {
 	return SlashPrefix(s, issue.WebURL) + "Mode: PLAN (read-only analysis of a task)\n\n" + issueBlock(issue, notes) + "\n" + skillLine(s) + "\n\n" +
 		"Study the task and the relevant code in this repository (you are in the project root). Produce a concrete implementation plan: " +
 		"ordered steps, files to change with what changes, risks/regressions to watch, open questions, and a rough size estimate. " +
-		"You may fetch more context from GitLab with read-only `glab api` calls (linked issues, related MRs).\n\n" + readOnlyRules
+		"You may fetch more context from GitLab with read-only `glab api` calls (linked issues, related MRs).\n\n" + readOnlyRules()
 }
 
 // Implement builds the editing prompt for a worktree run.
@@ -240,13 +261,22 @@ func Implement(issue Issue, notes, branch, baseBranch string, s *skill.Skill) st
 		fmt.Sprintf("\nYou are in a git worktree on branch `%s` created from `origin/%s`. Implement the task here.\n", branch, baseBranch) +
 		skillLine(s) + "\n\n" +
 		"Follow the project's rules and conventions, keep the change focused on the task, add or update tests where the project covers the area, " +
-		"and run the project's style/test checks that apply to the touched files. Report what you changed, what you ran, and what is left.\n\n" + editRules
+		"and run the project's style/test checks that apply to the touched files. Report what you changed, what you ran, and what is left.\n\n" + editRules()
 }
+
+// readOnlyRules / editRules are the dashboard constraints plus the report-language rule.
+func readOnlyRules() string { return readOnlyRulesText + languageRule() }
+func editRules() string     { return editRulesText + languageRule() }
 
 // FollowUp wraps a developer question for a resumed session.
 func FollowUp(question string) string {
+	name := languageNames[strings.ToLower(Language)]
+	if name == "" {
+		name = Language
+	}
 	return "Follow-up question from the developer about your previous result (answer in plain text, concise, reference files/lines where useful; " +
-		"this is still a READ-ONLY conversation — do not modify files):\n\n" + strings.TrimSpace(question)
+		"this is still a READ-ONLY conversation — do not modify files). Answer in the same language as the question, " +
+		"defaulting to " + name + ".\n\n" + strings.TrimSpace(question)
 }
 
 // QuickReview builds a lighter, diff-focused review prompt.
@@ -255,7 +285,7 @@ func QuickReview(mr MR, s *skill.Skill) string {
 		"Do a fast first-pass review: read the MR diff and the unresolved discussions, look only at the files the MR touches " +
 		"(open surrounding code only when a change cannot be judged without it), and report CRITICAL/HIGH/MEDIUM problems only. " +
 		"Skip style nits unless they violate an explicit project rule. Keep the summary to 3-5 sentences. " +
-		"Set `reviewed_sha` to the SHA you actually reviewed.\n" + summaryRule + readOnlyRules
+		"Set `reviewed_sha` to the SHA you actually reviewed.\n" + summaryRule + readOnlyRules()
 }
 
 // FixSchema is the structured report after addressing reviewer comments in a worktree.
@@ -294,5 +324,5 @@ func FixComments(mr MR, notes string, s *skill.Skill) string {
 		"Fetch the unresolved discussions of this MR with `glab api` (discussions where notes[0].resolvable == true and resolved == false), " +
 		"read each reviewer's request in the context of the current code, and change the code to address it, following the project's rules. " +
 		"If a comment is a question or needs a business decision, do not guess: leave it in `todo` with your recommendation. " +
-		"Run the project's style/test checks that apply to the touched files. Do NOT reply to or resolve the discussions in GitLab — the developer does that after reviewing the diff.\n\n" + editRules
+		"Run the project's style/test checks that apply to the touched files. Do NOT reply to or resolve the discussions in GitLab — the developer does that after reviewing the diff.\n\n" + editRules()
 }

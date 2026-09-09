@@ -68,6 +68,9 @@ func New(settings *config.Settings, database *db.DB, gl gitlab.Client, runners [
 			s.Runners[r.Name()] = r
 		}
 	}
+	if settings.ReportLanguage != "" {
+		prompts.Language = settings.ReportLanguage
+	}
 	if settings.ProjectRoot != "" {
 		s.Worktrees = &worktree.Manager{Root: settings.ProjectRoot, Dir: settings.WorktreeDir, BaseBranch: settings.BaseBranch}
 	}

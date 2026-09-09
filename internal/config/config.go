@@ -39,6 +39,7 @@ type Settings struct {
 	ClaudePermissions  string // auto (classifier + sandbox) | manual (rules + sandbox, ask the rest) | strict (fixed tool lists)
 	ApprovalTimeoutSec int    // how long a run waits for the developer's answer to a permission prompt
 	PlansDir           string // where "save plan" writes markdown; "" = <project>/.claude/plans
+	ReportLanguage     string // language of the agent's human-readable output (ru by default)
 	CodexBin           string
 	CodexModels        []string
 	DefaultRunner      string
@@ -169,6 +170,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		ClaudeExtraTools:      SplitTools(get("CLAUDE_EXTRA_ALLOWED_TOOLS")),
 		ClaudePermissions:     strings.ToLower(str("CLAUDE_PERMISSIONS", "auto")),
 		ApprovalTimeoutSec:    num("APPROVAL_TIMEOUT_SEC", 1800),
+		ReportLanguage:        strings.ToLower(str("REPORT_LANGUAGE", "ru")),
 		CodexBin:              str("CODEX_BIN", "codex"),
 		CodexModels:           splitList(str("CODEX_MODELS", "default,gpt-5-codex")),
 		DefaultRunner:         str("DEFAULT_RUNNER", "claude"),
