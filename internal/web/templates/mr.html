@@ -14,11 +14,11 @@
     {{if .Closed}}
       <span class="badge">MR {{if eq .MR.State "merged"}}merged{{else}}closed{{end}}</span>
     {{else if and .Active (eq .Active.Status "waiting")}}
-      <a class="btn btn-primary" href="/run/{{.Active.ID}}#approval">Ответить агенту</a>
+      <a class="btn btn-primary" href="{{runPath .Active.Kind .Active.ID}}#approval">Ответить агенту</a>
     {{else if .Active}}
-      <a class="btn btn-primary" href="/run/{{.Active.ID}}">Открыть прогресс</a>
+      <a class="btn btn-primary" href="{{runPath .Active.Kind .Active.ID}}">Открыть прогресс</a>
     {{else if eq .State "failed"}}
-      <a class="btn" href="/run/{{.LastRun.ID}}">Посмотреть ошибку</a>
+      <a class="btn" href="{{runPath .LastRun.Kind .LastRun.ID}}">Посмотреть ошибку</a>
       <button class="btn btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.LastRun.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Повторить</button>
     {{else if eq .State "stale"}}
       <button class="btn btn-primary tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'verify', this)">Проверить изменения</button>
@@ -76,7 +76,7 @@
 
 {{if .Active}}
 <div class="progress-box" data-run-status="{{.Active.ID}}" data-status="{{.Active.Status}}" data-started="{{.Active.StartedAt}}" data-reload="1">
-  <div class="progress-head">{{template "status" .Active.Status}} <b>{{kindLabel .Active.Kind}}</b> · {{.Active.Runner}} · <span class="elapsed">—</span> · <a href="/run/{{.Active.ID}}">открыть сессию</a></div>
+  <div class="progress-head">{{template "status" .Active.Status}} <b>{{kindLabel .Active.Kind}}</b> · {{.Active.Runner}} · <span class="elapsed">—</span> · <a href="{{runPath .Active.Kind .Active.ID}}">открыть сессию</a></div>
   <div class="progress"><div class="progress-bar indeterminate"></div></div>
 </div>
 {{end}}
@@ -95,7 +95,7 @@
 {{if .Latest}}
 <section class="card" id="results">
   <div class="card-head">
-    <h2>Результат AI review · <a href="/run/{{.Latest.ID}}">сессия #{{.Latest.ID}}</a> · {{kindLabel .Latest.Kind}}</h2>
+    <h2>Результат AI review · <a href="{{runPath .Latest.Kind .Latest.ID}}">сессия #{{.Latest.ID}}</a> · {{kindLabel .Latest.Kind}}</h2>
     <div>{{if .Stale}}<span class="badge badge-warning tip" data-tip="Результат относится к коммиту {{shortSHA .Latest.HeadSHA}}; с тех пор появились новые коммиты. Нажмите «Проверить изменения».">по коммиту {{shortSHA .Latest.HeadSHA}} · есть новые изменения</span>{{else}}<span class="badge badge-success">актуально для HEAD {{shortSHA .Latest.HeadSHA}}</span>{{end}}</div>
   </div>
   <div class="summary"><span class="verdict-{{.Latest.Verdict}}">{{verdict .Latest.Verdict}}.</span> {{md .Latest.Summary .Blob .SHA}}</div>
@@ -113,9 +113,9 @@
     <tbody>
     {{range .Runs}}
     <tr>
-      <td><a href="/run/{{.ID}}">#{{.ID}}</a></td>
+      <td><a href="{{runPath .Kind .ID}}">#{{.ID}}</a></td>
       <td>{{kindLabel .Kind}}</td>
-      <td><a href="/run/{{.ID}}" data-run-status="{{.ID}}" data-status="{{.Status}}">{{template "status" .Status}}</a></td>
+      <td><a href="{{runPath .Kind .ID}}" data-run-status="{{.ID}}" data-status="{{.Status}}">{{template "status" .Status}}</a></td>
       <td>{{.Runner}}</td>
       <td class="mono small">{{shortSHA .HeadSHA}}</td>
       <td class="verdict-{{.Verdict}}">{{if .Verdict}}{{verdict .Verdict}}{{else}}—{{end}}</td>

@@ -19,11 +19,11 @@
       {{else if eq .State "pushed"}}<span class="state state-success"><span class="glyph">✓</span> Отправлено в origin</span>
       {{else}}<span class="state state-neutral"><span class="glyph">○</span> Закоммичено, не отправлено{{if .Unpushed}} ({{.Unpushed}}){{end}}</span>{{end}}
     </td>
-    <td data-label="Сессия">{{if .Run}}<a href="/run/{{.Run.ID}}">#{{.Run.ID}} {{kindLabel .Run.Kind}}</a><div class="small muted">{{when .Run.CreatedAt}}</div>{{else}}<span class="muted">не связан с сессией</span>{{end}}</td>
+    <td data-label="Сессия">{{if .Run}}<a href="{{runPath .Run.Kind .Run.ID}}">#{{.Run.ID}} {{kindLabel .Run.Kind}}</a><div class="small muted">{{when .Run.CreatedAt}}</div>{{else}}<span class="muted">не связан с сессией</span>{{end}}</td>
     <td class="mono small hide-lg" data-label="Путь">{{.Path}}</td>
     <td class="actions-cell">
       <div class="actions">
-        {{if .Run}}<a class="btn btn-sm btn-primary" href="/run/{{.Run.ID}}#workspace">{{if eq .State "dirty"}}Показать diff{{else if eq .State "active"}}Открыть сессию{{else}}Подготовить MR{{end}}</a>{{end}}
+        {{if .Run}}<a class="btn btn-sm btn-primary" href="{{runPath .Run.Kind .Run.ID}}#workspace">{{if eq .State "dirty"}}Показать diff{{else if eq .State "active"}}Открыть сессию{{else}}Подготовить MR{{end}}</a>{{end}}
         <details class="menu">
           <summary title="Ещё действия">⋯</summary>
           <div class="menu-items">

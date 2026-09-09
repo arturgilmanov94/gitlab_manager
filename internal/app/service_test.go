@@ -65,6 +65,102 @@ func TestDefaultProjectAndUser(t *testing.T) {
 	}
 }
 
+func TestSyncScopesMRs(t *testing.T) {
+	svc, gl, fr := newService(t)
+	// !42: alice is author+assignee. !43 and !44 are bob's MRs where alice is a reviewer; !45 is bob's MR without
+	// any role for alice, added by hand.
+	for _, iid := range []int64{43, 44, 45} {
+		p := testutil.MRPayload(iid, "sha")
+		p["author"] = map[string]any{"username": "bob"}
+		p["assignees"] = []any{}
+		p["reviewers"] = []any{map[string]any{"username": "alice"}}
+		if iid == 45 {
+			p["reviewers"] = []any{}
+		}
+		gl.MRs[iid] = p
+	}
+	gl.Listed = []int64{42, 43, 44}
+	added, _ := svc.AddMR("!45")
+	if !added.Manual || added.MyRoles != "" || !added.Relevant() {
+		t.Fatalf("manual MR must stay relevant: %+v", added)
+	}
+	res, err := svc.SyncMRs()
+	if err != nil || res.Synced != 4 || res.Archived != 0 || res.Pruned != 0 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	mr42 := findMR(t, svc, 42)
+	if mr42.MyRoles != "author,assignee" || mr42.ApprovedByMe || !mr42.Relevant() {
+		t.Fatalf("%+v", mr42)
+	}
+	if findMR(t, svc, 43).MyRoles != "reviewer" {
+		t.Fatal("reviewer role expected")
+	}
+	// Alice is removed from the reviewers of 43 and 44: the reviewed one goes to the history, the untouched one is pruned.
+	mr43 := findMR(t, svc, 43)
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha")}
+	runID, _ := svc.StartReview(mr43.ID, db.KindReviewQuick, "")
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
+	gl.MRs[43]["reviewers"] = []any{}
+	gl.MRs[44]["reviewers"] = []any{}
+	gl.Listed = []int64{42}
+	res, _ = svc.SyncMRs()
+	if res.Synced != 2 || res.Archived != 1 || res.Pruned != 1 {
+		t.Fatalf("synced %d archived %d pruned %d", res.Synced, res.Archived, res.Pruned)
+	}
+	all, _ := svc.DB.ListMRs()
+	seen := map[int64]bool{}
+	for _, mr := range all {
+		seen[mr.IID] = true
+	}
+	if !seen[42] || !seen[43] || seen[44] || !seen[45] {
+		t.Fatalf("expected 42, 43 (history), 45 (manual) to stay and 44 to be pruned: %v", seen)
+	}
+	if findMR(t, svc, 43).Relevant() || !findMR(t, svc, 45).Relevant() {
+		t.Fatal("reviewed foreign MR is history; manual MR stays relevant")
+	}
+	// Approving my own MR moves it out of the main list too.
+	gl.ApprovedBy[42] = []string{"alice"}
+	if _, err := svc.RefreshMR(mr42.ID); err != nil {
+		t.Fatal(err)
+	}
+	if findMR(t, svc, 42).Relevant() {
+		t.Fatal("approved by me is not relevant")
+	}
+}
+
+func findMR(t *testing.T, svc *Service, iid int64) *db.MergeRequest {
+	t.Helper()
+	all, _ := svc.DB.ListMRs()
+	for _, mr := range all {
+		if mr.IID == iid {
+			m := mr.MergeRequest
+			return &m
+		}
+	}
+	t.Fatalf("MR !%d not found", iid)
+	return nil
+}
+
+func TestDeriveVerdict(t *testing.T) {
+	cases := []struct {
+		agent    string
+		findings []db.Finding
+		want     string
+	}{
+		{"approve_with_comments", nil, "approve"},
+		{"approve", []db.Finding{{Severity: "HIGH", Status: "open"}}, "request_changes"},
+		{"approve", []db.Finding{{Severity: "CRITICAL", Status: "open"}, {Severity: "LOW", Status: "open"}}, "blocked"},
+		{"request_changes", []db.Finding{{Severity: "LOW", Status: "open"}, {Severity: "MEDIUM", Status: "open"}}, "approve_with_comments"},
+		{"blocked", []db.Finding{{Severity: "HIGH", Status: "fixed"}, {Severity: "MEDIUM", Status: "obsolete"}}, "approve"},
+		{"request_changes", []db.Finding{{Severity: "HIGH", Status: "open"}}, "request_changes"},
+	}
+	for _, c := range cases {
+		if got := DeriveVerdict(c.agent, c.findings); got != c.want {
+			t.Errorf("%s + %d findings: got %s, want %s", c.agent, len(c.findings), got, c.want)
+		}
+	}
+}
+
 func TestParallelRunsOnDifferentMRs(t *testing.T) {
 	settings, _ := testutil.Settings(t)
 	settings.RunConcurrency = 2
@@ -218,7 +314,9 @@ func TestExportPlanWritesMarkdown(t *testing.T) {
 }
 
 func TestConcurrencyOneQueuesSecondMR(t *testing.T) {
-	svc, gl, fr := newService(t) // RUN_CONCURRENCY defaults to 1
+	settings, _ := testutil.Settings(t)
+	settings.RunConcurrency = 1
+	svc, gl, fr := newServiceWith(t, settings)
 	gl.MRs[43] = testutil.MRPayload(43, "sha-43")
 	a, _ := svc.AddMR("!42")
 	b, _ := svc.AddMR("!43")

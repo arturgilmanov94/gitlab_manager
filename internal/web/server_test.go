@@ -98,7 +98,7 @@ func TestPagesAndFlow(t *testing.T) {
 	}
 	runURL := out["redirect"].(string)
 	testutil.WaitFor(t, func() bool {
-		_, body := get(t, ts.URL+"/api/runs/"+strings.TrimPrefix(runURL, "/run/"))
+		_, body := get(t, ts.URL+"/api/runs/"+lastSeg(runURL))
 		return strings.Contains(body, `"status":"done"`)
 	})
 	if code, body := get(t, ts.URL+runURL); code != 200 || !strings.Contains(body, "Null deref") || !strings.Contains(body, "Нужны правки") || !strings.Contains(body, "Продолжить сессию") {
@@ -152,7 +152,7 @@ func TestPagesAndFlow(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatal("delete")
 	}
-	if code, _ := get(t, ts.URL+"/mr/1"); code != 404 {
+	if code, _ := get(t, ts.URL+"/-/mr/1"); code != 404 {
 		t.Fatal("expected 404 after delete")
 	}
 }
@@ -170,7 +170,7 @@ func TestPermissionPromptPage(t *testing.T) {
 		t.Fatalf("%d %v", code, out)
 	}
 	runURL := out["redirect"].(string)
-	runID := strings.TrimPrefix(runURL, "/run/")
+	runID := lastSeg(runURL)
 	testutil.WaitFor(t, func() bool {
 		_, body := get(t, ts.URL+"/api/runs/"+runID)
 		return strings.Contains(body, `"status":"waiting"`) && strings.Contains(body, `"pending_approval"`)
@@ -208,13 +208,13 @@ func TestPlanFileExport(t *testing.T) {
 	_, out := postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "plan"})
 	runURL := out["redirect"].(string)
 	testutil.WaitFor(t, func() bool {
-		_, body := get(t, ts.URL+"/api/runs/"+strings.TrimPrefix(runURL, "/run/"))
+		_, body := get(t, ts.URL+"/api/runs/"+lastSeg(runURL))
 		return strings.Contains(body, `"status":"done"`)
 	})
 	if _, body := get(t, ts.URL+runURL); !strings.Contains(body, "Сохранить план в проект") {
 		t.Fatal("plan page must offer the export")
 	}
-	code, out := postJSON(t, ts.URL+"/api/runs/"+strings.TrimPrefix(runURL, "/run/")+"/plan-file", map[string]any{})
+	code, out := postJSON(t, ts.URL+"/api/runs/"+lastSeg(runURL)+"/plan-file", map[string]any{})
 	if code != 200 || !strings.HasPrefix(out["path"].(string), svc.Settings.PlansDir) {
 		t.Fatalf("%d %v", code, out)
 	}
@@ -224,6 +224,54 @@ func TestPlanFileExport(t *testing.T) {
 }
 
 func strconvI(v int64) string { return strings.TrimSpace(fmtInt(v)) }
+
+// lastSeg returns the id segment of a readable object URL like /-/review/12#approval.
+func lastSeg(url string) string {
+	if i := strings.IndexByte(url, '#'); i >= 0 {
+		url = url[:i]
+	}
+	return url[strings.LastIndex(url, "/")+1:]
+}
+
+func TestHistoryAndPrettyURLs(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	_, out := postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "full"})
+	runURL := out["redirect"].(string)
+	if !strings.HasPrefix(runURL, "/-/review/") {
+		t.Fatalf("readable run URL expected, got %s", runURL)
+	}
+	testutil.WaitFor(t, func() bool {
+		_, body := get(t, ts.URL+"/api/runs/"+lastSeg(runURL))
+		return strings.Contains(body, `"status":"done"`)
+	})
+	if code, body := get(t, ts.URL+runURL); code != 200 || !strings.Contains(body, "Результат ревью") {
+		t.Fatalf("pretty run page %d", code)
+	}
+	if code, _ := get(t, ts.URL+"/-/bogus/1"); code != 404 {
+		t.Fatal("unknown action slug must be 404")
+	}
+	// Old URLs redirect (the test client follows them).
+	if code, body := get(t, ts.URL+"/run/1"); code != 200 || !strings.Contains(body, "Результат ревью") {
+		t.Fatalf("legacy /run/1 must redirect: %d", code)
+	}
+	if code, body := get(t, ts.URL+"/mr/1"); code != 200 || !strings.Contains(body, "MR 42") {
+		t.Fatalf("legacy /mr/1 must redirect: %d", code)
+	}
+	// I approve the MR: after a sync it leaves the main list and shows up in the history with its actions.
+	gl := svc.GitLab.(*testutil.FakeGitLab)
+	gl.ApprovedBy[42] = []string{"alice"}
+	if code, out := postJSON(t, ts.URL+"/api/mrs/sync", map[string]any{}); code != 200 || out["archived"].(float64) != 1 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if _, body := get(t, ts.URL+"/mrs"); strings.Contains(body, "MR 42") || !strings.Contains(body, "в истории: 1") {
+		t.Fatal("approved MR must leave the main list")
+	}
+	if _, body := get(t, ts.URL+"/history"); !strings.Contains(body, "MR 42") || !strings.Contains(body, "одобрен мной") || !strings.Contains(body, "Полное ревью заново") {
+		t.Fatal("history must list the MR with the review actions")
+	}
+}
 
 func fmtInt(v int64) string {
 	const digits = "0123456789"
@@ -260,7 +308,7 @@ func TestIssuesPages(t *testing.T) {
 	}
 	runURL := out["redirect"].(string)
 	testutil.WaitFor(t, func() bool {
-		_, body := get(t, ts.URL+"/api/runs/"+strings.TrimPrefix(runURL, "/run/"))
+		_, body := get(t, ts.URL+"/api/runs/"+lastSeg(runURL))
 		return strings.Contains(body, `"status":"done"`)
 	})
 	if code, body := get(t, ts.URL+runURL); code != 200 || !strings.Contains(body, "План решения") || !strings.Contains(body, "Plan summary") || !strings.Contains(body, "Реализовать этот план") {
@@ -271,13 +319,13 @@ func TestIssuesPages(t *testing.T) {
 	}
 	// Implement from the plan: the plan text must reach the agent's notes.
 	fr.Outputs = []map[string]any{testutil.ImplementOutput()}
-	code, out = postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "implement", "plan_run": strings.TrimPrefix(runURL, "/run/")})
+	code, out = postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "implement", "plan_run": lastSeg(runURL)})
 	if code != 200 {
 		t.Fatalf("%d %v", code, out)
 	}
 	implURL := out["redirect"].(string)
 	testutil.WaitFor(t, func() bool {
-		_, body := get(t, ts.URL+"/api/runs/"+strings.TrimPrefix(implURL, "/run/"))
+		_, body := get(t, ts.URL+"/api/runs/"+lastSeg(implURL))
 		return strings.Contains(body, `"status":"done"`)
 	})
 	last := fr.Requests[len(fr.Requests)-1]
@@ -298,7 +346,7 @@ func TestIssuesPages(t *testing.T) {
 	code, out = postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "plan"})
 	failedURL := out["redirect"].(string)
 	testutil.WaitFor(t, func() bool {
-		_, body := get(t, ts.URL+"/api/runs/"+strings.TrimPrefix(failedURL, "/run/"))
+		_, body := get(t, ts.URL+"/api/runs/"+lastSeg(failedURL))
 		return strings.Contains(body, `"status":"failed"`)
 	})
 	if _, body := get(t, ts.URL+failedURL); !strings.Contains(body, "Не удалось исследовать задачу") || !strings.Contains(body, "Повторить") {
@@ -306,7 +354,7 @@ func TestIssuesPages(t *testing.T) {
 	}
 	fr.FailWith = ""
 	fr.Outputs = []map[string]any{testutil.PlanOutput()}
-	code, out = postJSON(t, ts.URL+"/api/runs/"+strings.TrimPrefix(failedURL, "/run/")+"/retry", map[string]any{})
+	code, out = postJSON(t, ts.URL+"/api/runs/"+lastSeg(failedURL)+"/retry", map[string]any{})
 	if code != 200 || out["redirect"] == nil {
 		t.Fatalf("retry: %d %v", code, out)
 	}

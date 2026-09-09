@@ -112,9 +112,20 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 			}
 			return s
 		},
-		"errorTitle":    errorTitle,
-		"md":            renderMarkdown,
-		"hasPrefix":     strings.HasPrefix,
+		"errorTitle": errorTitle,
+		"md":         renderMarkdown,
+		"hasPrefix":  strings.HasPrefix,
+		"runPath":    runPath,
+		"mrPath":     mrPath,
+		"issuePath":  issuePath,
+		"dict": func(pairs ...any) map[string]any {
+			out := map[string]any{}
+			for i := 0; i+1 < len(pairs); i += 2 {
+				key, _ := pairs[i].(string)
+				out[key] = pairs[i+1]
+			}
+			return out
+		},
 		"blobBase":      blobBase,
 		"fileLink":      fileLink,
 		"pipelineLabel": pipelineLabel,
@@ -130,7 +141,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 	if err != nil {
 		return nil, err
 	}
-	for _, page := range []string{"overview", "index", "issues", "mr", "issue", "run", "runs", "workspaces", "doctor"} {
+	for _, page := range []string{"overview", "index", "history", "issues", "mr", "issue", "run", "runs", "workspaces", "doctor"} {
 		files := append([]string{"templates/layout.html", "templates/" + page + ".html"}, partials...)
 		t, err := template.New("layout").Funcs(funcs).ParseFS(assets, files...)
 		if err != nil {
@@ -154,14 +165,32 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /{$}", s.overview)
 	s.mux.HandleFunc("GET /mrs", s.index)
+	s.mux.HandleFunc("GET /history", s.history)
 	s.mux.HandleFunc("GET /issues", s.issues)
 	s.mux.HandleFunc("GET /runs", s.runs)
 	s.mux.HandleFunc("GET /workspaces", s.workspaces)
-	s.mux.HandleFunc("GET /mr/{id}", s.mrPage)
-	s.mux.HandleFunc("GET /issue/{id}", s.issuePage)
-	s.mux.HandleFunc("GET /run/{id}", s.runPage)
-	s.mux.HandleFunc("GET /run/{id}/log", s.runLog)
 	s.mux.HandleFunc("GET /doctor", s.doctorPage)
+	// Readable object URLs: /-/mr/1, /-/issue/2, /-/review/3, /-/task-implement/4 (+ /log).
+	s.mux.HandleFunc("GET /-/mr/{id}", s.mrPage)
+	s.mux.HandleFunc("GET /-/issue/{id}", s.issuePage)
+	s.mux.HandleFunc("GET /-/{action}/{id}", s.runPage)
+	s.mux.HandleFunc("GET /-/{action}/{id}/log", s.runLog)
+	// Old paths keep working and redirect to the readable form.
+	s.mux.HandleFunc("GET /mr/{id}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, mrPath(pathID(r)), http.StatusMovedPermanently)
+	})
+	s.mux.HandleFunc("GET /issue/{id}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, issuePath(pathID(r)), http.StatusMovedPermanently)
+	})
+	s.mux.HandleFunc("GET /run/{id}", func(w http.ResponseWriter, r *http.Request) {
+		run, _ := s.svc.DB.GetRun(pathID(r))
+		if run == nil {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, runPath(run.Kind, run.ID)+fragment(r), http.StatusMovedPermanently)
+	})
+	s.mux.HandleFunc("GET /run/{id}/log", s.runLog)
 
 	s.mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true, "version": s.version, "project_root": s.svc.Settings.ProjectRoot})
@@ -174,7 +203,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/mrs", s.apiAddMR)
 	s.mux.HandleFunc("POST /api/mrs/sync", func(w http.ResponseWriter, r *http.Request) {
 		res, err := s.svc.SyncMRs()
-		s.result(w, map[string]any{"synced": res.Synced, "username": res.Username, "project": res.Project}, err)
+		s.result(w, map[string]any{"synced": res.Synced, "archived": res.Archived, "pruned": res.Pruned, "username": res.Username, "project": res.Project}, err)
 	})
 	s.mux.HandleFunc("POST /api/mrs/{id}/refresh", func(w http.ResponseWriter, r *http.Request) {
 		mr, err := s.svc.RefreshMR(pathID(r))
@@ -206,7 +235,7 @@ func (s *Server) routes() {
 			s.result(w, nil, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"ok": true, "run_id": runID, "redirect": fmt.Sprintf("/run/%d", runID)})
+		s.runStarted(w, runID)
 	})
 	s.mux.HandleFunc("POST /api/runs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": s.svc.Cancel(pathID(r))})
@@ -270,13 +299,70 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 	}
 }
 
+// index lists the MRs that still concern the developer (open, not approved by me, I have a role or added by hand).
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	mrs, err := s.svc.DB.ListMRs()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.render(w, "index", map[string]any{"Base": s.base("mrs", "Merge requests"), "MRs": mrs})
+	relevant, archived := splitMRs(mrs)
+	s.render(w, "index", map[string]any{"Base": s.base("mrs", "Merge requests"), "MRs": relevant, "Archived": len(archived)})
+}
+
+// history lists MRs that no longer concern the developer (approved, merged, closed, role removed) but were
+// worked on: every review action is still available there.
+func (s *Server) history(w http.ResponseWriter, r *http.Request) {
+	mrs, err := s.svc.DB.ListMRs()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	_, archived := splitMRs(mrs)
+	s.render(w, "history", map[string]any{"Base": s.base("history", "История"), "MRs": archived})
+}
+
+func splitMRs(mrs []db.MRListItem) (relevant, archived []db.MRListItem) {
+	for _, mr := range mrs {
+		if mr.Relevant() {
+			relevant = append(relevant, mr)
+		} else {
+			archived = append(archived, mr)
+		}
+	}
+	return relevant, archived
+}
+
+// Readable URLs.
+func runSlug(kind string) string {
+	switch kind {
+	case db.KindReviewFull:
+		return "review"
+	case db.KindReviewQuick:
+		return "quick-review"
+	case db.KindReviewVerify:
+		return "verify"
+	case db.KindFixComments:
+		return "fix-comments"
+	case db.KindPlan:
+		return "task-plan"
+	case db.KindImplement:
+		return "task-implement"
+	}
+	return "run"
+}
+
+var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "fix-comments": true, "task-plan": true, "task-implement": true, "run": true}
+
+func runPath(kind string, id any) string { return fmt.Sprintf("/-/%s/%v", runSlug(kind), id) }
+func mrPath(id any) string               { return fmt.Sprintf("/-/mr/%v", id) }
+func issuePath(id any) string            { return fmt.Sprintf("/-/issue/%v", id) }
+
+func fragment(r *http.Request) string {
+	if r.URL.Fragment != "" {
+		return "#" + r.URL.Fragment
+	}
+	return ""
 }
 
 // inboxItem is one line of the overview's "Нужно от меня" block: a state, a text and exactly one action.
@@ -305,12 +391,12 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		active = append(active, run)
 		if run.Status == db.StatusWaiting {
 			inbox = append(inbox, inboxItem{Tone: "warning", Glyph: "⚠", Title: runObjectLabel(run) + " · агенту нужен ваш ответ",
-				Detail: strings.TrimPrefix(run.Progress, "Нужен ваш ответ: "), Href: fmt.Sprintf("/run/%d#approval", run.ID), Action: "Ответить"})
+				Detail: strings.TrimPrefix(run.Progress, "Нужен ваш ответ: "), Href: runPath(run.Kind, run.ID) + "#approval", Action: "Ответить"})
 		}
 	}
 	mine := struct{ Total, PipelineFailed, Unresolved, Approved, Stale, NeverReviewed int }{}
 	for _, mr := range mrs {
-		if mr.Closed() {
+		if !mr.Relevant() {
 			continue
 		}
 		isMine := username != "" && mr.Author == username
@@ -348,7 +434,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	for _, issue := range issues {
 		if issue.Last != nil && issue.Last.Status == db.StatusDone && issue.Last.Kind == db.KindImplement {
 			inbox = append(inbox, inboxItem{Tone: "success", Glyph: "✓", Title: fmt.Sprintf("#%d · готово к MR", issue.IID), Detail: issue.Title,
-				Href: fmt.Sprintf("/run/%d", issue.Last.ID), Action: "Подготовить MR"})
+				Href: runPath(issue.Last.Kind, issue.Last.ID), Action: "Подготовить MR"})
 		}
 		if issue.Last != nil && issue.Last.Status == db.StatusFailed {
 			inbox = append(inbox, inboxItem{Tone: "danger", Glyph: "✕", Title: fmt.Sprintf("#%d · %s не удалось", issue.IID, strings.ToLower(kindLabel(issue.Last.Kind))), Detail: issue.Title,
@@ -356,9 +442,10 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.SliceStable(inbox, func(i, j int) bool { return inboxRank(inbox[i]) < inboxRank(inbox[j]) })
+	relevant, _ := splitMRs(mrs)
 	s.render(w, "overview", map[string]any{
 		"Base": s.base("overview", "Обзор"), "Inbox": inbox, "Active": active, "Mine": mine,
-		"MRCount": len(mrs), "IssueCount": len(issues),
+		"MRCount": len(relevant), "IssueCount": len(issues),
 	})
 }
 
@@ -534,6 +621,10 @@ type planResult struct {
 }
 
 func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
+	if action := r.PathValue("action"); action != "" && !runSlugs[action] {
+		http.NotFound(w, r)
+		return
+	}
 	run, _ := s.svc.DB.GetRun(pathID(r))
 	if run == nil {
 		http.NotFound(w, r)
@@ -627,7 +718,7 @@ func (s *Server) apiAddMR(w http.ResponseWriter, r *http.Request) {
 		s.result(w, nil, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "mr": mr, "redirect": fmt.Sprintf("/mr/%d", mr.ID)})
+	writeJSON(w, 200, map[string]any{"ok": true, "mr": mr, "redirect": mrPath(mr.ID)})
 }
 
 func (s *Server) apiAddIssue(w http.ResponseWriter, r *http.Request) {
@@ -637,7 +728,16 @@ func (s *Server) apiAddIssue(w http.ResponseWriter, r *http.Request) {
 		s.result(w, nil, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "issue": issue, "redirect": fmt.Sprintf("/issue/%d", issue.ID)})
+	writeJSON(w, 200, map[string]any{"ok": true, "issue": issue, "redirect": issuePath(issue.ID)})
+}
+
+// runStarted is the JSON answer for a newly started run.
+func (s *Server) runStarted(w http.ResponseWriter, runID int64) {
+	kind := ""
+	if run, _ := s.svc.DB.GetRun(runID); run != nil {
+		kind = run.Kind
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "run_id": runID, "redirect": runPath(kind, runID)})
 }
 
 func (s *Server) apiStartMRRun(w http.ResponseWriter, r *http.Request) {
@@ -662,7 +762,7 @@ func (s *Server) apiStartMRRun(w http.ResponseWriter, r *http.Request) {
 		s.result(w, nil, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "run_id": runID, "redirect": fmt.Sprintf("/run/%d", runID)})
+	s.runStarted(w, runID)
 }
 
 func (s *Server) apiStartIssueRun(w http.ResponseWriter, r *http.Request) {
@@ -689,7 +789,7 @@ func (s *Server) apiStartIssueRun(w http.ResponseWriter, r *http.Request) {
 		s.result(w, nil, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "run_id": runID, "redirect": fmt.Sprintf("/run/%d", runID)})
+	s.runStarted(w, runID)
 }
 
 func (s *Server) apiRun(w http.ResponseWriter, r *http.Request) {

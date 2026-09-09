@@ -23,15 +23,15 @@
 
 {{define "run-row"}}
 <tr>
-  <td class="ref-cell"><a class="ref" href="/run/{{.ID}}">#{{.ID}}</a></td>
+  <td class="ref-cell"><a class="ref" href="{{runPath .Kind .ID}}">#{{.ID}}</a></td>
   <td class="title-cell">
-    {{if .MRIID}}<a class="title" href="/mr/{{deref .MRID}}">!{{.MRIID}} {{.MRTitle}}</a>{{else if .IssueIID}}<a class="title" href="/issue/{{deref .IssueID}}">#{{.IssueIID}} {{.IssueTitle}}</a>{{else}}<span class="muted">—</span>{{end}}
+    {{if .MRIID}}<a class="title" href="{{mrPath (deref .MRID)}}">!{{.MRIID}} {{.MRTitle}}</a>{{else if .IssueIID}}<a class="title" href="{{issuePath (deref .IssueID)}}">#{{.IssueIID}} {{.IssueTitle}}</a>{{else}}<span class="muted">—</span>{{end}}
     <div class="sub">{{.ObjectProject}}{{if .Branch}} · <span class="mono">{{.Branch}}</span>{{end}}</div>
   </td>
   <td data-label="Тип">{{kindLabel .Kind}}</td>
   <td data-label="Состояние">
     <div class="state-stack">
-      <a href="/run/{{.ID}}" data-run-status="{{.ID}}" data-status="{{.Status}}">{{template "status" .Status}}</a>
+      <a href="{{runPath .Kind .ID}}" data-run-status="{{.ID}}" data-status="{{.Status}}">{{template "status" .Status}}</a>
       {{if and .Active .Progress}}<span class="small muted mono">{{.Progress}}</span>{{else if .Verdict}}<span class="small verdict-{{.Verdict}}">{{verdict .Verdict}} · {{.OpenFindings}} открыто</span>{{else if eq .Status "failed"}}<span class="small text-danger">{{firstLine .Error}}</span>{{end}}
     </div>
   </td>
@@ -40,14 +40,14 @@
   <td class="small nowrap" data-label="Когда">{{if .StartedAt}}{{when .StartedAt}}{{if .Active}} · <span data-started="{{.StartedAt}}"><span class="elapsed">—</span></span>{{end}}{{else}}{{when .CreatedAt}}{{end}}</td>
   <td class="actions-cell">
     <div class="actions">
-      {{if eq .Status "waiting"}}<a class="btn btn-sm btn-primary" href="/run/{{.ID}}#approval">Ответить</a>
-      {{else if .Active}}<a class="btn btn-sm btn-primary" href="/run/{{.ID}}">Открыть</a>
-      {{else if eq .Status "failed"}}<a class="btn btn-sm" href="/run/{{.ID}}">Ошибка</a><button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.ID}}/retry', {}, this).then(r => r && reload())">Повторить</button>
-      {{else}}<a class="btn btn-sm btn-primary" href="/run/{{.ID}}">Результат</a>{{end}}
+      {{if eq .Status "waiting"}}<a class="btn btn-sm btn-primary" href="{{runPath .Kind .ID}}#approval">Ответить</a>
+      {{else if .Active}}<a class="btn btn-sm btn-primary" href="{{runPath .Kind .ID}}">Открыть</a>
+      {{else if eq .Status "failed"}}<a class="btn btn-sm" href="{{runPath .Kind .ID}}">Ошибка</a><button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.ID}}/retry', {}, this).then(r => r && reload())">Повторить</button>
+      {{else}}<a class="btn btn-sm btn-primary" href="{{runPath .Kind .ID}}">Результат</a>{{end}}
       <details class="menu">
         <summary title="Ещё действия">⋯</summary>
         <div class="menu-items">
-          <a class="item" href="/run/{{.ID}}/log" target="_blank">Технический лог</a>
+          <a class="item" href="{{runPath .Kind .ID}}/log" target="_blank">Технический лог</a>
           {{if not .Active}}<button class="item tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.ID}}/retry', {}, this).then(r => r && reload())">Повторить</button>{{end}}
           {{if .Active}}<div class="divider"></div><button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
         </div>

@@ -1,0 +1,74 @@
+{{/* One MR row: . is a dict with MR (db.MRListItem) and Username. Used by the main list and the history. */}}
+{{define "mr-row"}}
+{{with .MR}}
+{{$username := $.Username}}
+{{$st := aiState .}}
+{{$busy := or (eq $st "running") (eq $st "queued") (eq $st "waiting")}}
+{{$closed := .Closed}}
+<tr>
+  <td class="nowrap ref-cell"><a class="ref" href="{{mrPath .ID}}">!{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
+  <td class="title-cell">
+    <a class="title" href="{{mrPath .ID}}">{{.Title}}</a>
+    <div class="sub">{{.Author}}{{if and $username (eq .Author $username)}}<span class="badge badge-info tip" data-tip="Автор MR — вы.">мой</span>{{end}}{{if .Draft}}<span class="badge">Draft</span>{{end}}{{if .ApprovedByMe}}<span class="badge badge-success tip" data-tip="Вы одобрили этот MR.">одобрен мной</span>{{end}}{{if and (not .MyRoles) (not .Manual)}}<span class="badge tip" data-tip="Вы больше не автор, assignee и не reviewer этого MR.">без роли</span>{{end}} · обновлён {{when .GitLabUpdatedAt}}{{if .ChangesCount}} · {{.ChangesCount}} файлов{{end}}</div>
+  </td>
+  <td class="mono small hide-lg" data-label="Ветка">{{.SourceBranch}}<div class="muted">→ {{.TargetBranch}}</div></td>
+  <td data-label="GitLab">
+    <div class="state-stack">
+      {{if $closed}}<span class="state state-neutral"><span class="glyph">—</span> {{if eq .State "merged"}}Merged{{else}}Closed{{end}}</span>
+      {{else}}<span class="state state-{{pipelineTone .PipelineStatus}}"><span class="glyph">{{glyph (pipelineTone .PipelineStatus)}}</span> {{pipelineLabel .PipelineStatus}}</span>{{end}}
+      <span class="small muted">
+        {{if .ApprovalsRequired}}{{if ge .ApprovalsGiven .ApprovalsRequired}}<span class="text-success">✓ approvals {{.ApprovalsGiven}}/{{.ApprovalsRequired}}</span>{{else}}approvals {{.ApprovalsGiven}}/{{.ApprovalsRequired}}{{end}}{{else if .ApprovalsGiven}}approvals {{.ApprovalsGiven}}{{end}}
+        {{if .Unresolved}} · <span class="text-warning tip" data-tip="Нерешённые обсуждения ревьюеров в GitLab.">{{.Unresolved}} обсужд.</span>{{end}}
+        {{if .Diverged}} · <span class="tip" data-tip="На сколько коммитов {{.TargetBranch}} ушёл вперёд с момента ветвления.">отстаёт на {{.Diverged}}</span>{{end}}
+      </span>
+    </div>
+  </td>
+  <td data-label="AI review">
+    <div class="state-stack">
+      {{if .Last}}<a href="{{runPath .Last.Kind .Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}">{{template "ai-state" $st}}</a>{{else}}{{template "ai-state" $st}}{{end}}
+      {{if eq $st "stale"}}<span class="small muted">после ревью {{shortSHA .Done.HeadSHA}} появились новые коммиты</span>{{end}}
+      {{if and .Done (or (eq $st "current") (eq $st "stale"))}}<span class="small {{if eq $st "stale"}}stale-note{{end}}">{{findingsSummary .Done.OpenMajor .Done.OpenMinor .Done.OpenInfo}}{{if .Done.Verdict}} · <span class="verdict-{{.Done.Verdict}}">{{verdict .Done.Verdict}}</span>{{end}}</span>{{end}}
+      {{if $busy}}<span class="small muted">{{kindLabel .Last.Kind}} · {{.Last.Runner}}</span>{{end}}
+    </div>
+  </td>
+  <td class="actions-cell">
+    <div class="actions">
+      {{if $closed}}
+        {{if .Done}}<a class="btn btn-sm" href="{{mrPath .ID}}">Открыть результаты</a>{{end}}
+      {{else if eq $st "waiting"}}
+        <a class="btn btn-sm btn-primary" href="{{runPath .Last.Kind .Last.ID}}#approval">Ответить агенту</a>
+      {{else if $busy}}
+        <a class="btn btn-sm btn-primary" href="{{runPath .Last.Kind .Last.ID}}">Открыть прогресс</a>
+      {{else if eq $st "failed"}}
+        <a class="btn btn-sm" href="{{runPath .Last.Kind .Last.ID}}">Посмотреть ошибку</a>
+        <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Last.ID}}/retry', {}, this).then(r => r && reload())">Повторить</button>
+      {{else if eq $st "stale"}}
+        <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'verify', this)">Проверить изменения</button>
+      {{else if eq $st "current"}}
+        <a class="btn btn-sm btn-primary" href="{{mrPath .ID}}">{{if .Done.Open}}Открыть замечания{{else}}Открыть результаты{{end}}</a>
+      {{else}}
+        <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "full"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'full', this)">Запустить ревью</button>
+      {{end}}
+      <a class="btn btn-sm btn-link ext" href="{{.WebURL}}" target="_blank" rel="noopener">GitLab</a>
+      <details class="menu">
+        <summary title="Ещё действия">⋯</summary>
+        <div class="menu-items">
+          {{if and (not $busy) (not $closed)}}
+            <button class="item tip" data-tip="{{kindTip "quick"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'quick', this)">Быстрое ревью<span class="sub">только diff · экономит токены</span></button>
+            <button class="item tip" data-tip="{{kindTip "full"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'full', this)">Полное ревью{{if .Done}} заново{{end}}<span class="sub">заново весь MR на текущем HEAD</span></button>
+            {{if .Done}}{{if eq $st "current"}}<span class="item tip" aria-disabled="true" data-tip="Нет изменений после последнего ревью">Проверить изменения</span>{{else}}<button class="item tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'verify', this)">Проверить изменения</button>{{end}}{{end}}
+            <div class="divider"></div>
+          {{end}}
+          <a class="item" href="{{mrPath .ID}}#history">История AI review</a>
+          <button class="item tip" data-tip="{{kindTip "refresh"}}" onclick="post('/api/mrs/{{.ID}}/refresh', {}, this).then(r => r && reload())">Обновить из GitLab</button>
+          <button class="item" onclick="copyText('{{.WebURL}}')">Скопировать ссылку</button>
+          <div class="divider"></div>
+          {{if $busy}}<button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Last.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
+          <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="confirm('Убрать MR и историю его запусков из dashboard?') && del('/api/mrs/{{.ID}}', this).then(r => r && reload())">Убрать из dashboard</button>
+        </div>
+      </details>
+    </div>
+  </td>
+</tr>
+{{end}}
+{{end}}

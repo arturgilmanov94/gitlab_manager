@@ -22,16 +22,16 @@
   {{$busy := and .Last (or (eq .Last.Status "running") (eq .Last.Status "queued") (eq .Last.Status "waiting"))}}
   {{$waiting := and .Last (eq .Last.Status "waiting")}}
   <tr>
-    <td class="nowrap ref-cell"><a class="ref" href="/issue/{{.ID}}">#{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
+    <td class="nowrap ref-cell"><a class="ref" href="{{issuePath .ID}}">#{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
     <td class="title-cell">
-      <a class="title" href="/issue/{{.ID}}">{{.Title}}</a>
+      <a class="title" href="{{issuePath .ID}}">{{.Title}}</a>
       <div class="sub">{{.Author}} · обновлена {{when .GitLabUpdatedAt}}{{if .Labels}} · <span class="muted">{{.Labels}}</span>{{end}}</div>
     </td>
     <td data-label="Состояние">
       <div class="state-stack">
         {{if not .Last}}<span class="state state-neutral"><span class="glyph">○</span> Новая</span>
-        {{else if $waiting}}<a href="/run/{{.Last.ID}}#approval" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}"><span class="state state-warning"><span class="glyph">⚠</span> Нужен ваш ответ</span></a>
-        {{else if $busy}}<a href="/run/{{.Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}"><span class="state state-info"><span class="spinner"></span> {{if eq .Last.Kind "plan"}}Исследуется{{else}}Пишется код{{end}}</span></a>
+        {{else if $waiting}}<a href="{{runPath .Last.Kind .Last.ID}}#approval" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}"><span class="state state-warning"><span class="glyph">⚠</span> Нужен ваш ответ</span></a>
+        {{else if $busy}}<a href="{{runPath .Last.Kind .Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}"><span class="state state-info"><span class="spinner"></span> {{if eq .Last.Kind "plan"}}Исследуется{{else}}Пишется код{{end}}</span></a>
         {{else if eq .Last.Status "failed"}}<span class="state state-danger"><span class="glyph">✕</span> Ошибка</span><span class="small muted">{{kindLabel .Last.Kind}} · {{when .Last.FinishedAt}}</span>
         {{else if eq .Last.Status "cancelled"}}<span class="state state-neutral"><span class="glyph">—</span> Остановлено вами</span><span class="small muted">{{kindLabel .Last.Kind}} · {{when .Last.FinishedAt}}</span>
         {{else if eq .Last.Kind "plan"}}<span class="state state-success"><span class="glyph">✓</span> Есть план</span><span class="small muted">{{when .Last.FinishedAt}} · {{.Last.Runner}}</span>
@@ -41,17 +41,17 @@
     <td class="actions-cell">
       <div class="actions">
         {{if $waiting}}
-          <a class="btn btn-sm btn-primary" href="/run/{{.Last.ID}}#approval">Ответить агенту</a>
+          <a class="btn btn-sm btn-primary" href="{{runPath .Last.Kind .Last.ID}}#approval">Ответить агенту</a>
         {{else if $busy}}
-          <a class="btn btn-sm btn-primary" href="/run/{{.Last.ID}}">Открыть сессию</a>
+          <a class="btn btn-sm btn-primary" href="{{runPath .Last.Kind .Last.ID}}">Открыть сессию</a>
         {{else if and .Last (eq .Last.Status "failed")}}
-          <a class="btn btn-sm" href="/run/{{.Last.ID}}">Посмотреть ошибку</a>
+          <a class="btn btn-sm" href="{{runPath .Last.Kind .Last.ID}}">Посмотреть ошибку</a>
           <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Last.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Повторить</button>
         {{else if and .Last (eq .Last.Status "done") (eq .Last.Kind "plan")}}
           <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "implement_plan"}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'implement', this, {plan_run: '{{.Last.ID}}'})">Реализовать этот план</button>
-          <a class="btn btn-sm" href="/run/{{.Last.ID}}">Открыть план</a>
+          <a class="btn btn-sm" href="{{runPath .Last.Kind .Last.ID}}">Открыть план</a>
         {{else if and .Last (eq .Last.Status "done") (eq .Last.Kind "implement")}}
-          <a class="btn btn-sm btn-primary" href="/run/{{.Last.ID}}">Подготовить MR</a>
+          <a class="btn btn-sm btn-primary" href="{{runPath .Last.Kind .Last.ID}}">Подготовить MR</a>
         {{else}}
           <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'implement', this)">Решить задачу</button>
           <button class="btn btn-sm tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'plan', this)">Исследовать</button>
@@ -61,11 +61,11 @@
           <div class="menu-items">
             {{if not $busy}}
               <button class="item tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'plan', this)">Исследовать{{if .Last}} заново{{end}}<span class="sub">без изменений кода</span></button>
-              <a class="item" href="/issue/{{.ID}}#solve">Решить с указаниями…<span class="sub">свои указания агенту, имя ветки</span></a>
+              <a class="item" href="{{issuePath .ID}}#solve">Решить с указаниями…<span class="sub">свои указания агенту, имя ветки</span></a>
               <div class="divider"></div>
             {{end}}
             <a class="item ext" href="{{.WebURL}}" target="_blank" rel="noopener">GitLab</a>
-            <a class="item" href="/issue/{{.ID}}#history">История сессий</a>
+            <a class="item" href="{{issuePath .ID}}#history">История сессий</a>
             <div class="divider"></div>
             {{if $busy}}<button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Last.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
             <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="confirm('Убрать задачу из dashboard? Ветки и workspace не удаляются.') && del('/api/issues/{{.ID}}', this).then(r => r && reload())">Убрать из dashboard</button>

@@ -137,7 +137,7 @@ type Client interface {
 	AuthStatus(host string) (bool, string)
 	CurrentUser(host string) (string, error)
 	GetMR(ref Ref) (map[string]any, error)
-	GetApprovals(ref Ref) (given, required int64, err error)
+	GetApprovals(ref Ref) (Approvals, error)
 	CountUnresolved(ref Ref) (int64, error)
 	ListOpenMRs(host, username string, roles []string, projectPath string) ([]map[string]any, error)
 	GetIssue(ref Ref) (map[string]any, error)
@@ -288,14 +288,41 @@ func (g *Glab) GetMR(ref Ref) (map[string]any, error) {
 	return obj, nil
 }
 
-// GetApprovals returns how many approvals the MR has and how many it needs (0 when the instance has no rules).
-func (g *Glab) GetApprovals(ref Ref) (int64, int64, error) {
+// Approvals is the approval state of a merge request.
+type Approvals struct {
+	Given      int64
+	Required   int64 // 0 when the instance has no approval rules
+	ApprovedBy []string
+}
+
+// GetApprovals returns who approved the MR and how many approvals it needs.
+func (g *Glab) GetApprovals(ref Ref) (Approvals, error) {
 	obj, err := g.apiObject(ref.Host, fmt.Sprintf("projects/%s/merge_requests/%d/approvals", ref.EncodedProject(), ref.IID))
 	if err != nil {
-		return 0, 0, err
+		return Approvals{}, err
 	}
+	var by []string
 	approvedBy, _ := obj["approved_by"].([]any)
-	return int64(len(approvedBy)), Int(obj, "approvals_required"), nil
+	for _, item := range approvedBy {
+		entry, _ := item.(map[string]any)
+		if name := Str(Nested(entry, "user"), "username"); name != "" {
+			by = append(by, name)
+		}
+	}
+	return Approvals{Given: int64(len(approvedBy)), Required: Int(obj, "approvals_required"), ApprovedBy: by}, nil
+}
+
+// Usernames lists the usernames in a user array field (assignees, reviewers).
+func Usernames(obj map[string]any, key string) []string {
+	list, _ := obj[key].([]any)
+	var out []string
+	for _, item := range list {
+		entry, _ := item.(map[string]any)
+		if name := Str(entry, "username"); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // PipelineStatus reads the head pipeline status of an MR payload ("" when none).

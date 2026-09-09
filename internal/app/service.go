@@ -236,29 +236,47 @@ func (s *Service) mrFromPayload(payload map[string]any, ref gitlab.Ref) db.Merge
 	}
 }
 
-func (s *Service) fetchMR(ref gitlab.Ref) (*db.MergeRequest, error) {
+// fetchMR reads an MR from GitLab with its discussions, approvals and my roles, and stores it.
+// manual marks MRs added by hand (they stay in the list regardless of roles).
+func (s *Service) fetchMR(ref gitlab.Ref, manual bool) (*db.MergeRequest, error) {
 	payload, err := s.GitLab.GetMR(ref)
 	if err != nil {
 		return nil, &UserError{err.Error()}
 	}
 	row := s.mrFromPayload(payload, ref)
+	row.Manual = manual
 	if n, err := s.GitLab.CountUnresolved(ref); err == nil {
 		row.Unresolved = n
 	}
-	if given, required, err := s.GitLab.GetApprovals(ref); err == nil {
-		row.ApprovalsGiven, row.ApprovalsRequired = given, required
+	me := s.CurrentUser()
+	if approvals, err := s.GitLab.GetApprovals(ref); err == nil {
+		row.ApprovalsGiven, row.ApprovalsRequired = approvals.Given, approvals.Required
+		row.ApprovedByMe = me != "" && contains(approvals.ApprovedBy, me)
+	}
+	if me != "" {
+		var roles []string
+		if row.Author == me {
+			roles = append(roles, "author")
+		}
+		if contains(gitlab.Usernames(payload, "assignees"), me) {
+			roles = append(roles, "assignee")
+		}
+		if contains(gitlab.Usernames(payload, "reviewers"), me) {
+			roles = append(roles, "reviewer")
+		}
+		row.MyRoles = strings.Join(roles, ",")
 	}
 	return s.DB.UpsertMR(row)
 }
 
-// AddMR adds a merge request by URL / short reference.
+// AddMR adds a merge request by URL / short reference (kept in the list until removed by hand).
 func (s *Service) AddMR(reference string) (*db.MergeRequest, error) {
 	host, project := s.DefaultProject()
 	ref, err := gitlab.ParseMRRef(reference, host, project)
 	if err != nil {
 		return nil, &UserError{err.Error()}
 	}
-	return s.fetchMR(ref)
+	return s.fetchMR(ref, true)
 }
 
 // RefreshMR re-reads a merge request from GitLab.
@@ -267,13 +285,15 @@ func (s *Service) RefreshMR(id int64) (*db.MergeRequest, error) {
 	if err != nil || mr == nil {
 		return nil, userErr("merge request #%d is not in the dashboard", id)
 	}
-	return s.fetchMR(gitlab.Ref{Host: mr.GitLabHost, ProjectPath: mr.ProjectPath, IID: mr.IID})
+	return s.fetchMR(gitlab.Ref{Host: mr.GitLabHost, ProjectPath: mr.ProjectPath, IID: mr.IID}, false)
 }
 
 // SyncResult reports a sync.
 type SyncResult struct {
 	Username string
 	Synced   int
+	Pruned   int // MRs that no longer concern me and had no runs: removed
+	Archived int // MRs that no longer concern me but have runs: kept in the history
 	Project  string
 }
 
@@ -296,15 +316,43 @@ func (s *Service) SyncMRs() (SyncResult, error) {
 		return SyncResult{}, &UserError{err.Error()}
 	}
 	result := SyncResult{Username: username, Project: firstOf(filter, "*")}
+	// Every MR GitLab lists for me plus every MR already in the dashboard is refreshed individually (the list
+	// payload lacks pipeline/divergence/approval details), then classified: still mine → main list; no longer
+	// mine (approved by me, role removed, merged/closed) → history when it has runs, otherwise removed.
+	refs := map[string]gitlab.Ref{}
 	for _, item := range items {
 		itemHost, itemProject, ok := gitlab.ProjectPathOf(item, "!")
 		if !ok {
 			itemHost, itemProject = host, project
 		}
-		// The list payload lacks pipeline/divergence details: refresh every MR individually.
 		ref := gitlab.Ref{Host: itemHost, ProjectPath: itemProject, IID: gitlab.Int(item, "iid")}
-		if _, err := s.fetchMR(ref); err == nil {
+		refs[fmt.Sprintf("%s|%s|%d", ref.Host, ref.ProjectPath, ref.IID)] = ref
+	}
+	known, _ := s.DB.ListMRs()
+	for _, mr := range known {
+		key := fmt.Sprintf("%s|%s|%d", mr.GitLabHost, mr.ProjectPath, mr.IID)
+		if _, ok := refs[key]; !ok {
+			refs[key] = gitlab.Ref{Host: mr.GitLabHost, ProjectPath: mr.ProjectPath, IID: mr.IID}
+		}
+	}
+	for _, ref := range refs {
+		fresh, err := s.fetchMR(ref, false)
+		if err != nil {
+			continue
+		}
+		switch {
+		case fresh.Relevant():
 			result.Synced++
+		case s.DB.CountRunsForMR(fresh.ID) > 0:
+			result.Archived++
+		default:
+			if active, _ := s.DB.ActiveRunForMR(fresh.ID); active != nil {
+				result.Archived++
+				continue
+			}
+			if err := s.DB.DeleteMR(fresh.ID); err == nil {
+				result.Pruned++
+			}
 		}
 	}
 	return result, nil
@@ -1033,6 +1081,9 @@ func (s *Service) store(run *db.Run, structured json.RawMessage, previous []db.F
 			findings = append(findings, db.Finding{Status: "open", Severity: f.Severity, Category: f.Category, File: f.File, Line: f.Line, Title: f.Title, Description: f.Description, Suggestion: f.Suggestion})
 		}
 	}
+	// The verdict shown in the UI always agrees with the findings: an "approve with comments" without a single
+	// open finding (or an "approve" next to a HIGH) confuses more than it informs.
+	fields["verdict"] = DeriveVerdict(res.Verdict, findings)
 	if err := s.DB.ReplaceFindings(run.ID, findings); err != nil {
 		return err
 	}
@@ -1041,6 +1092,29 @@ func (s *Service) store(run *db.Run, structured json.RawMessage, previous []db.F
 		discussions = append(discussions, db.Discussion{Author: d.Author, File: d.File, Line: d.Line, Body: d.Body, Assessment: d.Assessment, Addressed: d.Addressed})
 	}
 	return s.DB.ReplaceDiscussions(run.ID, discussions)
+}
+
+// DeriveVerdict returns the verdict that matches the open findings: blocked for CRITICAL, request_changes for
+// HIGH, approve_with_comments for anything else open, approve when nothing is open. The agent's own verdict is
+// kept only when it says the same.
+func DeriveVerdict(agentVerdict string, findings []db.Finding) string {
+	derived := "approve"
+	for _, f := range findings {
+		if f.Status != "open" && f.Status != "" {
+			continue
+		}
+		switch strings.ToUpper(f.Severity) {
+		case "CRITICAL":
+			return "blocked"
+		case "HIGH":
+			derived = "request_changes"
+		default:
+			if derived == "approve" {
+				derived = "approve_with_comments"
+			}
+		}
+	}
+	return derived
 }
 
 // ---------------------------------------------------------------------------------- follow-up chat
@@ -1303,6 +1377,15 @@ func firstOf(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 func dirExists(path string) bool {

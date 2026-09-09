@@ -24,6 +24,8 @@ func MRPayload(iid int64, sha string) map[string]any {
 		"iid": float64(iid), "title": fmt.Sprintf("MR %d", iid),
 		"web_url":       fmt.Sprintf("https://gitlab.example.com/group/sub/project/-/merge_requests/%d", iid),
 		"author":        map[string]any{"username": "alice"},
+		"assignees":     []any{map[string]any{"username": "alice"}},
+		"reviewers":     []any{map[string]any{"username": "bob"}},
 		"source_branch": "feature", "target_branch": "develop", "state": "opened", "sha": sha,
 		"diff_refs":     map[string]any{"head_sha": sha},
 		"head_pipeline": map[string]any{"status": "failed"}, "diverged_commits_count": 3.0, "draft": false, "changes_count": "7",
@@ -48,13 +50,15 @@ type FakeGitLab struct {
 	MRs        map[int64]map[string]any
 	Issues     map[int64]map[string]any
 	Unresolved map[int64]int64
+	ApprovedBy map[int64][]string // overrides the approvals of an MR
+	Listed     []int64            // MRs returned by ListOpenMRs; nil = every MR in MRs
 	Calls      []string
 	CreatedMR  string
 }
 
-// NewFakeGitLab seeds one MR (!42) and one issue (#7).
+// NewFakeGitLab seeds one MR (!42, authored by alice = the current user) and one issue (#7).
 func NewFakeGitLab() *FakeGitLab {
-	return &FakeGitLab{MRs: map[int64]map[string]any{42: MRPayload(42, "sha-1")}, Issues: map[int64]map[string]any{7: IssuePayload(7)}, Unresolved: map[int64]int64{42: 2}}
+	return &FakeGitLab{MRs: map[int64]map[string]any{42: MRPayload(42, "sha-1")}, Issues: map[int64]map[string]any{7: IssuePayload(7)}, Unresolved: map[int64]int64{42: 2}, ApprovedBy: map[int64][]string{}}
 }
 
 // AddProjectSkill writes a project skill (.claude/skills/<name>/SKILL.md) into the fixture project.
@@ -92,16 +96,22 @@ func (f *FakeGitLab) GetMR(ref gitlab.Ref) (map[string]any, error) {
 func (f *FakeGitLab) CountUnresolved(ref gitlab.Ref) (int64, error) {
 	return f.Unresolved[ref.IID], nil
 }
-func (f *FakeGitLab) GetApprovals(ref gitlab.Ref) (int64, int64, error) {
-	if ref.IID == 42 {
-		return 1, 2, nil
+func (f *FakeGitLab) GetApprovals(ref gitlab.Ref) (gitlab.Approvals, error) {
+	if by, ok := f.ApprovedBy[ref.IID]; ok {
+		return gitlab.Approvals{Given: int64(len(by)), Required: 2, ApprovedBy: by}, nil
 	}
-	return 0, 0, nil
+	if ref.IID == 42 {
+		return gitlab.Approvals{Given: 1, Required: 2, ApprovedBy: []string{"carol"}}, nil
+	}
+	return gitlab.Approvals{}, nil
 }
 func (f *FakeGitLab) ListOpenMRs(host, username string, roles []string, projectPath string) ([]map[string]any, error) {
 	f.Calls = append(f.Calls, fmt.Sprintf("list-mrs %s %v", projectPath, roles))
 	var out []map[string]any
-	for _, mr := range f.MRs {
+	for iid, mr := range f.MRs {
+		if f.Listed != nil && !containsInt(f.Listed, iid) {
+			continue
+		}
 		out = append(out, mr)
 	}
 	return out, nil
@@ -122,6 +132,15 @@ func (f *FakeGitLab) ListOpenIssues(host, username, projectPath string) ([]map[s
 func (f *FakeGitLab) CreateMR(host, projectPath, sourceBranch, targetBranch, title, description string) (string, error) {
 	f.CreatedMR = fmt.Sprintf("%s|%s|%s|%s|%s", projectPath, sourceBranch, targetBranch, title, description)
 	return "https://gitlab.example.com/group/sub/project/-/merge_requests/100", nil
+}
+
+func containsInt(list []int64, v int64) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // FakeRunner returns canned structured outputs in order and records requests.

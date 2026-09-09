@@ -4,89 +4,22 @@
     <input type="text" name="ref" placeholder="Ссылка на MR или !123" size="34" required>
     <button type="submit" class="btn tip" data-tip="{{kindTip "add"}}">Добавить</button>
   </form>
-  <button class="btn tip" data-tip="{{kindTip "sync-mrs"}}" onclick="post('/api/mrs/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' MR для @' + r.username, true), reload()))">Синхронизировать с GitLab</button>
+  <button class="btn tip" data-tip="{{kindTip "sync-mrs"}}" onclick="post('/api/mrs/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' MR для @' + r.username + (r.archived ? ', в историю: ' + r.archived : '') + (r.pruned ? ', убрано: ' + r.pruned : ''), true), reload()))">Синхронизировать с GitLab</button>
   <input type="text" data-filter="#mrs-table" placeholder="Фильтр: номер, название, автор, ветка…" size="30">
   <span class="small muted" id="filter-count"></span>
   <span class="spacer"></span>
+  {{if .Archived}}<a class="small tip" href="/history" data-tip="MR, которые вас больше не касаются (одобрены вами, влиты, закрыты, вы сняты с ревью), но по которым были запуски.">в истории: {{.Archived}}</a>{{end}}
   <span class="small secondary">Агент для запусков:</span> {{template "runner-picker" .Base.Runners}}
 </section>
 
 {{if not .MRs}}
-<div class="empty"><b>Пока нет merge requests.</b><br>Вставьте ссылку выше или синхронизируйте назначенные вам.</div>
+<div class="empty"><b>Пока нет merge requests, которые ждут вас.</b><br>Вставьте ссылку выше или синхронизируйте назначенные вам.{{if .Archived}} Завершённые — в <a href="/history">истории</a>.{{end}}</div>
 {{else}}
 <div class="card table-card">
 <table class="table list" id="mrs-table">
   <thead><tr><th>MR</th><th>Название</th><th class="hide-lg">Ветка</th><th>GitLab</th><th>AI review</th><th class="right"></th></tr></thead>
   <tbody>
-  {{range .MRs}}
-  {{$st := aiState .}}
-  {{$busy := or (eq $st "running") (eq $st "queued") (eq $st "waiting")}}
-  {{$closed := .Closed}}
-  <tr>
-    <td class="nowrap ref-cell"><a class="ref" href="/mr/{{.ID}}">!{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
-    <td class="title-cell">
-      <a class="title" href="/mr/{{.ID}}">{{.Title}}</a>
-      <div class="sub">{{.Author}}{{if and $.Base.Username (eq .Author $.Base.Username)}}<span class="badge badge-info tip" data-tip="Автор MR — вы.">мой</span>{{end}}{{if .Draft}}<span class="badge">Draft</span>{{end}} · обновлён {{when .GitLabUpdatedAt}}{{if .ChangesCount}} · {{.ChangesCount}} файлов{{end}}</div>
-    </td>
-    <td class="mono small hide-lg" data-label="Ветка">{{.SourceBranch}}<div class="muted">→ {{.TargetBranch}}</div></td>
-    <td data-label="GitLab">
-      <div class="state-stack">
-        {{if $closed}}<span class="state state-neutral"><span class="glyph">—</span> {{if eq .State "merged"}}Merged{{else}}Closed{{end}}</span>
-        {{else}}<span class="state state-{{pipelineTone .PipelineStatus}}"><span class="glyph">{{glyph (pipelineTone .PipelineStatus)}}</span> {{pipelineLabel .PipelineStatus}}</span>{{end}}
-        <span class="small muted">
-          {{if .ApprovalsRequired}}{{if ge .ApprovalsGiven .ApprovalsRequired}}<span class="text-success">✓ approvals {{.ApprovalsGiven}}/{{.ApprovalsRequired}}</span>{{else}}approvals {{.ApprovalsGiven}}/{{.ApprovalsRequired}}{{end}}{{else if .ApprovalsGiven}}approvals {{.ApprovalsGiven}}{{end}}
-          {{if .Unresolved}} · <span class="text-warning tip" data-tip="Нерешённые обсуждения ревьюеров в GitLab.">{{.Unresolved}} обсужд.</span>{{end}}
-          {{if .Diverged}} · <span class="tip" data-tip="На сколько коммитов {{.TargetBranch}} ушёл вперёд с момента ветвления.">отстаёт на {{.Diverged}}</span>{{end}}
-        </span>
-      </div>
-    </td>
-    <td data-label="AI review">
-      <div class="state-stack">
-        {{if .Last}}<a href="/run/{{.Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}">{{template "ai-state" $st}}</a>{{else}}{{template "ai-state" $st}}{{end}}
-        {{if eq $st "stale"}}<span class="small muted">после ревью {{shortSHA .Done.HeadSHA}} появились новые коммиты</span>{{end}}
-        {{if and .Done (or (eq $st "current") (eq $st "stale"))}}<span class="small {{if eq $st "stale"}}stale-note{{end}}">{{findingsSummary .Done.OpenMajor .Done.OpenMinor .Done.OpenInfo}}{{if .Done.Verdict}} · <span class="verdict-{{.Done.Verdict}}">{{verdict .Done.Verdict}}</span>{{end}}</span>{{end}}
-        {{if $busy}}<span class="small muted">{{kindLabel .Last.Kind}} · {{.Last.Runner}}</span>{{end}}
-      </div>
-    </td>
-    <td class="actions-cell">
-      <div class="actions">
-        {{if $closed}}
-          {{if .Done}}<a class="btn btn-sm" href="/mr/{{.ID}}">Открыть результаты</a>{{end}}
-        {{else if eq $st "waiting"}}
-          <a class="btn btn-sm btn-primary" href="/run/{{.Last.ID}}#approval">Ответить агенту</a>
-        {{else if $busy}}
-          <a class="btn btn-sm btn-primary" href="/run/{{.Last.ID}}">Открыть прогресс</a>
-        {{else if eq $st "failed"}}
-          <a class="btn btn-sm" href="/run/{{.Last.ID}}">Посмотреть ошибку</a>
-          <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Last.ID}}/retry', {}, this).then(r => r && reload())">Повторить</button>
-        {{else if eq $st "stale"}}
-          <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'verify', this)">Проверить изменения</button>
-        {{else if eq $st "current"}}
-          <a class="btn btn-sm btn-primary" href="/mr/{{.ID}}">{{if .Done.Open}}Открыть замечания{{else}}Открыть результаты{{end}}</a>
-        {{else}}
-          <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "full"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'full', this)">Запустить ревью</button>
-        {{end}}
-        <a class="btn btn-sm btn-link ext" href="{{.WebURL}}" target="_blank" rel="noopener">GitLab</a>
-        <details class="menu">
-          <summary title="Ещё действия">⋯</summary>
-          <div class="menu-items">
-            {{if and (not $busy) (not $closed)}}
-              <button class="item tip" data-tip="{{kindTip "quick"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'quick', this)">Быстрое ревью<span class="sub">только diff · экономит токены</span></button>
-              <button class="item tip" data-tip="{{kindTip "full"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'full', this)">Полное ревью{{if .Done}} заново{{end}}<span class="sub">заново весь MR на текущем HEAD</span></button>
-              {{if .Done}}{{if eq $st "current"}}<span class="item tip" aria-disabled="true" data-tip="Нет изменений после последнего ревью">Проверить изменения</span>{{else}}<button class="item tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'verify', this)">Проверить изменения</button>{{end}}{{end}}
-              <div class="divider"></div>
-            {{end}}
-            <a class="item" href="/mr/{{.ID}}#history">История AI review</a>
-            <button class="item" onclick="copyText('{{.WebURL}}')">Скопировать ссылку</button>
-            <div class="divider"></div>
-            {{if $busy}}<button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Last.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
-            <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="confirm('Убрать MR и историю его запусков из dashboard?') && del('/api/mrs/{{.ID}}', this).then(r => r && reload())">Убрать из dashboard</button>
-          </div>
-        </details>
-      </div>
-    </td>
-  </tr>
-  {{end}}
+  {{range .MRs}}{{template "mr-row" (dict "MR" . "Username" $.Base.Username)}}{{end}}
   </tbody>
 </table>
 </div>

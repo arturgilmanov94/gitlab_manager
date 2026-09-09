@@ -109,7 +109,7 @@ func run(args []string) int {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("merge requests: %d synced for @%s (project %s)\n", mrs.Synced, mrs.Username, mrs.Project)
+			fmt.Printf("merge requests: %d synced for @%s (project %s); %d moved to history, %d removed\n", mrs.Synced, mrs.Username, mrs.Project, mrs.Archived, mrs.Pruned)
 			issues, err := s.SyncIssues()
 			if err != nil {
 				return err

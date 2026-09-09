@@ -46,8 +46,8 @@ const discussionSchema = `{
 var ReviewSchema = []byte(`{
   "type": "object",
   "properties": {
-    "summary": {"type": "string", "description": "3-8 sentences: what the MR does and the overall assessment"},
-    "verdict": {"type": "string", "enum": ["approve", "approve_with_comments", "request_changes", "blocked"]},
+    "summary": {"type": "string", "minLength": 60, "description": "REQUIRED prose, 3-8 sentences: first what the MR changes and why (files, subsystems, scope), then the overall assessment. Never a placeholder or the MR title alone."},
+    "verdict": {"type": "string", "enum": ["approve", "approve_with_comments", "request_changes", "blocked"], "description": "must agree with the findings: blocked = CRITICAL present, request_changes = HIGH present, approve_with_comments = only MEDIUM/LOW/INFO, approve = no findings"},
     "reviewed_sha": {"type": "string", "description": "head SHA that was actually reviewed"},
     "findings": {"type": "array", "items": ` + findingSchema + `},
     "unresolved_discussions": {"type": "array", "items": ` + discussionSchema + `}
@@ -60,8 +60,8 @@ var ReviewSchema = []byte(`{
 var VerifySchema = []byte(`{
   "type": "object",
   "properties": {
-    "summary": {"type": "string"},
-    "verdict": {"type": "string", "enum": ["approve", "approve_with_comments", "request_changes", "blocked"]},
+    "summary": {"type": "string", "minLength": 60, "description": "REQUIRED prose, 3-8 sentences: what the MR does, what the new commits changed, and the overall assessment now. Never a placeholder."},
+    "verdict": {"type": "string", "enum": ["approve", "approve_with_comments", "request_changes", "blocked"], "description": "must agree with the findings still open after this check"},
     "reviewed_sha": {"type": "string"},
     "verified": {"type": "array", "items": {
       "type": "object",
@@ -193,7 +193,7 @@ func FullReview(mr MR, s *skill.Skill) string {
 	return SlashPrefix(s, mr.WebURL) + "Mode: FULL REVIEW\n\n" + mrBlock(mr) + "\n" + skillLine(s) + "\n\n" +
 		"Review the MR at the head SHA above. Report every real problem as a finding with a severity from CRITICAL/HIGH/MEDIUM/LOW/INFO. " +
 		"Include unresolved reviewer discussions with your assessment of whether the current head addresses them. " +
-		"Set `reviewed_sha` to the SHA you actually reviewed.\n\n" + readOnlyRules
+		"Set `reviewed_sha` to the SHA you actually reviewed.\n" + summaryRule + readOnlyRules
 }
 
 // Verify builds the verify prompt.
@@ -209,8 +209,12 @@ func Verify(mr MR, s *skill.Skill, previousSHA string, previous []PrevFinding) s
 		"Previously reviewed SHA: " + previousSHA + "\n\n" + skillLine(s) + "\n\nPrevious open findings (JSON):\n" + string(list) + "\n\n" +
 		"For EACH previous finding decide whether at the current head it is `fixed`, still `open`, or `obsolete` (the code no longer exists / the concern no longer applies), with a short evidence note. " +
 		"Compare the diff between the previously reviewed SHA and the current head where helpful. Report only genuinely new problems introduced by the newer commits in `new_findings`. " +
-		"Re-assess unresolved reviewer discussions. Set `reviewed_sha` to the SHA you actually reviewed.\n\n" + readOnlyRules
+		"Re-assess unresolved reviewer discussions. Set `reviewed_sha` to the SHA you actually reviewed.\n" + summaryRule + readOnlyRules
 }
+
+// summaryRule makes the summary a real description: the dashboard shows it as the headline of the review.
+const summaryRule = "The `summary` MUST start with 2-5 sentences describing what the MR changes and why (subsystems, key files, scope), " +
+	"then give the overall assessment. The `verdict` MUST agree with the findings (no findings = approve).\n\n"
 
 func issueBlock(issue Issue, notes string) string {
 	var b strings.Builder
@@ -250,8 +254,8 @@ func QuickReview(mr MR, s *skill.Skill) string {
 	return SlashPrefix(s, mr.WebURL) + "Mode: QUICK REVIEW (light pass)\n\n" + mrBlock(mr) + "\n" + skillLine(s) + "\n\n" +
 		"Do a fast first-pass review: read the MR diff and the unresolved discussions, look only at the files the MR touches " +
 		"(open surrounding code only when a change cannot be judged without it), and report CRITICAL/HIGH/MEDIUM problems only. " +
-		"Skip style nits unless they violate an explicit project rule. Keep the summary to 2-4 sentences. " +
-		"Set `reviewed_sha` to the SHA you actually reviewed.\n\n" + readOnlyRules
+		"Skip style nits unless they violate an explicit project rule. Keep the summary to 3-5 sentences. " +
+		"Set `reviewed_sha` to the SHA you actually reviewed.\n" + summaryRule + readOnlyRules
 }
 
 // FixSchema is the structured report after addressing reviewer comments in a worktree.

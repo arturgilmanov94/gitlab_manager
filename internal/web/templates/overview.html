@@ -33,11 +33,11 @@
         <tbody>
         {{range .Active}}
         <tr>
-          <td><a href="/run/{{.ID}}" data-run-status="{{.ID}}" data-status="{{.Status}}">{{template "status" .Status}}</a></td>
+          <td><a href="{{runPath .Kind .ID}}" data-run-status="{{.ID}}" data-status="{{.Status}}">{{template "status" .Status}}</a></td>
           <td><b>{{kindLabel .Kind}}</b><div class="small muted">{{if .MRIID}}!{{.MRIID}} {{.MRTitle}}{{else if .IssueIID}}#{{.IssueIID}} {{.IssueTitle}}{{end}}</div></td>
           <td class="small mono">{{if .Progress}}{{.Progress}}{{else}}{{.Runner}}{{end}}</td>
           <td class="small nowrap">{{if .StartedAt}}<span data-started="{{.StartedAt}}"><span class="elapsed">—</span></span>{{else}}в очереди{{end}}</td>
-          <td class="actions-cell"><a class="btn btn-sm" href="/run/{{.ID}}{{if eq .Status "waiting"}}#approval{{end}}">{{if eq .Status "waiting"}}Ответить{{else}}Открыть{{end}}</a></td>
+          <td class="actions-cell"><a class="btn btn-sm" href="{{runPath .Kind .ID}}{{if eq .Status "waiting"}}#approval{{end}}">{{if eq .Status "waiting"}}Ответить{{else}}Открыть{{end}}</a></td>
         </tr>
         {{end}}
         </tbody>
