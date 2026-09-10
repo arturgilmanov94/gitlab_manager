@@ -1166,3 +1166,33 @@ func prefixed(columns, prefix string) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// ---------------------------------------------------------------------------------- settings (UI overrides)
+
+// SetSetting stores a UI setting; an empty value deletes the key.
+func (d *DB) SetSetting(key, value string) error {
+	if value == "" {
+		_, err := d.sql.Exec("DELETE FROM settings WHERE key = ?", key)
+		return err
+	}
+	_, err := d.sql.Exec("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", key, value, Now())
+	return err
+}
+
+// SettingsWithPrefix returns every setting whose key starts with prefix.
+func (d *DB) SettingsWithPrefix(prefix string) (map[string]string, error) {
+	rows, err := d.sql.Query("SELECT key, value FROM settings WHERE key LIKE ? ESCAPE '\\'", strings.ReplaceAll(strings.ReplaceAll(prefix, "_", "\\_"), "%", "\\%")+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}

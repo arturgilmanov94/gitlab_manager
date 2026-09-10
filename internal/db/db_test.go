@@ -21,7 +21,7 @@ func open(t *testing.T) *DB {
 func TestMigrateIdempotent(t *testing.T) {
 	d := open(t)
 	applied, err := d.Migrate()
-	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 9 {
+	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 10 {
 		t.Fatalf("%v %v %v", applied, err, d.SchemaVersion())
 	}
 }

@@ -19,20 +19,37 @@
 {{if .Skills}}
 <section class="card" id="skills">
   <div class="card-head"><h2>Действия dashboard → skills проекта</h2><span class="small muted">каждое действие сначала ищет свой skill в <span class="mono">.claude/</span> проекта</span></div>
-  <p class="secondary small">Dashboard не несёт своих правил: он находит в проекте агента, команду или skill с ожидаемым именем и отдаёт ему запуск. Нет своего skill — действие работает по CLAUDE.md / AGENTS.md и минимальному промпту dashboard (или по skill-у запасного действия). Имя можно переопределить переменной в <span class="mono">.env</span>. Подробности и шаблоны — в <span class="mono">docs/SKILLS.md</span>.</p>
-  <table class="table compact">
-    <thead><tr><th>Действие</th><th>Ожидаемое имя</th><th>Найдено в проекте</th><th>Что должен делать skill</th></tr></thead>
+  <p class="secondary small">Dashboard не несёт своих правил: он находит в проекте агента, команду или skill с ожидаемым именем и отдаёт ему запуск. Нет своего skill — действие работает по CLAUDE.md / AGENTS.md и минимальному промпту dashboard (или по skill-у запасного действия). В колонке «Настройка» можно выбрать другой skill проекта или включить <b>свои инструкции</b>: текст хранится в <span class="mono">data/</span> dashboard, не в проекте, и подставляется в промпт вместо skill. Имя также переопределяется переменной в <span class="mono">.env</span>. Подробности — в <span class="mono">docs/SKILLS.md</span>.</p>
+  <table class="table compact skills">
+    <thead><tr><th>Действие</th><th>Ожидаемое имя</th><th>Найдено в проекте</th><th>Что должен делать skill</th><th>Настройка</th></tr></thead>
     <tbody>
     {{range .Skills}}
-    <tr>
+    {{$setting := index $.SkillSettings .Action.Kind}}
+    <tr id="skill-{{.Action.Kind}}">
       <td class="nowrap"><b>{{.Action.Title}}</b><div class="small muted mono">{{.Action.Kind}}</div></td>
       <td class="mono small">{{.Wanted}}<div class="muted">{{.Action.EnvKey}}</div></td>
       <td class="small">
         {{if not .Skill}}<span class="badge badge-warning">○ нет</span> CLAUDE.md + промпт dashboard
+        {{else if eq .Skill.Kind "custom"}}<span class="badge badge-info">✎ свои инструкции</span> из настроек dashboard<div class="muted">{{.Skill.Description}}</div>
         {{else if .Via}}<span class="badge badge-warning">⚠ запасной</span> skill действия <span class="mono">{{.Via}}</span>: <span class="mono">{{.Skill.Identifier}}</span>
         {{else}}<span class="badge badge-success">✓ есть</span> <span class="mono">{{.Skill.Identifier}}</span><div class="muted mono">{{.Skill.RelPath}}</div>{{end}}
       </td>
       <td class="small">{{.Action.Contract}}</td>
+      <td class="small skill-setting">
+        <form class="skill-form" onsubmit="return saveSkill(event, '{{.Action.Kind}}')">
+          <label class="small">Skill проекта
+            <select name="name">
+              <option value=""{{if not $setting.Name}} selected{{end}}>по умолчанию · {{.Action.SkillName}}</option>
+              {{range $.Candidates}}<option value="{{.Name}}"{{if eq .Name $setting.Name}} selected{{end}}>{{.Identifier}}</option>{{end}}
+            </select>
+          </label>
+          <label class="small check-row"><input type="checkbox" name="custom"{{if $setting.Custom}} checked{{end}}> использовать свои инструкции</label>
+          <details class="section"{{if $setting.Custom}} open{{end}}><summary class="small">Свои инструкции для этого действия</summary>
+            <textarea name="text" rows="6" placeholder="Markdown-инструкции агенту для этого действия: что проверять, какие правила проекта учитывать, что считать критичным. Ограничения dashboard (только чтение / правки только в workspace) остаются в силе.">{{$setting.Text}}</textarea>
+          </details>
+          <button type="submit" class="btn btn-sm">Сохранить</button>
+        </form>
+      </td>
     </tr>
     {{end}}
     </tbody>

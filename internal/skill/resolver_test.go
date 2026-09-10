@@ -141,3 +141,21 @@ func TestValidateMissingName(t *testing.T) {
 		t.Fatal("expected validation failure")
 	}
 }
+
+func TestCustomInstructionsReplaceProjectSkill(t *testing.T) {
+	root := t.TempDir()
+	r := NewWithNames(root, nil).WithCustom(map[string]string{ActionPlan: "Always start from the ticket's acceptance criteria.\nList affected modules."})
+	res := r.ForAction(ActionPlan)
+	if res.Skill == nil || res.Skill.Kind != KindCustom || res.Wanted != "custom" || res.Skill.Body == "" || res.Skill.Description != "Always start from the ticket's acceptance criteria." {
+		t.Fatalf("%+v", res)
+	}
+	if v := r.Validate(*res.Skill); !v.OK {
+		t.Fatalf("%+v", v)
+	}
+	if r.ForAction(ActionReviewFull).Skill != nil {
+		t.Fatal("other actions are untouched")
+	}
+	if NewWithNames(root, nil).WithCustom(map[string]string{ActionPlan: "  "}).ForAction(ActionPlan).Skill != nil {
+		t.Fatal("blank instructions do not count")
+	}
+}

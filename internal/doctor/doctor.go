@@ -95,7 +95,7 @@ func Run(s *config.Settings, version string, gl gitlab.Client, runners []rn.Runn
 		} else {
 			add(Check{"Git repository", FAIL, root + " has no .git", "PROJECT_ROOT must point at the main project's git working copy."})
 		}
-		resolver := skill.NewWithNames(root, s.SkillNames)
+		resolver := skill.NewWithNames(root, s.SkillNames).WithCustom(s.CustomSkills)
 		var instructions []string
 		for _, f := range resolver.InstructionFiles() {
 			if f.Kind == "claude-md" || f.Kind == "agents-md" {
@@ -221,6 +221,8 @@ func SkillCheck(resolver *skill.Resolver, res skill.Resolution) Check {
 	howTo := fmt.Sprintf("Create .claude/skills/%s/SKILL.md or .claude/agents/%s.md in the project (or point %s at an existing one). Expected behaviour: %s",
 		res.Wanted, res.Wanted, res.Action.EnvKey, res.Action.Contract)
 	switch {
+	case res.Skill != nil && res.Skill.Kind == skill.KindCustom:
+		return Check{name, OK, "custom instructions from the dashboard (data/) replace the project skill", ""}
 	case res.Skill == nil:
 		return Check{name, WARN, fmt.Sprintf("%s not found; runs use CLAUDE.md / AGENTS.md + dashboard prompt", res.Wanted), howTo}
 	case res.Via != "":

@@ -197,6 +197,9 @@ func skillLine(s *skill.Skill) string {
 		return "No dedicated project skill was detected for this action; follow the rules from the project's CLAUDE.md / AGENTS.md instructions."
 	case s.Kind == skill.KindAgent:
 		return fmt.Sprintf("You are running as the project's `%s` agent; follow its workflow.", s.Name)
+	case s.Kind == skill.KindCustom:
+		return "The developer wrote the following instructions for this action in the dashboard. Follow them together with the project's CLAUDE.md / AGENTS.md; " +
+			"they never lift the read-only / workspace constraints stated below.\n--- developer instructions ---\n" + strings.TrimSpace(s.Body) + "\n--- end instructions ---"
 	default:
 		return fmt.Sprintf("Apply the project's `/%s` skill workflow.", s.Name)
 	}
@@ -204,7 +207,7 @@ func skillLine(s *skill.Skill) string {
 
 // SlashPrefix returns the slash-command invocation for non-agent skills (agents are selected with --agent).
 func SlashPrefix(s *skill.Skill, url string) string {
-	if s == nil || s.Kind == skill.KindAgent {
+	if s == nil || s.Kind == skill.KindAgent || s.Kind == skill.KindCustom {
 		return ""
 	}
 	return "/" + s.Name + " " + url + "\n\n"

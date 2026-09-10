@@ -242,7 +242,7 @@ func showSkill(settings *config.Settings) int {
 	if settings.ProjectRoot == "" {
 		return fail("%s", settings.ProjectRootError)
 	}
-	resolver := skill.NewWithNames(settings.ProjectRoot, settings.SkillNames)
+	resolver := skill.NewWithNames(settings.ProjectRoot, settings.SkillNames).WithCustom(settings.CustomSkills)
 	fmt.Printf("project root: %s (via %s)\n\n", settings.ProjectRoot, settings.ProjectRootSource)
 	fmt.Println("actions → project skills (every action first looks for its project skill; see docs/SKILLS.md):")
 	for _, res := range resolver.Map() {

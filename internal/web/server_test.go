@@ -537,3 +537,24 @@ func TestTerminalUnavailable(t *testing.T) {
 		t.Fatalf("%d %v", code, out)
 	}
 }
+
+// The doctor page carries the per-action override form and saves it through the API.
+func TestSkillSettingsPage(t *testing.T) {
+	ts, svc, _ := newServer(t)
+	if _, body := get(t, ts.URL+"/doctor"); !strings.Contains(body, `saveSkill(event, 'plan')`) || !strings.Contains(body, "использовать свои инструкции") || !strings.Contains(body, `<option value="mr-review"`) {
+		t.Fatal("doctor page must offer the override form with the project candidates")
+	}
+	code, out := postJSON(t, ts.URL+"/api/skills/plan", map[string]any{"name": "", "custom": "1", "text": "Check the acceptance criteria first."})
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if _, body := get(t, ts.URL+"/doctor"); !strings.Contains(body, "✎ свои инструкции") || !strings.Contains(body, "Check the acceptance criteria first.") || !strings.Contains(body, "custom instructions from the dashboard") {
+		t.Fatal("saved override must show in the table and in the doctor report")
+	}
+	if sk := svc.SkillFor(db.KindPlan); sk == nil || sk.Kind != "custom" {
+		t.Fatalf("%+v", sk)
+	}
+	if code, out := postJSON(t, ts.URL+"/api/skills/nope", map[string]any{}); code == 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+}

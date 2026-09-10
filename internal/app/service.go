@@ -37,8 +37,9 @@ type Service struct {
 	Runners   map[string]runner.Runner
 	Worktrees *worktree.Manager
 
-	terminal     *terminal.Emulator // detected once at start; nil = «Открыть в терминале» unavailable
-	terminalNote string             // why no terminal is available
+	envSkillNames map[string]string  // SKILL_* from .env, the base the UI overrides are merged onto
+	terminal      *terminal.Emulator // detected once at start; nil = «Открыть в терминале» unavailable
+	terminalNote  string             // why no terminal is available
 
 	sem       chan struct{}
 	mu        sync.Mutex
@@ -70,6 +71,9 @@ func New(settings *config.Settings, database *db.DB, gl gitlab.Client, runners [
 		decisions: map[int64]chan approvalDecision{},
 	}
 	s.terminal, s.terminalNote = em, note
+	if database != nil {
+		s.applySkillSettings()
+	}
 	for _, r := range runners {
 		if _, _, ok := r.Detect(); ok {
 			s.Runners[r.Name()] = r
@@ -156,7 +160,99 @@ func (s *Service) SkillMap() []skill.Resolution {
 }
 
 func (s *Service) resolver() *skill.Resolver {
-	return skill.NewWithNames(s.Settings.ProjectRoot, s.Settings.SkillNames)
+	s.mu.Lock()
+	names := make(map[string]string, len(s.Settings.SkillNames))
+	for k, v := range s.Settings.SkillNames {
+		names[k] = v
+	}
+	custom := make(map[string]string, len(s.Settings.CustomSkills))
+	for k, v := range s.Settings.CustomSkills {
+		custom[k] = v
+	}
+	s.mu.Unlock()
+	return skill.NewWithNames(s.Settings.ProjectRoot, names).WithCustom(custom)
+}
+
+// SkillSetting is the UI override of one action: another project skill name and/or dashboard-written instructions.
+type SkillSetting struct {
+	Name   string // project skill name override ("" = .env / default)
+	Custom bool   // use the dashboard instructions instead of a project skill
+	Text   string // the instructions
+}
+
+// SkillSettings returns the UI overrides per action kind (stored in the settings table).
+func (s *Service) SkillSettings() map[string]SkillSetting {
+	out := map[string]SkillSetting{}
+	values, _ := s.DB.SettingsWithPrefix("skill.")
+	for _, action := range skill.Actions {
+		out[action.Kind] = SkillSetting{
+			Name:   values["skill."+action.Kind+".name"],
+			Custom: values["skill."+action.Kind+".custom"] == "1",
+			Text:   values["skill."+action.Kind+".text"],
+		}
+	}
+	return out
+}
+
+// SaveSkillSetting stores the UI override of an action and applies it immediately (no restart).
+func (s *Service) SaveSkillSetting(kind, name string, useCustom bool, text string) error {
+	if skill.ActionFor(kind) == nil {
+		return userErr("unknown action %q", kind)
+	}
+	name, text = strings.TrimSpace(name), strings.TrimSpace(text)
+	if useCustom && text == "" {
+		return userErr("custom instructions are empty: write them or switch the checkbox off")
+	}
+	if strings.ContainsAny(name, " /\\") {
+		return userErr("skill name must be a plain agent/command/skill name, not a path")
+	}
+	custom := ""
+	if useCustom {
+		custom = "1"
+	}
+	for key, value := range map[string]string{"skill." + kind + ".name": name, "skill." + kind + ".custom": custom, "skill." + kind + ".text": text} {
+		if err := s.DB.SetSetting(key, value); err != nil {
+			return err
+		}
+	}
+	s.applySkillSettings()
+	return nil
+}
+
+// applySkillSettings merges the UI overrides into the settings the resolver and doctor read: .env values stay
+// as the base, a UI name replaces the .env name, custom instructions replace the skill.
+func (s *Service) applySkillSettings() {
+	values, _ := s.DB.SettingsWithPrefix("skill.")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.envSkillNames == nil {
+		s.envSkillNames = map[string]string{}
+		for k, v := range s.Settings.SkillNames {
+			s.envSkillNames[k] = v
+		}
+	}
+	names := map[string]string{}
+	for k, v := range s.envSkillNames {
+		names[k] = v
+	}
+	custom := map[string]string{}
+	for _, action := range skill.Actions {
+		if name := strings.TrimSpace(values["skill."+action.Kind+".name"]); name != "" {
+			names[action.Kind] = name
+		}
+		if values["skill."+action.Kind+".custom"] == "1" && strings.TrimSpace(values["skill."+action.Kind+".text"]) != "" {
+			custom[action.Kind] = values["skill."+action.Kind+".text"]
+		}
+	}
+	s.Settings.SkillNames, s.Settings.CustomSkills = names, custom
+}
+
+// SkillCandidates lists the agents, commands and skills found in the project (for the UI dropdown).
+func (s *Service) SkillCandidates() []skill.Skill {
+	if s.Settings.ProjectRoot == "" {
+		return nil
+	}
+	return skill.NewWithNames(s.Settings.ProjectRoot, nil).Candidates()
 }
 
 // Recover marks runs interrupted by a restart as failed and backfills token counters of old runs.

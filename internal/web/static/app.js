@@ -228,6 +228,16 @@
     }
   };
 
+  // Save the skill override of one action (doctor page): project skill name and/or custom instructions.
+  window.saveSkill = async function (event, kind) {
+    event.preventDefault();
+    const form = event.target;
+    const body = { name: form.name.value, custom: form.custom.checked ? '1' : '', text: form.text.value };
+    const data = await call('POST', `/api/skills/${kind}`, body, event.submitter);
+    if (data) { flash('Настройка сохранена и уже действует', true); setTimeout(reload, 400); }
+    return false;
+  };
+
   // Open a terminal window on the dashboard machine for a run (resume = continue the agent session there).
   window.openTerminal = async function (runId, resume, button) {
     const data = await call('POST', `/api/runs/${runId}/terminal`, { resume: resume ? '1' : '' }, button);

@@ -29,8 +29,9 @@ type Settings struct {
 	RuntimeDir   string
 	WorktreeDir  string
 
-	ReviewSkill string            // full-review skill name override (REVIEW_SKILL / SKILL_REVIEW_FULL)
-	SkillNames  map[string]string // action kind → project skill name override (SKILL_* variables)
+	ReviewSkill  string            // full-review skill name override (REVIEW_SKILL / SKILL_REVIEW_FULL)
+	SkillNames   map[string]string // action kind → project skill name override (SKILL_* variables, then the UI)
+	CustomSkills map[string]string // action kind → instructions written in the dashboard (UI); replace the project skill
 
 	ClaudeBin          string
 	ClaudeModels       []string

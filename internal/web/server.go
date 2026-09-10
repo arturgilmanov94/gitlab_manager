@@ -254,6 +254,11 @@ func (s *Server) routes() {
 		}
 		s.runStarted(w, runID)
 	})
+	s.mux.HandleFunc("POST /api/skills/{kind}", func(w http.ResponseWriter, r *http.Request) {
+		body := readBody(r)
+		err := s.svc.SaveSkillSetting(r.PathValue("kind"), body["name"], body["custom"] == "1" || body["custom"] == "true", body["text"])
+		s.result(w, map[string]any{}, err)
+	})
 	s.mux.HandleFunc("POST /api/runs/{id}/terminal", func(w http.ResponseWriter, r *http.Request) {
 		body := readBody(r)
 		command, err := s.svc.OpenTerminal(pathID(r), body["resume"] == "1")
@@ -798,7 +803,8 @@ func (s *Server) runLog(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) doctorPage(w http.ResponseWriter, r *http.Request) {
 	rep := doctor.Run(s.svc.Settings, s.version, s.svc.GitLab, s.runners)
-	s.render(w, "doctor", map[string]any{"Base": s.base("doctor", "Doctor"), "Report": rep, "Skills": s.svc.SkillMap()})
+	s.render(w, "doctor", map[string]any{"Base": s.base("doctor", "Doctor"), "Report": rep, "Skills": s.svc.SkillMap(),
+		"SkillSettings": s.svc.SkillSettings(), "Candidates": s.svc.SkillCandidates()})
 }
 
 // ---------------------------------------------------------------------------------- api

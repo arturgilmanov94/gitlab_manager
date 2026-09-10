@@ -768,3 +768,61 @@ func TestSyncIssuesAcrossProjects(t *testing.T) {
 		t.Fatalf("several projects are filtered client-side: %+v", res)
 	}
 }
+
+// Skill overrides from the UI: another project skill name, or dashboard-written instructions that replace the skill.
+func TestSkillSettingsFromUI(t *testing.T) {
+	svc, _, fr := newService(t)
+	if svc.SkillFor(db.KindPlan) != nil {
+		t.Fatal("fixture has no plan skill")
+	}
+	if err := svc.SaveSkillSetting(db.KindPlan, "", true, ""); err == nil {
+		t.Fatal("empty custom instructions must be refused")
+	}
+	if err := svc.SaveSkillSetting("nope", "", false, ""); err == nil {
+		t.Fatal("unknown action must be refused")
+	}
+	if err := svc.SaveSkillSetting(db.KindPlan, "", true, "Plan in three phases. Mention the DB migrations first."); err != nil {
+		t.Fatal(err)
+	}
+	sk := svc.SkillFor(db.KindPlan)
+	if sk == nil || sk.Kind != skill.KindCustom || sk.Identifier() != "custom:plan" {
+		t.Fatalf("%+v", sk)
+	}
+	settings := svc.SkillSettings()
+	if !settings[db.KindPlan].Custom || settings[db.KindPlan].Text == "" || settings[db.KindReviewFull].Custom {
+		t.Fatalf("%+v", settings)
+	}
+	issue, _ := svc.AddIssue("#7")
+	fr.Outputs = []map[string]any{testutil.PlanOutput()}
+	runID, err := svc.StartPlan(issue.ID, "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
+	req := fr.Requests[len(fr.Requests)-1]
+	if req.Agent != "" || !strings.Contains(req.Prompt, "--- developer instructions ---") || !strings.Contains(req.Prompt, "Mention the DB migrations first.") || !strings.Contains(req.Prompt, "READ-ONLY") {
+		t.Fatalf("custom instructions must be in the prompt, constraints kept: %+v", req)
+	}
+	if run, _ := svc.DB.GetRun(runID); run.SkillIdentifier != "custom:plan" {
+		t.Fatalf("%+v", run)
+	}
+	// Pointing the full review at another project skill by name, from the UI, wins over the .env default.
+	testutil.AddProjectSkill(t, svc.Settings.ProjectRoot, "php-style", "PHP style rules")
+	if err := svc.SaveSkillSetting(db.KindReviewFull, "php-style", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if sk := svc.SkillFor(db.KindReviewFull); sk == nil || sk.Name != "php-style" {
+		t.Fatalf("%+v", sk)
+	}
+	if err := svc.SaveSkillSetting(db.KindReviewFull, "", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if sk := svc.SkillFor(db.KindReviewFull); sk == nil || sk.Name != "mr-review" {
+		t.Fatalf("clearing the override restores the default: %+v", sk)
+	}
+	// Overrides survive a restart: a new service on the same database applies them at start.
+	svc2 := New(svc.Settings, svc.DB, svc.GitLab, []runner.Runner{fr})
+	if sk := svc2.SkillFor(db.KindPlan); sk == nil || sk.Kind != skill.KindCustom {
+		t.Fatalf("%+v", sk)
+	}
+}

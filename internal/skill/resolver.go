@@ -19,6 +19,7 @@ const (
 	KindAgent   = "agent"
 	KindCommand = "command"
 	KindSkill   = "skill"
+	KindCustom  = "custom" // instructions written in the dashboard for one action (stored in data/, not in the project)
 )
 
 // Dashboard actions. The strings equal the run kinds stored in the database (package db must not be imported here).
@@ -124,6 +125,7 @@ type Skill struct {
 	RelPath     string
 	Description string
 	Model       string
+	Body        string // KindCustom: the instructions themselves (go into the prompt)
 }
 
 // Identifier is kind:name.
@@ -133,6 +135,9 @@ func (s Skill) Identifier() string { return s.Kind + ":" + s.Name }
 func (s Skill) Invocation() string {
 	if s.Kind == KindAgent {
 		return "claude --agent " + s.Name
+	}
+	if s.Kind == KindCustom {
+		return "instructions from the dashboard inside the prompt"
 	}
 	return "/" + s.Name + " <url> (slash command in the prompt)"
 }
@@ -154,8 +159,27 @@ type Validation struct {
 
 // Resolver scans PROJECT_ROOT.
 type Resolver struct {
-	Root  string
-	Names map[string]string // action kind → skill name override (from .env); missing = Action.SkillName
+	Root   string
+	Names  map[string]string // action kind → skill name override (from .env or the UI); missing = Action.SkillName
+	Custom map[string]string // action kind → instructions written in the dashboard; they replace the project skill
+}
+
+// WithCustom attaches dashboard-written instructions per action (see Custom).
+func (r *Resolver) WithCustom(custom map[string]string) *Resolver {
+	r.Custom = custom
+	return r
+}
+
+// customSkill wraps dashboard instructions for an action as a Skill.
+func customSkill(action Action, text string) *Skill {
+	desc := strings.TrimSpace(text)
+	if i := strings.IndexByte(desc, '\n'); i >= 0 {
+		desc = desc[:i]
+	}
+	if len(desc) > 120 {
+		desc = desc[:120] + "…"
+	}
+	return &Skill{Kind: KindCustom, Name: action.Kind, RelPath: "data/ (настройки dashboard)", Description: desc, Body: text}
 }
 
 // New creates a resolver; preferred overrides the full-review skill name ("" = default).
@@ -234,6 +258,9 @@ func (r *Resolver) ForAction(kind string) Resolution {
 }
 
 func (r *Resolver) resolve(action Action, candidates []Skill) Resolution {
+	if text := strings.TrimSpace(r.Custom[action.Kind]); text != "" {
+		return Resolution{Action: action, Wanted: "custom", Skill: customSkill(action, text)}
+	}
 	res := Resolution{Action: action, Wanted: r.Wanted(action)}
 	for i := range candidates {
 		if candidates[i].Name == res.Wanted {
@@ -285,6 +312,12 @@ func (r *Resolver) Resolve() *Skill { return r.ForAction(ActionReviewFull).Skill
 
 // Validate checks that the skill file exists and has usable frontmatter.
 func (r *Resolver) Validate(s Skill) Validation {
+	if s.Kind == KindCustom {
+		if strings.TrimSpace(s.Body) == "" {
+			return Validation{false, []string{"custom instructions are empty"}}
+		}
+		return Validation{true, nil}
+	}
 	data, err := os.ReadFile(s.AbsPath(r.Root))
 	if err != nil {
 		return Validation{false, []string{"cannot read " + s.RelPath + ": " + err.Error()}}
@@ -360,7 +393,7 @@ func (r *Resolver) scanMarkdown(dir, kind string) []Skill {
 		if name == "" {
 			name = strings.TrimSuffix(filepath.Base(rel), ".md")
 		}
-		out = append(out, Skill{kind, name, rel, meta["description"], meta["model"]})
+		out = append(out, Skill{Kind: kind, Name: name, RelPath: rel, Description: meta["description"], Model: meta["model"]})
 	}
 	return out
 }
@@ -385,7 +418,7 @@ func (r *Resolver) scanSkills(dir string) []Skill {
 			name = entry.Name()
 		}
 		rel, _ := filepath.Rel(r.Root, file)
-		out = append(out, Skill{KindSkill, name, filepath.ToSlash(rel), meta["description"], ""})
+		out = append(out, Skill{Kind: KindSkill, Name: name, RelPath: filepath.ToSlash(rel), Description: meta["description"]})
 	}
 	return out
 }
