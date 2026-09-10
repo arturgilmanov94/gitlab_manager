@@ -20,7 +20,7 @@
       <a href="/workspaces" class="{{if eq .Base.Nav "workspaces"}}active{{end}}">Workspaces</a>
     </nav>
     <div class="nav-context">
-      {{if .Base.Pending}}<a class="chip attention tip" href="/run/{{(index .Base.Pending 0).RunID}}" data-tip="Агент ждёт вашего разрешения на действие. Откройте сессию и ответьте, как в терминале.">⚠ Нужен ваш ответ{{if gt (len .Base.Pending) 1}} ({{len .Base.Pending}}){{end}}</a>{{end}}
+      {{if .Base.Waiting}}<a class="chip attention tip" href="/run/{{index .Base.Waiting 0}}#approval" data-tip="Агент ждёт вас: разрешение на действие или ответ на вопрос по задаче. Откройте сессию и ответьте.">⚠ Нужен ваш ответ{{if gt (len .Base.Waiting) 1}} ({{len .Base.Waiting}}){{end}}</a>{{end}}
       {{if .Base.Username}}<span class="chip tip" data-tip="Пользователь GitLab из glab. По нему определяются «мои» MR и задачи.">@{{.Base.Username}}</span>{{end}}
       {{if .Base.ProjectRoot}}<span class="chip path mono tip" data-tip="Корень проекта. Все агенты стартуют отсюда и берут правила именно этого чекаута.">{{.Base.ProjectRoot}}</span>{{else}}<span class="chip bad">project root не определён</span>{{end}}
       {{if .Base.Skill}}<a class="chip tip" href="/doctor#skills" data-tip="Skill полного ревью проекта ({{.Base.Skill.RelPath}}). Не копируется: после git pull используется новая версия. Карта всех действий → skills: на странице проверки окружения.">skill: {{.Base.Skill.Name}}</a>{{else}}<a class="chip warn tip" href="/doctor#skills" data-tip="В проекте не найден агент/skill ревью; ревью идёт по CLAUDE.md и промпту dashboard. Какие skills ожидаются — на странице проверки окружения.">review skill не найден</a>{{end}}

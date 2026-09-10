@@ -4,6 +4,7 @@ package db
 import (
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -754,7 +755,9 @@ func (d *DB) RunsWithoutTokens() ([]int64, error) {
 // FailStaleRuns marks active runs as failed and their open permission prompts as expired (after a restart).
 func (d *DB) FailStaleRuns(message string) (int64, error) {
 	_, _ = d.sql.Exec("UPDATE approvals SET status = 'expired', decided_at = ? WHERE status = 'pending'", Now())
-	res, err := d.sql.Exec("UPDATE runs SET status = 'failed', error = ?, finished_at = ? WHERE status IN "+activeStatuses, message, Now())
+	// Runs waiting for the developer's answers to the agent's questions need no process: they survive a restart.
+	res, err := d.sql.Exec("UPDATE runs SET status = 'failed', error = ?, finished_at = ? WHERE status IN "+activeStatuses+
+		" AND NOT (status = 'waiting' AND EXISTS (SELECT 1 FROM run_questions q WHERE q.run_id = runs.id AND q.answer = ''))", message, Now())
 	if err != nil {
 		return 0, err
 	}
@@ -1196,6 +1199,119 @@ func (d *DB) SettingsWithPrefix(prefix string) (map[string]string, error) {
 			return nil, err
 		}
 		out[k] = v
+	}
+	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------------- agent questions
+
+// Question is one question the agent asked the developer during a run.
+type Question struct {
+	ID         int64
+	RunID      int64
+	Round      int64
+	Ordinal    int64
+	Question   string
+	Options    []string
+	Why        string
+	Answer     string
+	CreatedAt  string
+	AnsweredAt string
+}
+
+// Answered reports whether the developer replied.
+func (q Question) Answered() bool { return q.AnsweredAt != "" }
+
+const questionColumns = "id, run_id, round, ordinal, question, options_json, why, answer, created_at, answered_at"
+
+func scanQuestion(s scanner) (*Question, error) {
+	var q Question
+	var options string
+	if err := s.Scan(&q.ID, &q.RunID, &q.Round, &q.Ordinal, &q.Question, &options, &q.Why, &q.Answer, &q.CreatedAt, &q.AnsweredAt); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal([]byte(options), &q.Options)
+	return &q, nil
+}
+
+// AddQuestions stores a new round of questions for a run and returns the round number.
+func (d *DB) AddQuestions(runID int64, questions []Question) (int64, error) {
+	var round int64
+	_ = d.sql.QueryRow("SELECT COALESCE(MAX(round), 0) FROM run_questions WHERE run_id = ?", runID).Scan(&round)
+	round++
+	now := Now()
+	for i, q := range questions {
+		options, _ := json.Marshal(q.Options)
+		if q.Options == nil {
+			options = []byte("[]")
+		}
+		if _, err := d.sql.Exec("INSERT INTO run_questions (run_id, round, ordinal, question, options_json, why, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			runID, round, i+1, q.Question, string(options), q.Why, now); err != nil {
+			return 0, err
+		}
+	}
+	return round, nil
+}
+
+// ListQuestions returns every question of a run, oldest first.
+func (d *DB) ListQuestions(runID int64) ([]Question, error) {
+	rows, err := d.sql.Query("SELECT "+questionColumns+" FROM run_questions WHERE run_id = ? ORDER BY id", runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Question
+	for rows.Next() {
+		q, err := scanQuestion(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *q)
+	}
+	return out, rows.Err()
+}
+
+// PendingQuestions returns the unanswered questions of a run.
+func (d *DB) PendingQuestions(runID int64) ([]Question, error) {
+	all, err := d.ListQuestions(runID)
+	if err != nil {
+		return nil, err
+	}
+	var out []Question
+	for _, q := range all {
+		if !q.Answered() {
+			out = append(out, q)
+		}
+	}
+	return out, nil
+}
+
+// AnswerQuestion stores the developer's answer.
+func (d *DB) AnswerQuestion(id int64, answer string) error {
+	res, err := d.sql.Exec("UPDATE run_questions SET answer = ?, answered_at = ? WHERE id = ? AND answered_at = ''", answer, Now(), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("question #%d not found or already answered", id)
+	}
+	return nil
+}
+
+// RunsWaitingForAnswers lists ids of runs that wait for the developer's answers to agent questions.
+func (d *DB) RunsWaitingForAnswers() ([]int64, error) {
+	rows, err := d.sql.Query("SELECT DISTINCT r.id FROM runs r JOIN run_questions q ON q.run_id = r.id AND q.answer = '' WHERE r.status = 'waiting' ORDER BY r.id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
 	}
 	return out, rows.Err()
 }

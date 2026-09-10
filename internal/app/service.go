@@ -998,6 +998,12 @@ func (s *Service) enqueue(run db.Run) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	s.launch(id)
+	return id, nil
+}
+
+// launch runs a queued run in the background, respecting RUN_CONCURRENCY.
+func (s *Service) launch(id int64) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
 	s.cancels[id] = cancel
@@ -1015,7 +1021,39 @@ func (s *Service) enqueue(run db.Run) (int64, error) {
 		defer func() { <-s.sem }()
 		s.execute(ctx, id)
 	}()
-	return id, nil
+}
+
+// asksQuestions reports whether a run kind may stop with questions for the developer.
+func asksQuestions(kind string) bool {
+	return kind == db.KindPlan || kind == db.KindImplement || kind == db.KindFixComments || kind == db.KindStandTest
+}
+
+// Answer stores the developer's answers to the agent's pending questions and continues the run in the same
+// agent session. answers maps question id → answer text; every pending question needs one.
+func (s *Service) Answer(runID int64, answers map[int64]string) error {
+	run, _ := s.DB.GetRun(runID)
+	if run == nil {
+		return userErr("run #%d not found", runID)
+	}
+	pending, _ := s.DB.PendingQuestions(runID)
+	if run.Status != db.StatusWaiting || len(pending) == 0 {
+		return userErr("run #%d is not waiting for answers", runID)
+	}
+	for _, q := range pending {
+		if strings.TrimSpace(answers[q.ID]) == "" {
+			return userErr("question %d has no answer: «%s»", q.Ordinal, q.Question)
+		}
+	}
+	for _, q := range pending {
+		if err := s.DB.AnswerQuestion(q.ID, strings.TrimSpace(answers[q.ID])); err != nil {
+			return err
+		}
+	}
+	if err := s.DB.UpdateRun(runID, map[string]any{"status": db.StatusQueued, "progress": "", "error": ""}); err != nil {
+		return err
+	}
+	s.launch(runID)
+	return nil
 }
 
 // Retry starts a new run with the same parameters as a finished/failed one.
@@ -1076,6 +1114,8 @@ func (s *Service) Cancel(runID int64) bool {
 	}
 	if run.Status == db.StatusQueued {
 		_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusCancelled, "error": "Cancelled before start", "finished_at": db.Now()})
+	} else if run.Status == db.StatusWaiting && cancel == nil {
+		_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusCancelled, "error": "Cancelled while waiting for your answers", "finished_at": db.Now(), "progress": ""})
 	}
 	return true
 }
@@ -1262,8 +1302,20 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		return
 	}
 
-	// The developer chose to run inside an earlier agent session (Phase C): resume it instead of a new chat.
-	if run.ContinueRunID != nil {
+	// Continuation after the developer answered the agent's questions: the same session goes on with the answers.
+	questions, _ := s.DB.ListQuestions(runID)
+	if len(questions) > 0 && run.SessionID != "" && questions[len(questions)-1].Answered() {
+		round := questions[len(questions)-1].Round
+		var pairs []prompts.QA
+		for _, q := range questions {
+			if q.Round == round {
+				pairs = append(pairs, prompts.QA{Question: q.Question, Answer: q.Answer})
+			}
+		}
+		req.ResumeSessionID, req.Agent = run.SessionID, ""
+		req.Prompt = prompts.Answers(pairs)
+		logln(fmt.Sprintf("continuing after %d answer(s) of the developer (round %d)", len(pairs), round))
+	} else if run.ContinueRunID != nil {
 		if prev, _ := s.DB.GetRun(*run.ContinueRunID); prev != nil && prev.SessionID != "" {
 			req.ResumeSessionID, req.Agent = prev.SessionID, ""
 			req.Prompt = prompts.Continued(prev.Kind) + req.Prompt
@@ -1274,15 +1326,16 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 	_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusRunning, "started_at": db.Now(), "prompt": req.Prompt, "log_path": logPath, "work_dir": req.Dir})
 	result, runErr := r.Run(ctx, req)
 
+	// Counters accumulate over the stages of one run (a run that stopped with questions and continued).
 	fields := map[string]any{"finished_at": db.Now(), "progress": ""}
 	if result != nil {
-		fields["cost_usd"] = result.CostUSD
-		fields["duration_ms"] = result.DurationMs
-		fields["input_tokens"] = result.Usage.Input
-		fields["output_tokens"] = result.Usage.Output
-		fields["cache_read_tokens"] = result.Usage.CacheRead
-		fields["cache_write_tokens"] = result.Usage.CacheWrite
-		fields["session_id"] = result.SessionID
+		fields["cost_usd"] = run.CostUSD + result.CostUSD
+		fields["duration_ms"] = run.DurationMs + result.DurationMs
+		fields["input_tokens"] = run.InputTokens + result.Usage.Input
+		fields["output_tokens"] = run.OutputTokens + result.Usage.Output
+		fields["cache_read_tokens"] = run.CacheReadTokens + result.Usage.CacheRead
+		fields["cache_write_tokens"] = run.CacheWriteTokens + result.Usage.CacheWrite
+		fields["session_id"] = firstOf(result.SessionID, run.SessionID)
 		fields["denials_json"] = string(result.Denials)
 		if len(result.Raw) > 0 && len(result.Raw) < 2_000_000 {
 			fields["raw_result"] = string(result.Raw)
@@ -1297,6 +1350,39 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		fields["status"], fields["error"] = db.StatusFailed, runErr.Error()
 		_ = s.DB.UpdateRun(runID, fields)
 		return
+	}
+	// The agent stopped to ask the developer: keep the run waiting with its session; the answers continue it.
+	if asksQuestions(run.Kind) {
+		var asked struct {
+			Ask []struct {
+				Question string   `json:"question"`
+				Options  []string `json:"options"`
+				Why      string   `json:"why"`
+			} `json:"ask"`
+		}
+		_ = json.Unmarshal(result.Structured, &asked)
+		if len(asked.Ask) > 0 {
+			if fields["session_id"] == "" {
+				fields["status"], fields["error"] = db.StatusFailed, fmt.Sprintf("the agent asked %d question(s) but the %s runner reported no session id, so the run cannot be continued", len(asked.Ask), run.Runner)
+				_ = s.DB.UpdateRun(runID, fields)
+				return
+			}
+			var qs []db.Question
+			for _, q := range asked.Ask {
+				qs = append(qs, db.Question{Question: q.Question, Options: q.Options, Why: q.Why})
+			}
+			if _, err := s.DB.AddQuestions(runID, qs); err != nil {
+				fields["status"], fields["error"] = db.StatusFailed, "cannot store questions: "+err.Error()
+				_ = s.DB.UpdateRun(runID, fields)
+				return
+			}
+			fields["status"], fields["finished_at"] = db.StatusWaiting, ""
+			fields["progress"] = fmt.Sprintf("Нужен ваш ответ: %d вопрос(ов) агента", len(asked.Ask))
+			fields["result_json"] = string(result.Structured)
+			logln(fmt.Sprintf("agent asked %d question(s); waiting for the developer", len(asked.Ask)))
+			_ = s.DB.UpdateRun(runID, fields)
+			return
+		}
 	}
 	if err := s.store(run, result.Structured, previous, fields); err != nil {
 		fields["status"], fields["error"] = db.StatusFailed, "cannot store result: "+err.Error()

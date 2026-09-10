@@ -238,6 +238,27 @@
     return false;
   };
 
+  // Send the developer's answers to the agent's questions; the run continues in the same session.
+  window.answerQuestions = async function (event, runId) {
+    event.preventDefault();
+    const form = event.target;
+    const body = {};
+    let missing = false;
+    form.querySelectorAll('fieldset.question').forEach((box) => {
+      const id = box.dataset.question;
+      const picked = box.querySelector(`input[name="opt_${id}"]:checked`);
+      const free = box.querySelector(`textarea[name="free_${id}"]`).value.trim();
+      let answer = picked && picked.value ? picked.value : '';
+      if (free) answer = answer ? `${answer} — ${free}` : free;
+      if (!answer) { missing = true; box.classList.add('missing'); } else { box.classList.remove('missing'); }
+      body[`answer_${id}`] = answer;
+    });
+    if (missing) { flash('Ответьте на каждый вопрос: вариант или свой текст', false); return false; }
+    const data = await call('POST', `/api/runs/${runId}/answers`, body, event.submitter);
+    if (data) { flash('Ответы отправлены, агент продолжает', true); setTimeout(reload, 600); }
+    return false;
+  };
+
   // Open a terminal window on the dashboard machine for a run (resume = continue the agent session there).
   window.openTerminal = async function (runId, resume, button) {
     const data = await call('POST', `/api/runs/${runId}/terminal`, { resume: resume ? '1' : '' }, button);

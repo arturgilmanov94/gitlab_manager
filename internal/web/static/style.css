@@ -158,6 +158,13 @@ textarea { width: 100%; max-width: 820px; resize: vertical; }
 .context-picker select { max-width: 100%; font-size: 12.5px; padding: 5px 8px; }
 .context-picker .hint { font-size: 12px; color: var(--muted); }
 .chain a { font-family: var(--mono); }
+.questions .question { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin: 8px 0; background: var(--surface); }
+.questions .question legend { padding: 0 4px; font-size: 13.5px; }
+.questions .question.missing { border-color: var(--danger); }
+.questions .option { display: flex; gap: 8px; align-items: center; margin: 4px 0; font-size: 13px; }
+.questions .option input[hidden] { display: none; }
+.questions textarea { width: 100%; margin-top: 4px; }
+.questions .why { margin: 2px 0 6px; }
 .skill-form { display: flex; flex-direction: column; gap: 6px; min-width: 220px; }
 .skill-form select, .skill-form textarea { width: 100%; font-size: 12px; }
 .skill-form .check-row { display: flex; gap: 6px; align-items: center; }

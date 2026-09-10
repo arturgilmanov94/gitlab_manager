@@ -47,6 +47,7 @@ type pageBase struct {
 	Counts      map[string]int64
 	Pending     []db.Approval       // open permission prompts across all runs (header badge)
 	Labels      []config.LabelStyle // highlighted GitLab labels (filter chips)
+	Waiting     []int64             // runs that need the developer: permission prompts and agent questions (header chip)
 	Terminal    bool                // «Открыть в терминале» works on this machine
 	TerminalWhy string              // reason when it does not
 	Nav         string
@@ -259,6 +260,16 @@ func (s *Server) routes() {
 		err := s.svc.SaveSkillSetting(r.PathValue("kind"), body["name"], body["custom"] == "1" || body["custom"] == "true", body["text"])
 		s.result(w, map[string]any{}, err)
 	})
+	s.mux.HandleFunc("POST /api/runs/{id}/answers", func(w http.ResponseWriter, r *http.Request) {
+		body := readBody(r)
+		answers := map[int64]string{}
+		for key, value := range body {
+			if id, err := strconv.ParseInt(strings.TrimPrefix(key, "answer_"), 10, 64); err == nil && strings.HasPrefix(key, "answer_") {
+				answers[id] = value
+			}
+		}
+		s.result(w, map[string]any{}, s.svc.Answer(pathID(r), answers))
+	})
 	s.mux.HandleFunc("POST /api/runs/{id}/terminal", func(w http.ResponseWriter, r *http.Request) {
 		body := readBody(r)
 		command, err := s.svc.OpenTerminal(pathID(r), body["resume"] == "1")
@@ -305,6 +316,22 @@ func (s *Server) routes() {
 
 func (s *Server) base(nav, title string) pageBase {
 	pending, _ := s.svc.DB.PendingApprovals()
+	var waiting []int64
+	seen := map[int64]bool{}
+	for _, a := range pending {
+		if !seen[a.RunID] {
+			seen[a.RunID] = true
+			waiting = append(waiting, a.RunID)
+		}
+	}
+	if ids, _ := s.svc.DB.RunsWaitingForAnswers(); len(ids) > 0 {
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				waiting = append(waiting, id)
+			}
+		}
+	}
 	termOK, termWhy := s.svc.TerminalAvailable()
 	if termOK {
 		termWhy = ""
@@ -317,6 +344,7 @@ func (s *Server) base(nav, title string) pageBase {
 		Username:    s.svc.CurrentUser(),
 		Counts:      s.svc.DB.Counts(),
 		Pending:     pending,
+		Waiting:     waiting,
 		Labels:      s.svc.Settings.HighlightLabels,
 		Terminal:    termOK,
 		TerminalWhy: termWhy,
@@ -775,6 +803,16 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 	data["Approvals"], _ = s.svc.DB.ListApprovals(run.ID)
 	if run.Status == db.StatusWaiting {
 		data["Pending"], _ = s.svc.DB.PendingApproval(run.ID)
+		data["Questions"], _ = s.svc.DB.PendingQuestions(run.ID)
+	}
+	if all, _ := s.svc.DB.ListQuestions(run.ID); len(all) > 0 {
+		var answered []db.Question
+		for _, q := range all {
+			if q.Answered() {
+				answered = append(answered, q)
+			}
+		}
+		data["AnsweredQuestions"] = answered
 	}
 	if run.DenialsJSON != "" {
 		var denials []map[string]any
@@ -1076,6 +1114,8 @@ func kindTip(kind string) string {
 		return "Подтянуть открытые задачи, где вы assignee. Ничего не запускается."
 	case "add":
 		return "Загрузить из GitLab по ссылке и добавить в dashboard. Ничего не запускается."
+	case "answer":
+		return "Ответы уйдут в ту же сессию агента, и он продолжит задачу с учётом ваших решений. Каждый вопрос нужно закрыть: вариантом или своим текстом."
 	case "terminal":
 		return "Откроет окно терминала на этой машине в каталоге сессии и продолжит её интерактивно (resume той же сессии агента). В терминале действуют ваши обычные права агента, а не ограничения dashboard."
 	case "terminal-dir":

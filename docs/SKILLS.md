@@ -99,6 +99,13 @@ git-состояние не трогать, в GitLab не писать.
 **Результат:** `summary`, `addressed[]` (`author`, `file`, `line`, `comment`, `action`, `done`), `changes[]` (`path`, `description`),
 `tests`, `todo[]` (что требует решения человека), `commit_message`.
 
+### Поле `ask` — вопросы разработчику
+
+Схемы `plan`, `implement`, `fix_comments`, `stand_test` содержат массив `ask[]` (`question`, `options[]`, `why`). Если агент
+не может продолжить без решения разработчика, он возвращает результат с заполненным `ask` и минимальными остальными полями;
+dashboard переводит сессию в «Нужен ваш ответ», показывает форму и после ответов продолжает **ту же** сессию промптом
+«The developer answered your questions … continue and return the full structured result». В обычном случае `ask` пустой.
+
 ### `plan` — исследование задачи
 
 **Вход:** ссылка на задачу, project path, IID, заголовок, описание, указания разработчика. Режим read-only, `cwd` = корень проекта.

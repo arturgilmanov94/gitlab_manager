@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -579,5 +580,34 @@ func TestStandTestPages(t *testing.T) {
 	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
 	if _, body := get(t, ts.URL+"/-/stand-test/1"); !strings.Contains(body, "Проверка на стенде") || !strings.Contains(body, "Залито на стенд") || !strings.Contains(body, "Slow query") || !strings.Contains(body, "scripts/onerun/mr_42.php") || !strings.Contains(body, `id="workspace"`) {
 		t.Fatal("run page must show the stand report and the workspace")
+	}
+}
+
+// Agent questions in the UI: header chip, overview inbox, the answer form on the run page and the API.
+func TestAgentQuestionsPage(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/issues", map[string]any{"url": "#7"})
+	fr.Outputs = []map[string]any{{"summary": "", "steps": []any{}, "files": []any{}, "risks": []any{}, "questions": []any{}, "estimate": "",
+		"ask": []any{map[string]any{"question": "Which currency?", "options": []any{"USD", "EUR"}, "why": "unspecified"}}}}
+	postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "plan"})
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusWaiting })
+	if _, body := get(t, ts.URL+"/-/task-plan/1"); !strings.Contains(body, "агент задаёт вопросы по задаче") || !strings.Contains(body, "Which currency?") || !strings.Contains(body, `value="EUR"`) || !strings.Contains(body, "answerQuestions(event, '1')") {
+		t.Fatal("run page must show the questions form")
+	}
+	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "⚠ Нужен ваш ответ") || !strings.Contains(body, "1 вопрос(ов) агента") {
+		t.Fatal("header chip and overview inbox must point at the waiting run")
+	}
+	if _, body := get(t, ts.URL+"/issues"); !strings.Contains(body, "Ответить агенту") {
+		t.Fatal("task row must offer to answer")
+	}
+	questions, _ := svc.DB.PendingQuestions(1)
+	fr.Outputs = []map[string]any{testutil.PlanOutput()}
+	code, out := postJSON(t, ts.URL+"/api/runs/1/answers", map[string]any{"answer_" + strconv.FormatInt(questions[0].ID, 10): "EUR — and log it"})
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/task-plan/1"); !strings.Contains(body, "Вопросы агента и ваши ответы (1)") || !strings.Contains(body, "EUR — and log it") || !strings.Contains(body, "План решения") {
+		t.Fatal("finished run page must keep the Q&A and show the plan")
 	}
 }

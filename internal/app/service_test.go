@@ -868,3 +868,76 @@ func TestStandTest(t *testing.T) {
 		t.Fatal("unknown STAND_SKILL must not fall back to detection")
 	}
 }
+
+// Phase 4: the agent stops with questions instead of guessing; the developer answers in the dashboard and the same
+// session continues. Counters accumulate over both stages; a restart keeps the waiting run.
+func TestAgentQuestionsAndAnswers(t *testing.T) {
+	svc, _, fr := newService(t)
+	issue, _ := svc.AddIssue("#7")
+	fr.Outputs = []map[string]any{{"summary": "", "steps": []any{}, "files": []any{}, "risks": []any{}, "questions": []any{}, "estimate": "",
+		"ask": []any{map[string]any{"question": "Which currency for the fee?", "options": []any{"USD", "EUR"}, "why": "The ticket does not say"},
+			map[string]any{"question": "Keep the old endpoint?", "options": []any{}, "why": "Clients may still call it"}}}}
+	runID, err := svc.StartPlan(issue.ID, "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusWaiting })
+	run, _ := svc.DB.GetRun(runID)
+	if !strings.Contains(run.Progress, "2 вопрос") || run.SessionID != "sess-1" || run.FinishedAt != "" || run.InputTokens != 1000 {
+		t.Fatalf("%+v", run)
+	}
+	if !strings.Contains(fr.Requests[0].Prompt, "do NOT guess: stop and return the structured result with `ask` filled") {
+		t.Fatal("prompt must carry the questions rule")
+	}
+	pending, _ := svc.DB.PendingQuestions(runID)
+	if len(pending) != 2 || pending[0].Options[1] != "EUR" || pending[1].Why == "" {
+		t.Fatalf("%+v", pending)
+	}
+	if ids, _ := svc.DB.RunsWaitingForAnswers(); len(ids) != 1 || ids[0] != runID {
+		t.Fatalf("%v", ids)
+	}
+	// A restart must not fail a run that only waits for the developer.
+	if n, _ := svc.DB.FailStaleRuns("restart"); n != 0 || status(svc, runID) != db.StatusWaiting {
+		t.Fatal("waiting-for-answers run must survive a restart")
+	}
+	if err := svc.Answer(runID, map[int64]string{pending[0].ID: "EUR"}); err == nil || !strings.Contains(err.Error(), "has no answer") {
+		t.Fatalf("every question needs an answer: %v", err)
+	}
+	fr.Outputs = []map[string]any{testutil.PlanOutput()}
+	if err := svc.Answer(runID, map[int64]string{pending[0].ID: "EUR", pending[1].ID: "Yes, keep it for one release"}); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
+	req := fr.Requests[len(fr.Requests)-1]
+	if req.ResumeSessionID != "sess-1" || req.Agent != "" || !strings.Contains(req.Prompt, "A: EUR") || !strings.Contains(req.Prompt, "keep it for one release") || len(req.Schema) == 0 {
+		t.Fatalf("continuation must resume the session with the answers and the schema: %+v", req)
+	}
+	run, _ = svc.DB.GetRun(runID)
+	if run.Summary != "Plan summary" || run.InputTokens != 2000 || run.CostUSD < 0.19 || run.Progress != "" {
+		t.Fatalf("result stored, counters accumulated: %+v", run)
+	}
+	if ids, _ := svc.DB.RunsWaitingForAnswers(); len(ids) != 0 {
+		t.Fatal("nothing waits any more")
+	}
+	if err := svc.Answer(runID, nil); err == nil {
+		t.Fatal("a finished run takes no answers")
+	}
+
+	// Cancelling a run that waits for answers works without a process to stop.
+	fr.Outputs = []map[string]any{{"summary": "", "steps": []any{}, "files": []any{}, "risks": []any{}, "questions": []any{}, "estimate": "",
+		"ask": []any{map[string]any{"question": "Q?", "options": []any{}, "why": ""}}}}
+	second, _ := svc.StartPlan(issue.ID, "", "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, second) == db.StatusWaiting })
+	if !svc.Cancel(second) || status(svc, second) != db.StatusCancelled {
+		t.Fatalf("%s", status(svc, second))
+	}
+	// Without a session id the questions cannot be continued: the run fails with a clear message.
+	fr.Session = "-"
+	fr.Outputs = []map[string]any{{"summary": "", "steps": []any{}, "files": []any{}, "risks": []any{}, "questions": []any{}, "estimate": "",
+		"ask": []any{map[string]any{"question": "Q?", "options": []any{}, "why": ""}}}}
+	third, _ := svc.StartPlan(issue.ID, "", "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, third) == db.StatusFailed })
+	if r, _ := svc.DB.GetRun(third); !strings.Contains(r.Error, "no session id") {
+		t.Fatalf("%+v", r)
+	}
+}

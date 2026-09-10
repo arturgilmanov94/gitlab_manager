@@ -93,6 +93,42 @@ var VerifyFindingSchema = []byte(`{
   "additionalProperties": false
 }`)
 
+// questionsSchema lets an agent stop and ask the developer instead of guessing (Phase 4 «Нужен ваш ответ»).
+const questionsSchema = `"ask": {"type": "array", "items": {
+      "type": "object",
+      "properties": {
+        "question": {"type": "string", "description": "one concrete question the developer must answer before you can continue"},
+        "options": {"type": "array", "items": {"type": "string"}, "description": "suggested answers to pick from; empty when free text is needed"},
+        "why": {"type": "string", "description": "what depends on the answer; what you would otherwise have to guess"}
+      },
+      "required": ["question", "options", "why"],
+      "additionalProperties": false
+    }, "description": "EMPTY unless you are blocked: when a decision is genuinely the developer's (business rule, ambiguous requirement, destructive choice), stop, fill this list and leave the other fields minimal"}`
+
+// questionsRule is appended to prompts of runs that may stop with questions.
+const questionsRule = "\nIf you cannot finish without a decision that is the developer's to make (ambiguous requirement, business rule, a choice with " +
+	"different results), do NOT guess: stop and return the structured result with `ask` filled (each with `question`, `options`, `why`) and the " +
+	"other fields minimal. The developer answers in the dashboard and your session continues with the answers. Otherwise leave `ask` empty. " +
+	"(`ask` is for blocking decisions only; informational open questions for the author go into the result's own fields.)\n"
+
+// Answers builds the prompt that continues a session after the developer answered the agent's questions.
+func Answers(pairs []QA) string {
+	var b strings.Builder
+	b.WriteString("The developer answered your questions. Continue the task in this same session to completion and return the full structured result " +
+		"in the requested schema (with `ask` empty unless you are blocked again).\n\n--- answers ---\n")
+	for i, qa := range pairs {
+		fmt.Fprintf(&b, "%d. Q: %s\n   A: %s\n", i+1, strings.TrimSpace(qa.Question), strings.TrimSpace(qa.Answer))
+	}
+	b.WriteString("--- end answers ---\n")
+	return b.String()
+}
+
+// QA is a question with the developer's answer.
+type QA struct {
+	Question string
+	Answer   string
+}
+
 // PlanSchema is the structured result of a read-only task analysis.
 var PlanSchema = []byte(`{
   "type": "object",
@@ -104,9 +140,10 @@ var PlanSchema = []byte(`{
     }, "required": ["path", "change"], "additionalProperties": false}},
     "risks": {"type": "array", "items": {"type": "string"}},
     "questions": {"type": "array", "items": {"type": "string"}, "description": "open questions for the author/business"},
-    "estimate": {"type": "string", "description": "rough size: XS/S/M/L/XL with one sentence"}
+    "estimate": {"type": "string", "description": "rough size: XS/S/M/L/XL with one sentence"},
+    ` + questionsSchema + `
   },
-  "required": ["summary", "steps", "files", "risks", "questions", "estimate"],
+  "required": ["summary", "steps", "files", "risks", "questions", "estimate", "ask"],
   "additionalProperties": false
 }`)
 
@@ -120,9 +157,10 @@ var ImplementSchema = []byte(`{
     }, "required": ["path", "description"], "additionalProperties": false}},
     "tests": {"type": "string", "description": "which tests/checks were run and their result; 'none' if nothing"},
     "todo": {"type": "array", "items": {"type": "string"}, "description": "what is left or needs a human decision"},
-    "commit_message": {"type": "string", "description": "suggested commit message following the project convention"}
+    "commit_message": {"type": "string", "description": "suggested commit message following the project convention"},
+    ` + questionsSchema + `
   },
-  "required": ["summary", "changes", "tests", "todo", "commit_message"],
+  "required": ["summary", "changes", "tests", "todo", "commit_message", "ask"],
   "additionalProperties": false
 }`)
 
@@ -268,7 +306,7 @@ func Plan(issue Issue, notes string, s *skill.Skill) string {
 	return SlashPrefix(s, issue.WebURL) + "Mode: PLAN (read-only analysis of a task)\n\n" + issueBlock(issue, notes) + "\n" + skillLine(s) + "\n\n" +
 		"Study the task and the relevant code in this repository (you are in the project root). Produce a concrete implementation plan: " +
 		"ordered steps, files to change with what changes, risks/regressions to watch, open questions, and a rough size estimate. " +
-		"You may fetch more context from GitLab with read-only `glab api` calls (linked issues, related MRs).\n\n" + readOnlyRules()
+		"You may fetch more context from GitLab with read-only `glab api` calls (linked issues, related MRs).\n" + questionsRule + "\n" + readOnlyRules()
 }
 
 // Implement builds the editing prompt for a worktree run.
@@ -277,7 +315,7 @@ func Implement(issue Issue, notes, branch, baseBranch string, s *skill.Skill) st
 		fmt.Sprintf("\nYou are in a git worktree on branch `%s` created from `origin/%s`. Implement the task here.\n", branch, baseBranch) +
 		skillLine(s) + "\n\n" +
 		"Follow the project's rules and conventions, keep the change focused on the task, add or update tests where the project covers the area, " +
-		"and run the project's style/test checks that apply to the touched files. Report what you changed, what you ran, and what is left.\n\n" + editRules()
+		"and run the project's style/test checks that apply to the touched files. Report what you changed, what you ran, and what is left.\n" + questionsRule + "\n" + editRules()
 }
 
 // readOnlyRules / editRules are the dashboard constraints plus the report-language rule.
@@ -352,9 +390,10 @@ var FixSchema = []byte(`{
     }, "required": ["path", "description"], "additionalProperties": false}},
     "tests": {"type": "string", "description": "which tests/checks were run and their result; 'none' if nothing"},
     "todo": {"type": "array", "items": {"type": "string"}, "description": "comments that need a human decision"},
-    "commit_message": {"type": "string", "description": "suggested commit message following the project convention"}
+    "commit_message": {"type": "string", "description": "suggested commit message following the project convention"},
+    ` + questionsSchema + `
   },
-  "required": ["summary", "addressed", "changes", "tests", "todo", "commit_message"],
+  "required": ["summary", "addressed", "changes", "tests", "todo", "commit_message", "ask"],
   "additionalProperties": false
 }`)
 
@@ -376,9 +415,10 @@ var StandSchema = []byte(`{
       "path": {"type": "string"}, "description": {"type": "string"}
     }, "required": ["path", "description"], "additionalProperties": false}, "description": "files created or changed in the worktree (the script, fixtures)"},
     "todo": {"type": "array", "items": {"type": "string"}, "description": "what needs a human: stand access problems, migrations not run, data that had to be faked"},
-    "commit_message": {"type": "string", "description": "suggested commit message if the script is worth keeping; empty otherwise"}
+    "commit_message": {"type": "string", "description": "suggested commit message if the script is worth keeping; empty otherwise"},
+    ` + questionsSchema + `
   },
-  "required": ["summary", "deployed", "tests", "script_path", "script_output", "problems", "changes", "todo", "commit_message"],
+  "required": ["summary", "deployed", "tests", "script_path", "script_output", "problems", "changes", "todo", "commit_message", "ask"],
   "additionalProperties": false
 }`)
 
@@ -402,7 +442,7 @@ func StandTest(mr MR, notes, targetBranch string, standSkill *skill.Skill, s *sk
 		"3. On the stand, run the project's tests/checks that cover the touched code (unit tests of the touched classes, linters the project uses). Record the outcome in `tests`.\n" +
 		"4. Write an emulation script in this worktree, in the place the project uses for one-off scripts (look at the existing conventions), named after the MR. It must exercise the functionality the MR adds or changes end-to-end while mocking or stubbing external systems (HTTP APIs, queues, mail, payment providers) so it runs on the stand without side effects. Push it to the stand, run it there, capture the output in `script_output` and the path in `script_path`.\n" +
 		"5. Report problems you observed (errors, wrong behaviour, missing config) in `problems` with evidence, and everything that needs a human in `todo`.\n" +
-		"Do not modify the project code itself in this run — only add the script and its fixtures. Leave the stand consistent: if you had to change stand-only config, revert it.\n\n" + editRules()
+		"Do not modify the project code itself in this run — only add the script and its fixtures. Leave the stand consistent: if you had to change stand-only config, revert it.\n" + questionsRule + "\n" + editRules()
 }
 
 // FixComments builds the prompt for addressing unresolved reviewer discussions in a worktree of the MR branch.
@@ -417,5 +457,5 @@ func FixComments(mr MR, notes string, s *skill.Skill) string {
 		"Fetch the unresolved discussions of this MR with `glab api` (discussions where notes[0].resolvable == true and resolved == false), " +
 		"read each reviewer's request in the context of the current code, and change the code to address it, following the project's rules. " +
 		"If a comment is a question or needs a business decision, do not guess: leave it in `todo` with your recommendation. " +
-		"Run the project's style/test checks that apply to the touched files. Do NOT reply to or resolve the discussions in GitLab — the developer does that after reviewing the diff.\n\n" + editRules()
+		"Run the project's style/test checks that apply to the touched files. Do NOT reply to or resolve the discussions in GitLab — the developer does that after reviewing the diff.\n" + questionsRule + "\n" + editRules()
 }

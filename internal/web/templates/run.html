@@ -77,6 +77,29 @@
 </div>
 {{end}}
 
+{{if .Questions}}
+<div class="approval-box" id="approval">
+  <h2>⚠ Нужен ваш ответ: агент задаёт вопросы по задаче</h2>
+  <p class="small secondary">Агент остановился, чтобы не угадывать. Ответьте на каждый вопрос: выберите вариант или напишите свой. Ответы уйдут в ту же сессию, и работа продолжится.</p>
+  <form class="questions" onsubmit="return answerQuestions(event, '{{.Run.ID}}')">
+    {{range .Questions}}
+    <fieldset class="question" data-question="{{.ID}}">
+      <legend><b>{{.Ordinal}}.</b> {{.Question}}</legend>
+      {{if .Why}}<div class="small muted why">{{md .Why $.Blob $.SHA}}</div>{{end}}
+      {{range $i, $opt := .Options}}<label class="option"><input type="radio" name="opt_{{$.ID}}" value="{{$opt}}" data-q="{{$.ID}}"> {{$opt}}</label>{{end}}
+      <label class="option free"><input type="radio" name="opt_{{.ID}}" value="" data-q="{{.ID}}"{{if not .Options}} checked hidden{{end}}> {{if .Options}}Свой ответ:{{else}}Ответ:{{end}}</label>
+      <textarea name="free_{{.ID}}" rows="2" placeholder="Свой ответ или уточнение к выбранному варианту"></textarea>
+    </fieldset>
+    {{end}}
+    <div class="actions left">
+      <button type="submit" class="btn btn-primary tip" data-tip="{{kindTip "answer"}}">Ответить и продолжить</button>
+      <button type="button" class="btn btn-danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Run.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>
+      <span class="small muted">Сессия ждёт сколько нужно; перезапуск dashboard её не теряет.</span>
+    </div>
+  </form>
+</div>
+{{end}}
+
 {{if .Run.Active}}
 <div class="progress-box" data-started="{{.Run.StartedAt}}">
   <div class="progress-head">{{template "status" .Run.Status}} {{if eq .Run.Status "waiting"}}агент ждёт вашего решения выше{{else}}агент работает{{end}} · <span class="elapsed">—</span> · страница обновится сама</div>
@@ -95,6 +118,14 @@
 </div>
 {{else if eq .Run.Status "cancelled"}}
 <div class="alert"><span class="state state-neutral"><span class="glyph">—</span> Остановлено</span> {{.Run.Error}} <button class="btn btn-sm tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Run.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Запустить снова</button></div>
+{{end}}
+
+{{if .AnsweredQuestions}}
+<details class="section card"><summary>Вопросы агента и ваши ответы ({{len .AnsweredQuestions}})</summary>
+  <table class="table compact"><tbody>
+  {{range .AnsweredQuestions}}<tr><td class="small muted nowrap">раунд {{.Round}} · {{.Ordinal}}</td><td>{{.Question}}{{if .Why}}<div class="small muted">{{.Why}}</div>{{end}}</td><td><b>{{.Answer}}</b></td></tr>{{end}}
+  </tbody></table>
+</details>
 {{end}}
 
 {{if and (eq .Run.Status "done") .Run.IsReview}}
