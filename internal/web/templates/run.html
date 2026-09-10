@@ -100,12 +100,18 @@
 </div>
 {{end}}
 
+{{if and (not .Run.Active) .Timeline}}
+<div class="timeline done" id="timeline">{{template "timeline" .Timeline}}</div>
+{{end}}
+
 {{if .Run.Active}}
 <div class="progress-box" data-started="{{.Run.StartedAt}}">
   <div class="progress-head">{{template "status" .Run.Status}} {{if eq .Run.Status "waiting"}}агент ждёт вашего решения выше{{else}}агент работает{{end}} · <span class="elapsed">—</span> · страница обновится сама</div>
+  <div class="timeline" id="timeline">{{template "timeline" .Timeline}}</div>
   {{if and .Run.Progress (ne .Run.Status "waiting")}}<div class="progress-now" id="progress-now">сейчас: {{.Run.Progress}}</div>{{end}}
   <div class="progress"><div class="progress-bar indeterminate"></div></div>
 </div>
+
 {{else if eq .Run.Status "failed"}}
 <div class="error-box">
   <h2>{{errorTitle .Run.Kind}}</h2>

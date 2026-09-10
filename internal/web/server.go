@@ -798,6 +798,7 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 			data["Worktree"] = s.svc.Worktree(run)
 		}
 	}
+	data["Timeline"] = s.svc.DB.TimelineFor(run.ID)
 	data["Messages"], _ = s.svc.DB.ListMessages(run.ID)
 	data["LogTail"] = tail(run.LogPath, 12000)
 	data["Approvals"], _ = s.svc.DB.ListApprovals(run.ID)
@@ -949,7 +950,7 @@ func (s *Server) apiRun(w http.ResponseWriter, r *http.Request) {
 		"id": run.ID, "kind": run.Kind, "status": run.Status, "verdict": run.Verdict, "summary": run.Summary,
 		"error": run.Error, "runner": run.Runner, "cost_usd": run.CostUSD, "tokens": run.TotalTokens(), "duration_ms": run.DurationMs,
 		"started_at": run.StartedAt, "finished_at": run.FinishedAt, "findings": len(findings), "session_id": run.SessionID,
-		"progress": run.Progress,
+		"progress": run.Progress, "phase": s.svc.DB.CurrentPhase(run.ID), "timeline": s.svc.DB.TimelineFor(run.ID),
 	}
 	if pending, _ := s.svc.DB.PendingApproval(run.ID); pending != nil {
 		payload["pending_approval"] = map[string]any{"id": pending.ID, "tool": pending.ToolName, "description": pending.Description}

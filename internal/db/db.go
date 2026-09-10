@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -1314,4 +1315,145 @@ func (d *DB) RunsWaitingForAnswers() ([]int64, error) {
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------------- run events (timeline)
+
+// Phases of a run in display order.
+var Phases = []string{"workspace", "analysis", "plan", "implement", "tests", "commands", "subagent", "question"}
+
+// PhaseLabel is the human name of a phase.
+func PhaseLabel(phase string) string {
+	switch phase {
+	case "workspace":
+		return "Подготовка workspace"
+	case "analysis":
+		return "Анализ"
+	case "plan":
+		return "План"
+	case "implement":
+		return "Реализация"
+	case "tests":
+		return "Тесты и проверки"
+	case "commands":
+		return "Команды"
+	case "subagent":
+		return "Субагенты"
+	case "question":
+		return "Вопросы"
+	}
+	return phase
+}
+
+var testCommand = regexp.MustCompile(`(?i)\b(phpunit|pytest|go test|npm test|yarn test|pnpm test|composer test|vendor/bin/|phpstan|psalm|php-cs-fixer|phpcs|eslint|prettier|golangci-lint|go vet|gofmt|rubocop|jest|vitest|make test|make lint|lint)\b`)
+var readCommand = regexp.MustCompile(`(?i)^(glab api|glab mr|glab issue|git (log|diff|show|status|blame|branch|rev-parse|ls-files)|cat |head |tail |ls |find |grep |rg |wc |tree )`)
+
+// PhaseFor classifies a tool call into a phase.
+func PhaseFor(tool, detail string) string {
+	switch tool {
+	case "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "NotebookRead":
+		return "analysis"
+	case "Edit", "Write", "MultiEdit", "NotebookEdit":
+		return "implement"
+	case "TodoWrite", "ExitPlanMode", "EnterPlanMode":
+		return "plan"
+	case "Agent", "Task":
+		return "subagent"
+	case "AskUserQuestion":
+		return "question"
+	case "Bash":
+		switch {
+		case testCommand.MatchString(detail):
+			return "tests"
+		case readCommand.MatchString(detail):
+			return "analysis"
+		default:
+			return "commands"
+		}
+	}
+	return "commands"
+}
+
+// RunEvent is one tool call of a run.
+type RunEvent struct {
+	ID     int64
+	RunID  int64
+	At     string
+	Phase  string
+	Tool   string
+	Detail string
+}
+
+// AddRunEvent appends a tool call to the run's timeline.
+func (d *DB) AddRunEvent(runID int64, phase, tool, detail string) error {
+	_, err := d.sql.Exec("INSERT INTO run_events (run_id, at, phase, tool, detail) VALUES (?, ?, ?, ?, ?)", runID, Now(), phase, tool, detail)
+	return err
+}
+
+// ListRunEvents returns the tool calls of a run in order.
+func (d *DB) ListRunEvents(runID int64) ([]RunEvent, error) {
+	rows, err := d.sql.Query("SELECT id, run_id, at, phase, tool, detail FROM run_events WHERE run_id = ? ORDER BY id", runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RunEvent
+	for rows.Next() {
+		var e RunEvent
+		if err := rows.Scan(&e.ID, &e.RunID, &e.At, &e.Phase, &e.Tool, &e.Detail); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// PhaseSummary is one step of the timeline: how many tool calls, when, what was touched last.
+type PhaseSummary struct {
+	Phase      string
+	Label      string
+	Count      int
+	FirstAt    string
+	LastAt     string
+	LastDetail string
+	Current    bool // the phase of the latest tool call
+}
+
+// Timeline groups a run's events into phases in order of first appearance; the last event marks the current phase.
+func Timeline(events []RunEvent) []PhaseSummary {
+	var out []PhaseSummary
+	index := map[string]int{}
+	for _, e := range events {
+		i, ok := index[e.Phase]
+		if !ok {
+			index[e.Phase] = len(out)
+			out = append(out, PhaseSummary{Phase: e.Phase, Label: PhaseLabel(e.Phase), FirstAt: e.At})
+			i = len(out) - 1
+		}
+		out[i].Count++
+		out[i].LastAt = e.At
+		out[i].LastDetail = e.Detail
+	}
+	for i := range out {
+		out[i].Current = false
+	}
+	if len(events) > 0 {
+		out[index[events[len(events)-1].Phase]].Current = true
+	}
+	return out
+}
+
+// TimelineFor loads and groups a run's events.
+func (d *DB) TimelineFor(runID int64) []PhaseSummary {
+	events, _ := d.ListRunEvents(runID)
+	return Timeline(events)
+}
+
+// CurrentPhase is the label of the latest phase of a run ("" without events).
+func (d *DB) CurrentPhase(runID int64) string {
+	var phase, detail string
+	if err := d.sql.QueryRow("SELECT phase, detail FROM run_events WHERE run_id = ? ORDER BY id DESC LIMIT 1", runID).Scan(&phase, &detail); err != nil {
+		return ""
+	}
+	return PhaseLabel(phase)
 }

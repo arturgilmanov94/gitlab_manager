@@ -1188,6 +1188,9 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		Progress: func(note string) {
 			_ = s.DB.UpdateRun(runID, map[string]any{"progress": note})
 		},
+		Event: func(ev runner.ToolEvent) {
+			_ = s.DB.AddRunEvent(runID, db.PhaseFor(ev.Tool, ev.Detail), ev.Tool, ev.Detail)
+		},
 	}
 	if sk != nil && sk.Kind == skill.KindAgent {
 		req.Agent = sk.Name
@@ -1251,6 +1254,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "merge request disappeared")
 			return
 		}
+		_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
 		path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
 		if err != nil {
 			s.fail(runID, "worktree: "+err.Error())
@@ -1269,6 +1273,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "merge request disappeared")
 			return
 		}
+		_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
 		path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
 		if err != nil {
 			s.fail(runID, "worktree: "+err.Error())
@@ -1288,6 +1293,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			req.Prompt, req.Schema = prompts.Plan(pi, run.Notes, sk), prompts.PlanSchema
 			req.SessionName = fmt.Sprintf("plan #%d run %d", issue.IID, runID)
 		} else {
+			_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
 			path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
 			if err != nil {
 				s.fail(runID, "worktree: "+err.Error())

@@ -298,10 +298,14 @@ func (s *streamSession) noteToolUse(event map[string]any) {
 		if str(block["type"]) != "tool_use" {
 			continue
 		}
-		note := ToolNote(str(block["name"]), block["input"])
+		name := str(block["name"])
+		note := ToolNote(name, block["input"])
 		logf(s.log, "[tool] %s\n", note)
 		if s.req.Progress != nil {
 			s.req.Progress(note)
+		}
+		if s.req.Event != nil {
+			s.req.Event(ToolEvent{Tool: name, Detail: strings.TrimPrefix(note, name+": ")})
 		}
 	}
 }

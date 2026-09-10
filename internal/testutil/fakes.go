@@ -203,6 +203,14 @@ func (f *FakeRunner) Run(ctx context.Context, req runner.Request) (*runner.Resul
 	if req.Progress != nil {
 		req.Progress("Bash: fake command")
 	}
+	if req.Event != nil {
+		req.Event(runner.ToolEvent{Tool: "Read", Detail: "src/A.php"})
+		req.Event(runner.ToolEvent{Tool: "Bash", Detail: "fake command"})
+		if req.Mode == runner.ModeEdit {
+			req.Event(runner.ToolEvent{Tool: "Edit", Detail: "CHANGED.txt"})
+			req.Event(runner.ToolEvent{Tool: "Bash", Detail: "vendor/bin/phpunit tests/Unit"})
+		}
+	}
 	if block != nil {
 		select {
 		case <-block:

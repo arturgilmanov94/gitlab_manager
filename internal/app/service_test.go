@@ -941,3 +941,23 @@ func TestAgentQuestionsAndAnswers(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+// Structural progress: tool calls of a run are stored as events and grouped into phases; edit runs start with the workspace phase.
+func TestRunTimeline(t *testing.T) {
+	svc, _, fr := newService(t)
+	issue, _ := svc.AddIssue("#7")
+	fr.Outputs = []map[string]any{testutil.ImplementOutput()}
+	runID, err := svc.StartImplement(issue.ID, "", "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
+	tl := svc.DB.TimelineFor(runID)
+	labels := []string{}
+	for _, p := range tl {
+		labels = append(labels, p.Phase)
+	}
+	if strings.Join(labels, ",") != "workspace,analysis,commands,implement,tests" || !tl[4].Current {
+		t.Fatalf("%v", labels)
+	}
+}

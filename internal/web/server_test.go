@@ -611,3 +611,18 @@ func TestAgentQuestionsPage(t *testing.T) {
 		t.Fatal("finished run page must keep the Q&A and show the plan")
 	}
 }
+
+// The run page shows the phases of the run; the JSON API carries them for live updates.
+func TestTimelineOnRunPage(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "full"})
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/review/1"); !strings.Contains(body, `class="timeline done"`) || !strings.Contains(body, "Анализ <span class=\"tl-count\">1</span>") || !strings.Contains(body, "Команды") {
+		t.Fatal("finished run page must show the phases")
+	}
+	if _, body := get(t, ts.URL+"/api/runs/1"); !strings.Contains(body, `"phase":"Команды"`) || !strings.Contains(body, `"Label":"Анализ"`) {
+		t.Fatalf("api must carry the timeline: %s", body)
+	}
+}

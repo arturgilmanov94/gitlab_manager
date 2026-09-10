@@ -21,7 +21,7 @@ func open(t *testing.T) *DB {
 func TestMigrateIdempotent(t *testing.T) {
 	d := open(t)
 	applied, err := d.Migrate()
-	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 11 {
+	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 12 {
 		t.Fatalf("%v %v %v", applied, err, d.SchemaVersion())
 	}
 }
@@ -132,5 +132,31 @@ func TestIssuesAndStale(t *testing.T) {
 	list, _ := d.ListIssues()
 	if len(list) != 1 || list[0].Last == nil || list[0].Last.ID != runID || list[0].Last.Status != StatusFailed {
 		t.Fatalf("%+v", list)
+	}
+}
+
+func TestPhasesAndTimeline(t *testing.T) {
+	cases := map[[2]string]string{
+		{"Read", "src/A.php"}: "analysis", {"Grep", "foo"}: "analysis", {"Edit", "x"}: "implement", {"Write", "x"}: "implement",
+		{"Bash", "vendor/bin/phpunit tests"}: "tests", {"Bash", "go test ./..."}: "tests", {"Bash", "glab api projects/1"}: "analysis",
+		{"Bash", "git diff HEAD~1"}: "analysis", {"Bash", "php scripts/run.php"}: "commands", {"Agent", "explore"}: "subagent",
+		{"TodoWrite", ""}: "plan", {"AskUserQuestion", ""}: "question", {"Unknown", ""}: "commands",
+	}
+	for in, want := range cases {
+		if got := PhaseFor(in[0], in[1]); got != want {
+			t.Fatalf("%v: %s != %s", in, got, want)
+		}
+	}
+	d := open(t)
+	id, _ := d.CreateRun(Run{Kind: KindImplement, Runner: "claude"})
+	for _, e := range [][3]string{{"workspace", "worktree", "b"}, {"analysis", "Read", "a.php"}, {"analysis", "Grep", "x"}, {"implement", "Edit", "a.php"}, {"tests", "Bash", "phpunit"}, {"implement", "Edit", "b.php"}} {
+		_ = d.AddRunEvent(id, e[0], e[1], e[2])
+	}
+	tl := d.TimelineFor(id)
+	if len(tl) != 4 || tl[0].Phase != "workspace" || tl[1].Count != 2 || tl[2].Phase != "implement" || tl[2].Count != 2 || !tl[2].Current || tl[3].Current || tl[2].LastDetail != "b.php" {
+		t.Fatalf("%+v", tl)
+	}
+	if d.CurrentPhase(id) != "Реализация" || d.CurrentPhase(999) != "" {
+		t.Fatal(d.CurrentPhase(id))
 	}
 }

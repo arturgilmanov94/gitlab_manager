@@ -70,8 +70,15 @@ type Request struct {
 	Timeout         time.Duration
 	SessionName     string
 	Log             io.Writer
-	Permission      PermissionFunc    // nil: anything that would prompt is denied
-	Progress        func(note string) // optional: short notes about what the agent is doing right now
+	Permission      PermissionFunc     // nil: anything that would prompt is denied
+	Progress        func(note string)  // optional: short notes about what the agent is doing right now
+	Event           func(ev ToolEvent) // optional: every tool call, for the structured timeline
+}
+
+// ToolEvent is one tool call of the agent.
+type ToolEvent struct {
+	Tool   string // Read, Edit, Bash, Agent, ...
+	Detail string // file, pattern, command description (already shortened)
 }
 
 // Usage is the token consumption of a run, summed over every model the agent used.

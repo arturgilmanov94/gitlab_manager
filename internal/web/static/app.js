@@ -306,6 +306,16 @@
   tickElapsed();
   setInterval(tickElapsed, 1000);
 
+  // Render the structural progress (phases) of a run into #timeline from the /api/runs/{id} payload.
+  function renderTimeline(phases) {
+    const box = document.getElementById('timeline');
+    if (!box) return;
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    box.innerHTML = phases.map((p, i) => (i ? '<span class="tl-arrow">→</span>' : '') +
+      `<span class="tl-phase${p.Current ? ' current' : ''}"><span class="glyph">${p.Current ? '●' : '✓'}</span> ${esc(p.Label)} <span class="tl-count">${p.Count}</span>` +
+      (p.Current && p.LastDetail ? `<span class="tl-detail mono">${esc(p.LastDetail)}</span>` : '') + '</span>').join('');
+  }
+
   // ---- poll active runs; reload when a status changes (finished, or the agent asks for a permission)
   const active = Array.from(document.querySelectorAll('[data-run-status]')).filter((el) => /queued|running|waiting/.test(el.dataset.status));
   if (active.length) {
@@ -323,6 +333,7 @@
           const data = await response.json();
           if (data.status !== initial[id]) changed = true;
           if (progressNow && ids.length === 1 && data.progress) progressNow.textContent = 'сейчас: ' + data.progress;
+          if (ids.length === 1 && Array.isArray(data.timeline)) renderTimeline(data.timeline);
         } catch (error) { /* server restarting */ }
       }
       if (changed) { reload(); return; }
