@@ -34,6 +34,7 @@ const (
 	ActionStandTest     = "stand_test"
 	ActionCIAnalyze     = "ci_analyze"
 	ActionCIFix         = "ci_fix"
+	ActionFixFindings   = "fix_findings"
 )
 
 // Action is one dashboard action and the project skill it looks for.
@@ -98,6 +99,13 @@ var Actions = []Action{
 		Title: "Исправление CI",
 		Contract: "Работает в worktree на ветке MR. Получает упавшие jobs и хвосты логов (и разбор, если был). Исправляет причину в коде MR, прогоняет " +
 			"относящиеся тесты, делает self-review; если исправить в MR нельзя (инфраструктура, флаки) — объясняет причину и ничего не меняет. Не коммитит, не пушит.",
+	},
+	{
+		Kind: ActionFixFindings, SkillName: "mr-fix-findings", EnvKey: "SKILL_FIX_FINDINGS", Fallback: ActionFixComments,
+		Title: "Исправление выбранных замечаний",
+		Contract: "Работает в worktree на ветке MR. Получает выбранные разработчиком замечания AI-ревью и нерешённые обсуждения ревьюеров. Каждое замечание " +
+			"сначала перепроверяет, не считая верным априори; правит только подтверждённые, прогоняет тесты, делает self-review и отчитывается по каждому: " +
+			"исправлено / не подтверждено / пропущено. Не коммитит, не пушит, в GitLab не пишет. Без своего skill используется skill исправления замечаний ревьюеров.",
 	},
 	{
 		Kind: ActionPlan, SkillName: "task-plan", EnvKey: "SKILL_PLAN",

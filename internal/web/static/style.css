@@ -159,6 +159,9 @@ textarea { width: 100%; max-width: 820px; resize: vertical; }
 .context-picker select { max-width: 100%; font-size: 12.5px; padding: 5px 8px; }
 .context-picker .hint { font-size: 12px; color: var(--muted); }
 .chain a { font-family: var(--mono); }
+.pick-col { width: 28px; }
+.pick-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: var(--radius); background: var(--surface-2); }
+.check-fixed b { color: var(--success); } .check-not_confirmed b { color: var(--muted); }
 .jobs { list-style: none; padding: 0; margin: 0 0 10px; display: flex; flex-direction: column; gap: 6px; }
 .jobs pre.log { max-height: 260px; overflow: auto; }
 .to-mr { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: var(--radius); background: var(--surface-2); }

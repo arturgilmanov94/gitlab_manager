@@ -717,3 +717,30 @@ func TestCIPage(t *testing.T) {
 		t.Fatal("fix page must list unfixable jobs and the workspace")
 	}
 }
+
+// MR page of an own MR offers checkboxes and the «Исправить выбранные» bar; the run page shows per-finding results.
+func TestFixSelectedPages(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "full"})
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `class="pick" data-finding="1"`) || !strings.Contains(body, `class="pick" data-discussion="1"`) || !strings.Contains(body, `fixSelected('1', this)`) {
+		t.Fatal("own MR must offer the selection")
+	}
+	if _, body := get(t, ts.URL+"/-/review/1"); strings.Contains(body, `class="pick"`) {
+		t.Fatal("the run page has no selection")
+	}
+	fr.Outputs = []map[string]any{{"summary": "Done.", "results": []any{map[string]any{"finding_id": 1.0, "status": "fixed", "note": "guarded"}}, "addressed": []any{}, "changes": []any{}, "tests": "none", "todo": []any{}, "self_review": "ok", "commit_message": "", "ask": []any{}}}
+	code, out := postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "fix_findings", "findings": "1", "discussions": "", "notes": ""})
+	if code != 200 || out["redirect"] != "/-/fix-findings/2" {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(2); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/fix-findings/2"); !strings.Contains(body, "Выбранные замечания") || !strings.Contains(body, "Null deref") || !strings.Contains(body, ">исправлено<") || !strings.Contains(body, `id="workspace"`) {
+		t.Fatal("fix page must list the per-finding results and the workspace")
+	}
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, "исправлено агентом") || strings.Contains(body, `class="pick" data-finding="1"`) {
+		t.Fatal("fixed finding shows the agent's verdict and is no longer selectable")
+	}
+}

@@ -229,6 +229,12 @@
     {{end}}
     {{with index .Report "changes"}}<h3>Изменения</h3><table class="table compact"><tbody>{{range .}}<tr><td class="mono small nowrap">{{index . "path"}}</td><td>{{md (index . "description") $.Blob $.SHA}}</td></tr>{{end}}</tbody></table>{{end}}
     <h3>Проверки</h3>{{md (index .Report "tests") .Blob .SHA}}
+    {{if .FixResults}}<h3>Выбранные замечания</h3>
+    <table class="table compact"><thead><tr><th>Замечание</th><th>Итог</th><th>Что сделано</th></tr></thead><tbody>
+    {{range .FixResults}}<tr><td>{{if .Finding}}<span class="sev sev-{{.Finding.Severity}}">{{.Finding.Severity}}</span> <b>{{.Finding.Title}}</b><div class="mono small muted">{{.Finding.File}}{{if .Finding.Line}}:{{deref .Finding.Line}}{{end}}</div>{{else}}<span class="muted">замечание удалено</span>{{end}}</td>
+      <td><span class="fstatus fstatus-{{if eq .Status "fixed"}}fixed{{else if eq .Status "not_confirmed"}}obsolete{{else}}open{{end}}">{{if eq .Status "fixed"}}исправлено{{else if eq .Status "not_confirmed"}}не подтверждено{{else}}пропущено{{end}}</span></td>
+      <td>{{md .Note $.Blob $.SHA}}</td></tr>{{end}}
+    </tbody></table>{{end}}
     {{with index .Report "self_review"}}<h3>Self-review агента</h3>{{md . $.Blob $.SHA}}{{end}}
     {{with index .Report "unfixable"}}<h3>Нельзя исправить в MR</h3><table class="table compact"><tbody>{{range .}}<tr><td class="mono small nowrap">{{index . "job"}}</td><td>{{md (index . "reason") $.Blob $.SHA}}</td></tr>{{end}}</tbody></table>{{end}}
     {{with index .Report "todo"}}<h3>Требует вашего решения</h3><ul>{{range .}}<li>{{md . $.Blob $.SHA}}</li>{{end}}</ul>{{end}}

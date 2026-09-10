@@ -420,11 +420,13 @@ func runSlug(kind string) string {
 		return "ci-analyze"
 	case db.KindCIFix:
 		return "ci-fix"
+	case db.KindFixFindings:
+		return "fix-findings"
 	}
 	return "run"
 }
 
-var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "verify-finding": true, "stand-test": true, "ci-analyze": true, "ci-fix": true, "fix-comments": true, "task-plan": true, "task-implement": true, "run": true}
+var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "verify-finding": true, "stand-test": true, "ci-analyze": true, "ci-fix": true, "fix-findings": true, "fix-comments": true, "task-plan": true, "task-implement": true, "run": true}
 
 func runPath(kind string, id any) string { return fmt.Sprintf("/-/%s/%v", runSlug(kind), id) }
 func mrPath(id any) string               { return fmt.Sprintf("/-/mr/%v", id) }
@@ -576,6 +578,24 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "runs", map[string]any{"Base": s.base("runs", "Сессии"), "Active": active, "Finished": finished})
 }
 
+// idList parses "1,2,3" into ids (blanks and junk ignored).
+func idList(csv string) []int64 {
+	var out []int64
+	for _, part := range strings.Split(csv, ",") {
+		if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil && id > 0 {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// fixResult is one selected finding with the agent's verdict on it (run page of «Исправить выбранные»).
+type fixResult struct {
+	Finding *db.Finding
+	Status  string
+	Note    string
+}
+
 // latestCIAnalysis is the newest finished CI analysis of the given head ("" = any head), or nil.
 func latestCIAnalysis(runs []db.RunSummary, head string) *db.RunSummary {
 	for i := range runs {
@@ -644,6 +664,10 @@ func checkLabel(status string) string {
 		return "неактуально"
 	case "unclear":
 		return "недостаточно данных"
+	case "fixed":
+		return "исправлено агентом"
+	case "not_confirmed":
+		return "не подтверждено при исправлении"
 	}
 	return status
 }
@@ -730,9 +754,10 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 		"FailedJobs": s.svc.FailedJobsFor(mr), "CIAnalysis": latestCIAnalysis(runs, mr.HeadSHA),
 		"Findings": findings, "Discussions": discussions, "Active": active, "LastRun": lastRun,
 		"Stale": stale, "State": state, "OpenMajor": major, "OpenMinor": minor, "OpenInfo": info,
-		"IsMine": username != "" && mr.Author == username,
-		"Closed": mr.State == "merged" || mr.State == "closed",
-		"Blob":   blobBase(mr.WebURL), "SHA": sha,
+		"IsMine":   username != "" && mr.Author == username,
+		"Pickable": username != "" && mr.Author == username && active == nil && mr.State != "merged" && mr.State != "closed",
+		"Closed":   mr.State == "merged" || mr.State == "closed",
+		"Blob":     blobBase(mr.WebURL), "SHA": sha,
 	})
 }
 
@@ -825,6 +850,22 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 	if run.IsReview() {
 		data["Findings"], _ = s.svc.DB.ListFindings(run.ID)
 		data["Discussions"], _ = s.svc.DB.ListDiscussions(run.ID)
+	}
+	if run.Kind == db.KindFixFindings && run.ResultJSON != "" {
+		var report struct {
+			Results []struct {
+				FindingID int64  `json:"finding_id"`
+				Status    string `json:"status"`
+				Note      string `json:"note"`
+			} `json:"results"`
+		}
+		_ = json.Unmarshal([]byte(run.ResultJSON), &report)
+		var results []fixResult
+		for _, r := range report.Results {
+			f, _ := s.svc.DB.GetFinding(r.FindingID)
+			results = append(results, fixResult{Finding: f, Status: r.Status, Note: r.Note})
+		}
+		data["FixResults"] = results
 	}
 	if run.Kind == db.KindCIAnalyze && run.ResultJSON != "" {
 		var analysis map[string]any
@@ -974,8 +1015,10 @@ func (s *Server) apiStartMRRun(w http.ResponseWriter, r *http.Request) {
 	case "ci_fix":
 		analysisID, _ := strconv.ParseInt(body["analysis_run"], 10, 64)
 		runID, err = s.svc.StartCIFix(id, body["runner"], analysisID, cont)
+	case "fix_findings":
+		runID, err = s.svc.StartFixFindings(id, body["runner"], body["notes"], idList(body["findings"]), idList(body["discussions"]), cont)
 	default:
-		writeJSON(w, 400, map[string]any{"error": "kind must be quick, full, verify, verify_finding, stand, ci_analyze, ci_fix or fix"})
+		writeJSON(w, 400, map[string]any{"error": "kind must be quick, full, verify, verify_finding, fix_findings, stand, ci_analyze, ci_fix or fix"})
 		return
 	}
 	if err != nil {
@@ -1137,6 +1180,8 @@ func kindLabel(kind string) string {
 		return "Разбор CI"
 	case db.KindCIFix:
 		return "Исправление CI"
+	case db.KindFixFindings:
+		return "Исправление выбранных замечаний"
 	case db.KindFixComments:
 		return "Исправление замечаний"
 	case db.KindPlan:
@@ -1157,6 +1202,8 @@ func kindTip(kind string) string {
 		return "AI проверит только изменения после последнего ревью и обновит статусы прежних замечаний: исправлено / открыто / неактуально."
 	case "verify_finding":
 		return "AI перепроверит только это замечание, не считая его верным априори: подтверждено / ложное срабатывание / неактуально / недостаточно данных, с доказательством из кода. Только чтение, остальной MR не трогается."
+	case "fix_findings":
+		return "Агент в отдельном workspace ветки MR перепроверит каждое выбранное замечание, исправит подтверждённые и учтёт выбранные обсуждения ревьюеров; по каждому отчитается: исправлено / не подтверждено / пропущено. Commit и push — по вашим кнопкам, потом «Проверить изменения»."
 	case "ci_analyze":
 		return "AI прочитает логи упавших jobs, сопоставит с diff MR и кодом и объяснит причину каждого падения: код MR, тест, флак или окружение CI. Только чтение."
 	case "ci_fix":
@@ -1463,6 +1510,8 @@ func errorTitle(kind string) string {
 		return "Не удалось разобрать падение pipeline"
 	case db.KindCIFix:
 		return "Не удалось исправить CI"
+	case db.KindFixFindings:
+		return "Не удалось исправить выбранные замечания"
 	case db.KindPlan:
 		return "Не удалось исследовать задачу"
 	case db.KindImplement:

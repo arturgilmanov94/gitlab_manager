@@ -20,6 +20,7 @@ Dashboard — это интерфейс поверх агентов **вашег
 | Разобрать ошибки CI | `ci_analyze` | `mr-ci-analyze` | `SKILL_CI_ANALYZE` | CLAUDE.md + промпт dashboard с логами jobs |
 | Исправить CI | `ci_fix` | `mr-ci-fix` | `SKILL_CI_FIX` | CLAUDE.md + промпт dashboard |
 | Проверить на стенде | `stand_test` | `mr-stand-test` | `SKILL_STAND_TEST` | сценарий dashboard поверх skill доступа к стенду (`STAND_SKILL`, ищется по слову «стенд») |
+| Исправить выбранные | `fix_findings` | `mr-fix-findings` | `SKILL_FIX_FINDINGS` | skill `fix_comments`, иначе CLAUDE.md + промпт dashboard |
 | Исправить замечания ревьюеров | `fix_comments` | `mr-fix-comments` | `SKILL_FIX_COMMENTS` | CLAUDE.md + промпт dashboard |
 | Исследовать | `plan` | `task-plan` | `SKILL_PLAN` | CLAUDE.md + промпт dashboard |
 | Решить задачу / Реализовать этот план | `implement` | `task-implement` | `SKILL_IMPLEMENT` | CLAUDE.md + промпт dashboard |
@@ -81,6 +82,15 @@ git-состояние не трогать, в GitLab не писать.
 **Результат:** `status` (`confirmed` | `false_positive` | `obsolete` | `unclear`), `evidence` (markdown с путями и строками),
 `severity` (уточнённая или пустая), `suggestion` (уточнённый фикс или пусто). Dashboard переносит итог на замечание:
 ложное и неактуальное закрывают его, подтверждённое остаётся открытым с пометкой.
+
+### `fix_findings` — исправление выбранных замечаний
+
+**Вход:** worktree на ветке MR (режим правок), указания разработчика, JSON выбранных замечаний (`finding_id`, `severity`, `category`,
+`file`, `line`, `title`, `description`, `suggestion`) и выбранных обсуждений (`discussion_id`, `author`, `file`, `line`, `body`).
+Требование: каждое замечание сначала перепроверить, менять только подтверждённое и только выбранное.
+
+**Результат:** `summary`, `results[]` (`finding_id`, `status` fixed|not_confirmed|skipped, `note`), `addressed[]` (как у `fix_comments`),
+`changes[]`, `tests`, `todo[]`, `self_review`, `commit_message`, `ask[]`. Dashboard переносит `results` на замечания.
 
 ### `ci_analyze` — разбор упавшего pipeline
 

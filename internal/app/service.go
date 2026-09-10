@@ -900,6 +900,66 @@ func (s *Service) StartCIFix(mrID int64, runnerName string, analysisRunID, conti
 	return s.enqueue(run)
 }
 
+// StartFixFindings queues an edit run in the MR worktree that addresses the findings and reviewer discussions the
+// developer selected («Исправить выбранные»). Own MRs only: the branch will be pushed to the MR.
+func (s *Service) StartFixFindings(mrID int64, runnerName, notes string, findingIDs, discussionIDs []int64, continueRunID int64) (int64, error) {
+	if _, err := s.requireRoot(); err != nil {
+		return 0, err
+	}
+	if len(findingIDs)+len(discussionIDs) == 0 {
+		return 0, userErr("select at least one finding or discussion")
+	}
+	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil {
+		return 0, userErr("a run for this merge request is already queued or running (#%d)", active.ID)
+	}
+	mr, err := s.RefreshMR(mrID)
+	if err != nil {
+		return 0, err
+	}
+	if me := s.CurrentUser(); me == "" || mr.Author != me {
+		return 0, userErr("only the author fixes findings in the MR branch (!%d is by %s); for others' MRs use the review results", mr.IID, mr.Author)
+	}
+	if mr.SourceBranch == "" {
+		return 0, userErr("the merge request has no source branch")
+	}
+	for _, id := range findingIDs {
+		f, _ := s.DB.GetFinding(id)
+		if f == nil {
+			return 0, userErr("finding #%d not found", id)
+		}
+		if origin, _ := s.DB.GetRun(f.RunID); origin == nil || origin.MRID == nil || *origin.MRID != mrID {
+			return 0, userErr("finding #%d does not belong to this merge request", id)
+		}
+		if f.Status != "open" {
+			return 0, userErr("finding #%d is not open (%s)", id, f.Status)
+		}
+	}
+	for _, id := range discussionIDs {
+		d, _ := s.DB.GetDiscussion(id)
+		if d == nil {
+			return 0, userErr("discussion #%d not found", id)
+		}
+		if origin, _ := s.DB.GetRun(d.RunID); origin == nil || origin.MRID == nil || *origin.MRID != mrID {
+			return 0, userErr("discussion #%d does not belong to this merge request", id)
+		}
+	}
+	prev, err := s.continuation(continueRunID, &mrID, nil, s.Worktrees.Path(mr.SourceBranch))
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		runnerName = prev.Runner
+	}
+	r, err := s.pickRunner(runnerName)
+	if err != nil {
+		return 0, err
+	}
+	selection, _ := json.Marshal(db.Selection{Findings: findingIDs, Discussions: discussionIDs})
+	run := db.Run{Kind: db.KindFixFindings, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), Notes: notes, SelectionJSON: string(selection), ContinueRunID: runIDPtr(prev),
+		Branch: mr.SourceBranch, WorkDir: s.Worktrees.Path(mr.SourceBranch), SkillIdentifier: skillID(s.SkillFor(db.KindFixFindings))}
+	return s.enqueue(run)
+}
+
 // StandSkill is the project skill that explains how to reach the developer's stand (nil when the project has none).
 func (s *Service) StandSkill() *skill.Skill {
 	if s.Settings.ProjectRoot == "" {
@@ -1133,7 +1193,7 @@ func (s *Service) launch(id int64) {
 
 // asksQuestions reports whether a run kind may stop with questions for the developer.
 func asksQuestions(kind string) bool {
-	return kind == db.KindPlan || kind == db.KindImplement || kind == db.KindFixComments || kind == db.KindStandTest || kind == db.KindCIFix
+	return kind == db.KindPlan || kind == db.KindImplement || kind == db.KindFixComments || kind == db.KindStandTest || kind == db.KindCIFix || kind == db.KindFixFindings
 }
 
 // Answer stores the developer's answers to the agent's pending questions and continues the run in the same
@@ -1204,6 +1264,12 @@ func (s *Service) Retry(runID int64) (int64, error) {
 			return 0, userErr("run has no merge request")
 		}
 		return s.StartCIFix(*run.MRID, run.Runner, derefID(run.BaseRunID), derefID(run.ContinueRunID))
+	case db.KindFixFindings:
+		if run.MRID == nil {
+			return 0, userErr("run has no merge request")
+		}
+		sel := run.SelectionOf()
+		return s.StartFixFindings(*run.MRID, run.Runner, run.Notes, sel.Findings, sel.Discussions, derefID(run.ContinueRunID))
 	case db.KindPlan:
 		if run.IssueID == nil {
 			return 0, userErr("run has no issue")
@@ -1379,6 +1445,34 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		}
 		req.Prompt, req.Schema = prompts.CIAnalyze(promptMR(mr), jobs, sk), prompts.CIAnalyzeSchema
 		req.SessionName = fmt.Sprintf("ci-analyze !%d #%d", mr.IID, runID)
+	case db.KindFixFindings:
+		mr, _ := s.DB.GetMR(*run.MRID)
+		if mr == nil {
+			s.fail(runID, "merge request disappeared")
+			return
+		}
+		sel := run.SelectionOf()
+		var picked []prompts.CheckedFinding
+		for _, id := range sel.Findings {
+			if f, _ := s.DB.GetFinding(id); f != nil {
+				picked = append(picked, prompts.CheckedFinding{ID: f.ID, Severity: f.Severity, Category: f.Category, File: f.File, Line: f.Line, Title: f.Title, Description: f.Description, Suggestion: f.Suggestion})
+			}
+		}
+		var threads []prompts.SelectedDiscussion
+		for _, id := range sel.Discussions {
+			if d, _ := s.DB.GetDiscussion(id); d != nil {
+				threads = append(threads, prompts.SelectedDiscussion{ID: d.ID, Author: d.Author, File: d.File, Line: d.Line, Body: d.Body})
+			}
+		}
+		_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
+		path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
+		if err != nil {
+			s.fail(runID, "worktree: "+err.Error())
+			return
+		}
+		req.Dir, req.Mode, req.ProtectDirs = path, runner.ModeEdit, nil
+		req.Prompt, req.Schema = prompts.FixFindings(promptMR(mr), run.Notes, picked, threads, sk), prompts.FixFindingsSchema
+		req.SessionName = fmt.Sprintf("fix-findings !%d #%d", mr.IID, runID)
 	case db.KindCIFix:
 		mr, _ := s.DB.GetMR(*run.MRID)
 		if mr == nil {
@@ -1799,6 +1893,34 @@ func (s *Service) store(run *db.Run, structured json.RawMessage, previous []db.F
 			return errors.New("run has no finding")
 		}
 		return s.DB.SetFindingCheck(*run.FindingID, check.Status, check.Evidence, run.ID)
+	}
+	if run.Kind == db.KindFixFindings {
+		var report struct {
+			Summary string `json:"summary"`
+			Results []struct {
+				FindingID int64  `json:"finding_id"`
+				Status    string `json:"status"`
+				Note      string `json:"note"`
+			} `json:"results"`
+		}
+		_ = json.Unmarshal(structured, &report)
+		fields["summary"] = report.Summary
+		allowed := map[int64]bool{}
+		for _, id := range run.SelectionOf().Findings {
+			allowed[id] = true
+		}
+		for _, r := range report.Results {
+			if !allowed[r.FindingID] {
+				continue
+			}
+			switch r.Status {
+			case "fixed":
+				_ = s.DB.SetFindingCheck(r.FindingID, "fixed", r.Note, run.ID)
+			case "not_confirmed":
+				_ = s.DB.SetFindingCheck(r.FindingID, "not_confirmed", r.Note, run.ID)
+			}
+		}
+		return nil
 	}
 	if !run.IsReview() {
 		var generic struct {

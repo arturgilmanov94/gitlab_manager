@@ -567,6 +567,69 @@ func StandTest(mr MR, notes, targetBranch string, standSkill *skill.Skill, s *sk
 		"Do not modify the project code itself in this run — only add the script and its fixtures. Leave the stand consistent: if you had to change stand-only config, revert it.\n" + questionsRule + "\n" + editRules()
 }
 
+// SelectedDiscussion is a reviewer discussion chosen for fixing.
+type SelectedDiscussion struct {
+	ID     int64  `json:"discussion_id"`
+	Author string `json:"author"`
+	File   string `json:"file"`
+	Line   *int64 `json:"line"`
+	Body   string `json:"body"`
+}
+
+// FixFindingsSchema is the report of «Исправить выбранные».
+var FixFindingsSchema = []byte(`{
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string", "description": "markdown, 3-8 sentences: what was confirmed and fixed, what was not"},
+    "results": {"type": "array", "items": {"type": "object", "properties": {
+      "finding_id": {"type": "integer"},
+      "status": {"type": "string", "enum": ["fixed", "not_confirmed", "skipped"], "description": "fixed = confirmed and changed; not_confirmed = the finding is wrong or already handled, nothing changed; skipped = needs a human decision"},
+      "note": {"type": "string", "description": "markdown: what was changed or why not, with path:line"}
+    }, "required": ["finding_id", "status", "note"], "additionalProperties": false}},
+    "addressed": {"type": "array", "items": {"type": "object", "properties": {
+      "author": {"type": "string"},
+      "file": {"type": "string"},
+      "line": {"type": ["integer", "null"]},
+      "comment": {"type": "string", "description": "the reviewer's request, shortened"},
+      "action": {"type": "string", "description": "what was done, or why it was intentionally not done"},
+      "done": {"type": "boolean"}
+    }, "required": ["author", "file", "line", "comment", "action", "done"], "additionalProperties": false}, "description": "one entry per selected reviewer discussion"},
+    "changes": {"type": "array", "items": {"type": "object", "properties": {
+      "path": {"type": "string"}, "description": {"type": "string"}
+    }, "required": ["path", "description"], "additionalProperties": false}},
+    "tests": {"type": "string", "description": "which tests/checks were run and their result; 'none' with the reason if nothing"},
+    "todo": {"type": "array", "items": {"type": "string"}, "description": "what needs a human decision"},
+    "self_review": {"type": "string", "description": "markdown: review of the final diff as a strict reviewer"},
+    "commit_message": {"type": "string", "description": "suggested commit message following the project convention; empty when nothing changed"},
+    ` + questionsSchema + `
+  },
+  "required": ["summary", "results", "addressed", "changes", "tests", "todo", "self_review", "commit_message", "ask"],
+  "additionalProperties": false
+}`)
+
+// FixFindings builds the editing prompt that addresses the selected findings and discussions in the MR worktree.
+func FixFindings(mr MR, notes string, findings []CheckedFinding, discussions []SelectedDiscussion, s *skill.Skill) string {
+	var extra string
+	if strings.TrimSpace(notes) != "" {
+		extra = "\n--- additional instructions from the developer ---\n" + strings.TrimSpace(notes) + "\n--- end instructions ---\n"
+	}
+	fj, _ := json.MarshalIndent(findings, "", "  ")
+	dj, _ := json.MarshalIndent(discussions, "", "  ")
+	if findings == nil {
+		fj = []byte("[]")
+	}
+	if discussions == nil {
+		dj = []byte("[]")
+	}
+	return SlashPrefix(s, mr.WebURL) + "Mode: FIX SELECTED FINDINGS (edit files in a dedicated worktree of the MR branch)\n\n" + mrBlock(mr) + extra + "\n" + skillLine(s) + "\n" +
+		fmt.Sprintf("\nYou are in a git worktree checked out on the MR source branch `%s`. The developer selected what to address.\n\n", mr.SourceBranch) +
+		"Selected AI-review findings (JSON):\n" + string(fj) + "\n\nSelected unresolved reviewer discussions (JSON):\n" + string(dj) + "\n\n" +
+		"For EACH selected finding: first verify it against the current code — do not assume the review was right. Fix only the confirmed ones following the project's rules; " +
+		"report `not_confirmed` (with why) when the finding is wrong or already handled, `skipped` when it needs a human decision. Address each selected reviewer discussion the same way " +
+		"(one `addressed` entry per discussion). Do not touch anything that was not selected. Run the project's style/test checks for the touched files, then review the whole diff " +
+		"as a strict reviewer. Do NOT reply to or resolve discussions in GitLab.\n" + questionsRule + "\n" + editRules()
+}
+
 // FixComments builds the prompt for addressing unresolved reviewer discussions in a worktree of the MR branch.
 func FixComments(mr MR, notes string, s *skill.Skill) string {
 	var extra string

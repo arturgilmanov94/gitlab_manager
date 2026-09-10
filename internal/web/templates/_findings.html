@@ -1,11 +1,13 @@
 {{define "findings"}}
+{{$pick := $.Pickable}}
 {{if .Findings}}
-<table class="table findings">
-  <thead><tr><th>Severity</th><th>Статус</th><th>Где</th><th>Замечание</th><th></th></tr></thead>
+<table class="table findings{{if $pick}} pickable{{end}}">
+  <thead><tr>{{if $pick}}<th class="pick-col"><input type="checkbox" class="pick-all tip" data-tip="Выбрать все открытые замечания" data-kind="finding"></th>{{end}}<th>Severity</th><th>Статус</th><th>Где</th><th>Замечание</th><th></th></tr></thead>
   <tbody>
   {{range .Findings}}
   {{$link := fileLink $.Blob $.SHA .File (deref .Line)}}
   <tr class="finding f-{{.Status}}" id="finding-{{.ID}}">
+    {{if $pick}}<td class="pick-col">{{if eq .Status "open"}}<input type="checkbox" class="pick" data-finding="{{.ID}}">{{end}}</td>{{end}}
     <td><span class="sev sev-{{.Severity}}">{{.Severity}}</span><div class="muted small">{{.Category}}</div></td>
     <td><span class="fstatus fstatus-{{.Status}}">{{fstatusLabel .Status}}</span></td>
     <td class="mono small">{{if .File}}{{if $link}}<a class="file-ref tip" data-tip="Открыть файл в GitLab на проверенном коммите" href="{{$link}}" target="_blank" rel="noopener">{{.File}}{{if .Line}}:{{deref .Line}}{{end}}</a>{{else}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{end}}{{else}}—{{end}}</td>
@@ -40,15 +42,25 @@
   </tbody>
 </table>
 {{else}}<p class="muted">Замечаний нет.</p>{{end}}
+{{if $pick}}
+<div class="pick-bar" id="pick-bar" hidden>
+  <span class="small"><b id="pick-count">0</b> выбрано</span>
+  <input id="pick-notes" type="text" size="44" placeholder="Необязательно: что учесть при исправлении">
+  <button class="btn btn-primary btn-sm tip" data-tip="{{kindTip "fix_findings"}}" onclick="fixSelected('{{$.MR.ID}}', this)">Исправить выбранные</button>
+  <button class="btn btn-sm btn-link" onclick="clearPicks()">Снять выбор</button>
+  <span class="small muted">Агент перепроверит каждое замечание, исправит подтверждённые в workspace ветки MR; commit и push — по вашим кнопкам.</span>
+</div>
+{{end}}
 
 {{if .Discussions}}
 <h3>Нерешённые обсуждения ревьюеров ({{len .Discussions}})</h3>
 <table class="table compact">
-  <thead><tr><th>Автор</th><th>Где</th><th>Комментарий</th><th>Оценка AI</th></tr></thead>
+  <thead><tr>{{if $pick}}<th class="pick-col"><input type="checkbox" class="pick-all tip" data-tip="Выбрать все обсуждения" data-kind="discussion"></th>{{end}}<th>Автор</th><th>Где</th><th>Комментарий</th><th>Оценка AI</th></tr></thead>
   <tbody>
   {{range .Discussions}}
   {{$dlink := fileLink $.Blob $.SHA .File (deref .Line)}}
   <tr>
+    {{if $pick}}<td class="pick-col"><input type="checkbox" class="pick" data-discussion="{{.ID}}"></td>{{end}}
     <td>{{.Author}}</td>
     <td class="mono small">{{if .File}}{{if $dlink}}<a class="file-ref" href="{{$dlink}}" target="_blank" rel="noopener">{{.File}}{{if .Line}}:{{deref .Line}}{{end}}</a>{{else}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{end}}{{else}}—{{end}}</td>
     <td>{{md .Body $.Blob $.SHA}}</td>

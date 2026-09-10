@@ -80,6 +80,7 @@
     fix: 'Исправление замечаний запущено, создаю workspace', plan: 'Исследование поставлено в очередь', implement: 'Решение задачи запущено, создаю workspace',
     verify_finding: 'Проверка замечания поставлена в очередь', stand: 'Проверка на стенде запущена, создаю workspace',
     ci_analyze: 'Разбор CI поставлен в очередь', ci_fix: 'Исправление CI запущено, создаю workspace',
+    fix_findings: 'Исправление выбранных замечаний запущено, создаю workspace',
   };
   // Start a run and stay on the current page: the row/page shows the new state, several runs can be
   // started from a list one after another. The run page is one click away («Открыть прогресс»).
@@ -207,6 +208,37 @@
       waiting.remove();
     }
     return false;
+  };
+
+  // Selection of findings/discussions on the MR page → «Исправить выбранные».
+  function picks() {
+    const findings = Array.from(document.querySelectorAll('input.pick[data-finding]:checked')).map((el) => el.dataset.finding);
+    const discussions = Array.from(document.querySelectorAll('input.pick[data-discussion]:checked')).map((el) => el.dataset.discussion);
+    return { findings, discussions };
+  }
+  function refreshPickBar() {
+    const bar = document.getElementById('pick-bar');
+    if (!bar) return;
+    const p = picks();
+    const n = p.findings.length + p.discussions.length;
+    bar.hidden = n === 0;
+    const count = document.getElementById('pick-count');
+    if (count) count.textContent = String(n);
+  }
+  document.querySelectorAll('input.pick').forEach((el) => el.addEventListener('change', refreshPickBar));
+  document.querySelectorAll('input.pick-all').forEach((all) => all.addEventListener('change', () => {
+    const attr = all.dataset.kind === 'finding' ? 'data-finding' : 'data-discussion';
+    document.querySelectorAll(`input.pick[${attr}]`).forEach((el) => { el.checked = all.checked; });
+    refreshPickBar();
+  }));
+  window.clearPicks = function () {
+    document.querySelectorAll('input.pick, input.pick-all').forEach((el) => { el.checked = false; });
+    refreshPickBar();
+  };
+  window.fixSelected = function (mrId, button) {
+    const p = picks();
+    const notes = (document.getElementById('pick-notes') || {}).value || '';
+    return startRun(`/api/mrs/${mrId}/runs`, 'fix_findings', button, { findings: p.findings.join(','), discussions: p.discussions.join(','), notes });
   };
 
   // «Довести до MR»: create the merge request from the prefilled form on the run page.

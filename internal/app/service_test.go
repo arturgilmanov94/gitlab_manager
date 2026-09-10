@@ -1083,3 +1083,65 @@ func TestCIAnalyzeAndFix(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// Phase 7: the developer selects findings and discussions; the agent re-checks each, fixes confirmed ones; results
+// land on the findings. Own MRs only.
+func TestFixSelectedFindings(t *testing.T) {
+	svc, gl, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	reviewID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, reviewID) == db.StatusDone })
+	findings, _ := svc.DB.ListFindings(reviewID)
+	discussions, _ := svc.DB.ListDiscussions(reviewID)
+
+	if _, err := svc.StartFixFindings(mr.ID, "", "", nil, nil, 0); err == nil || !strings.Contains(err.Error(), "at least one") {
+		t.Fatalf("%v", err)
+	}
+	other := testutil.MRPayload(43, "sha-x")
+	other["author"] = map[string]any{"username": "bob"}
+	gl.MRs[43] = other
+	bobs, _ := svc.AddMR("!43")
+	if _, err := svc.StartFixFindings(bobs.ID, "", "", []int64{findings[0].ID}, nil, 0); err == nil || !strings.Contains(err.Error(), "only the author") {
+		t.Fatalf("others' MRs are refused: %v", err)
+	}
+	if _, err := svc.StartFixFindings(mr.ID, "", "", []int64{999}, nil, 0); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("%v", err)
+	}
+	fr.Outputs = []map[string]any{{"summary": "Fixed the null dereference; the naming remark was already handled.",
+		"results": []any{map[string]any{"finding_id": float64(findings[0].ID), "status": "fixed", "note": "guard added in `src/A.php:10`"},
+			map[string]any{"finding_id": float64(findings[1].ID), "status": "not_confirmed", "note": "already renamed"}},
+		"addressed": []any{map[string]any{"author": "bob", "file": "src/A.php", "line": 12.0, "comment": "why?", "action": "explained in a code comment", "done": true}},
+		"changes":   []any{map[string]any{"path": "src/A.php", "description": "guard"}}, "tests": "phpunit ok", "todo": []any{}, "self_review": "ok", "commit_message": "fix review findings", "ask": []any{}}}
+	runID, err := svc.StartFixFindings(mr.ID, "", "keep the public API", []int64{findings[0].ID, findings[1].ID}, []int64{discussions[0].ID}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) != db.StatusQueued && status(svc, runID) != db.StatusRunning })
+	run, _ := svc.DB.GetRun(runID)
+	if run.Status != db.StatusDone {
+		t.Fatalf("%s: %s", run.Status, run.Error)
+	}
+	req := fr.Requests[len(fr.Requests)-1]
+	if req.Mode != runner.ModeEdit || req.Dir != svc.Worktrees.Path("feature") || !strings.Contains(req.Prompt, "FIX SELECTED FINDINGS") || !strings.Contains(req.Prompt, "Null deref") || !strings.Contains(req.Prompt, "Naming") || !strings.Contains(req.Prompt, `"body": "why?"`) || !strings.Contains(req.Prompt, "keep the public API") {
+		t.Fatalf("%+v", req)
+	}
+	if run.SelectionOf().Findings[1] != findings[1].ID || run.SelectionOf().Discussions[0] != discussions[0].ID {
+		t.Fatalf("%+v", run.SelectionOf())
+	}
+	f0, _ := svc.DB.GetFinding(findings[0].ID)
+	f1, _ := svc.DB.GetFinding(findings[1].ID)
+	if f0.Status != "fixed" || f0.CheckStatus != "fixed" || *f0.CheckRunID != runID || !strings.Contains(f0.VerifyNote, "guard added") {
+		t.Fatalf("%+v", f0)
+	}
+	if f1.Status != "open" || f1.CheckStatus != "not_confirmed" {
+		t.Fatalf("%+v", f1)
+	}
+	if _, err := svc.StartFixFindings(mr.ID, "", "", []int64{findings[0].ID}, nil, 0); err == nil || !strings.Contains(err.Error(), "not open") {
+		t.Fatalf("fixed findings cannot be selected again: %v", err)
+	}
+	fr.Outputs = []map[string]any{{"summary": "Again.", "results": []any{}, "addressed": []any{}, "changes": []any{}, "tests": "none", "todo": []any{}, "self_review": "ok", "commit_message": "", "ask": []any{}}}
+	if _, err := svc.Retry(runID); err == nil || !strings.Contains(err.Error(), "not open") {
+		t.Fatalf("retry re-validates the selection: %v", err)
+	}
+}
