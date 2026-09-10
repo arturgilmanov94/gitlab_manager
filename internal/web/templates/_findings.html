@@ -13,12 +13,14 @@
       <b>{{.Title}}</b>
       {{md .Description $.Blob $.SHA}}
       {{if .Suggestion}}<details class="fix"><summary>Предлагаемый фикс</summary>{{md .Suggestion $.Blob $.SHA}}</details>{{end}}
-      {{if .VerifyNote}}<div class="small muted">проверка: {{.VerifyNote}}</div>{{end}}
+      {{if .CheckStatus}}<div class="small check check-{{.CheckStatus}}"><b>{{checkLabel .CheckStatus}}</b>{{if .CheckRunID}} · <a href="{{runPath "verify_finding" (deref .CheckRunID)}}">проверка #{{deref .CheckRunID}}</a>{{end}}{{if .VerifyNote}}<div class="check-note">{{md .VerifyNote $.Blob $.SHA}}</div>{{end}}</div>
+      {{else if .VerifyNote}}<div class="small muted">проверка: {{.VerifyNote}}</div>{{end}}
     </td>
     <td class="actions-cell">
       <details class="menu">
         <summary title="Действия с замечанием">⋯</summary>
         <div class="menu-items">
+          {{if and $.MR (eq .Status "open") (not $.Closed)}}<button class="item tip" data-tip="{{kindTip "verify_finding"}}" onclick="startRun('/api/mrs/{{$.MR.ID}}/runs', 'verify_finding', this, {finding: '{{.ID}}'})">Проверить замечание<span class="sub">второе мнение агента по этому замечанию</span></button>{{end}}
           {{if $link}}<a class="item ext" href="{{$link}}" target="_blank" rel="noopener">Код</a>{{end}}
           <button class="item" onclick="copyText({{printf "%s — %s:%s\n%s" .Title .File (deref .Line) .Description}})">Скопировать текст</button>
           {{if eq .Status "open"}}

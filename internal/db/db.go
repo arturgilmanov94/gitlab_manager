@@ -19,12 +19,13 @@ var migrationFS embed.FS
 
 // Run kinds and statuses.
 const (
-	KindReviewQuick  = "review_quick"
-	KindReviewFull   = "review_full"
-	KindReviewVerify = "review_verify"
-	KindFixComments  = "fix_comments"
-	KindPlan         = "plan"
-	KindImplement    = "implement"
+	KindReviewQuick   = "review_quick"
+	KindReviewFull    = "review_full"
+	KindReviewVerify  = "review_verify"
+	KindFixComments   = "fix_comments"
+	KindPlan          = "plan"
+	KindImplement     = "implement"
+	KindVerifyFinding = "verify_finding" // re-examine one finding of a review (read-only mini run)
 
 	StatusQueued    = "queued"
 	StatusRunning   = "running"
@@ -305,7 +306,7 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = d.id AND f.status = 'open' AND f.severity IN ('LOW', 'INFO')),
 		       COALESCE(` + fmt.Sprintf(contextRunSQL, "mr_id", "mr") + `, 0)
 		FROM merge_requests mr
-		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE mr_id = mr.id ORDER BY id DESC LIMIT 1)
+		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE mr_id = mr.id AND kind != 'verify_finding' ORDER BY id DESC LIMIT 1)
 		LEFT JOIN runs d ON d.id = (SELECT id FROM runs WHERE mr_id = mr.id AND status = 'done' AND kind IN ('review_full', 'review_verify', 'review_quick') ORDER BY id DESC LIMIT 1)
 		ORDER BY CASE WHEN mr.gitlab_updated_at = '' THEN mr.added_at ELSE mr.gitlab_updated_at END DESC, mr.id DESC`)
 	if err != nil {
@@ -450,6 +451,7 @@ type Run struct {
 	IssueID          *int64
 	BaseRunID        *int64
 	ContinueRunID    *int64 // run whose agent session this one continues (developer's choice); nil = new chat
+	FindingID        *int64 // verify_finding runs: the finding being re-examined
 	HeadSHA          string
 	Status           string
 	Runner           string
@@ -501,17 +503,20 @@ func (r Run) IsReview() bool {
 // IsEdit reports whether the run edits files in a worktree.
 func (r Run) IsEdit() bool { return r.Kind == KindImplement || r.Kind == KindFixComments }
 
-const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path, continue_run_id"
+const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path, continue_run_id, finding_id"
 
 func scanRun(s scanner) (*Run, error) {
 	var r Run
-	var mrID, issueID, baseID, contID sql.NullInt64
-	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.CreatedAt, &r.StartedAt, &r.FinishedAt, &r.Progress, &r.DenialsJSON, &r.PlanPath, &contID)
+	var mrID, issueID, baseID, contID, findingID sql.NullInt64
+	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.CreatedAt, &r.StartedAt, &r.FinishedAt, &r.Progress, &r.DenialsJSON, &r.PlanPath, &contID, &findingID)
 	if err != nil {
 		return nil, err
 	}
 	if contID.Valid {
 		r.ContinueRunID = &contID.Int64
+	}
+	if findingID.Valid {
+		r.FindingID = &findingID.Int64
 	}
 	if mrID.Valid {
 		r.MRID = &mrID.Int64
@@ -528,9 +533,9 @@ func scanRun(s scanner) (*Run, error) {
 // CreateRun inserts a queued run and returns its id.
 func (d *DB) CreateRun(r Run) (int64, error) {
 	res, err := d.sql.Exec(`
-		INSERT INTO runs (kind, mr_id, issue_id, base_run_id, continue_run_id, head_sha, status, runner, model, skill_identifier, notes, work_dir, branch, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
-		r.Kind, nullInt(r.MRID), nullInt(r.IssueID), nullInt(r.BaseRunID), nullInt(r.ContinueRunID), r.HeadSHA, r.Runner, r.Model, r.SkillIdentifier, r.Notes, r.WorkDir, r.Branch, Now())
+		INSERT INTO runs (kind, mr_id, issue_id, base_run_id, continue_run_id, finding_id, head_sha, status, runner, model, skill_identifier, notes, work_dir, branch, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
+		r.Kind, nullInt(r.MRID), nullInt(r.IssueID), nullInt(r.BaseRunID), nullInt(r.ContinueRunID), nullInt(r.FindingID), r.HeadSHA, r.Runner, r.Model, r.SkillIdentifier, r.Notes, r.WorkDir, r.Branch, Now())
 	if err != nil {
 		return 0, err
 	}
@@ -581,12 +586,15 @@ func (d *DB) listRuns(where string, arg any) ([]RunSummary, error) {
 	var out []RunSummary
 	for rows.Next() {
 		var s RunSummary
-		var mrID, issueID, baseID, contID sql.NullInt64
-		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &s.OpenFindings, &s.TotalFindings); err != nil {
+		var mrID, issueID, baseID, contID, findingID sql.NullInt64
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.OpenFindings, &s.TotalFindings); err != nil {
 			return nil, err
 		}
 		if contID.Valid {
 			s.ContinueRunID = &contID.Int64
+		}
+		if findingID.Valid {
+			s.FindingID = &findingID.Int64
 		}
 		if mrID.Valid {
 			s.MRID = &mrID.Int64
@@ -668,9 +676,9 @@ func (d *DB) ListRuns(limit int) ([]RunListItem, error) {
 	var out []RunListItem
 	for rows.Next() {
 		var s RunListItem
-		var mrID, issueID, baseID, contID sql.NullInt64
+		var mrID, issueID, baseID, contID, findingID sql.NullInt64
 		var mrProject, issueProject string
-		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &s.OpenFindings, &s.TotalFindings,
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.OpenFindings, &s.TotalFindings,
 			&s.MRIID, &s.MRTitle, &s.MRWebURL, &mrProject, &s.IssueIID, &s.IssueTitle, &s.IssueWebURL, &issueProject); err != nil {
 			return nil, err
 		}
@@ -687,6 +695,9 @@ func (d *DB) ListRuns(limit int) ([]RunListItem, error) {
 		}
 		if contID.Valid {
 			s.ContinueRunID = &contID.Int64
+		}
+		if findingID.Valid {
+			s.FindingID = &findingID.Int64
 		}
 		out = append(out, s)
 	}
@@ -879,6 +890,8 @@ type Finding struct {
 	Description     string
 	Suggestion      string
 	VerifyNote      string
+	CheckStatus     string // outcome of «Проверить замечание»: confirmed | false_positive | obsolete | unclear ("" = not checked)
+	CheckRunID      *int64 // the verify_finding run that produced CheckStatus
 }
 
 // ReplaceFindings replaces a run's findings.
@@ -931,9 +944,41 @@ func (d *DB) SetFindingStatus(id int64, status string) error {
 	return nil
 }
 
+// ActiveFindingCheck returns the queued/running verify_finding run of a finding, or nil.
+func (d *DB) ActiveFindingCheck(findingID int64) (*Run, error) {
+	run, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE finding_id = ? AND kind = 'verify_finding' AND status IN "+activeStatuses+" ORDER BY id DESC LIMIT 1", findingID))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return run, err
+}
+
+// CheckStatuses are the outcomes of «Проверить замечание».
+var CheckStatuses = map[string]bool{"confirmed": true, "false_positive": true, "obsolete": true, "unclear": true}
+
+// SetFindingCheck records the outcome of a verify_finding run: the check status, the evidence note, the run,
+// and the finding status it implies (false_positive / obsolete close the finding; confirmed / unclear keep it open).
+func (d *DB) SetFindingCheck(id int64, checkStatus, note string, runID int64) error {
+	if !CheckStatuses[checkStatus] {
+		return fmt.Errorf("unknown check status %q", checkStatus)
+	}
+	status := "open"
+	if checkStatus == "false_positive" || checkStatus == "obsolete" {
+		status = checkStatus
+	}
+	res, err := d.sql.Exec("UPDATE findings SET status = ?, check_status = ?, verify_note = ?, check_run_id = ? WHERE id = ?", status, checkStatus, note, runID, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("finding #%d not found", id)
+	}
+	return nil
+}
+
 // GetFinding returns a finding or nil.
 func (d *DB) GetFinding(id int64) (*Finding, error) {
-	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note FROM findings WHERE id = ?", id)
+	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note, check_status, check_run_id FROM findings WHERE id = ?", id)
 	if err != nil {
 		return nil, err
 	}
@@ -942,8 +987,8 @@ func (d *DB) GetFinding(id int64) (*Finding, error) {
 		return nil, nil
 	}
 	var f Finding
-	var origin, line sql.NullInt64
-	if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.VerifyNote); err != nil {
+	var origin, line, checkRun sql.NullInt64
+	if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.VerifyNote, &f.CheckStatus, &checkRun); err != nil {
 		return nil, err
 	}
 	if origin.Valid {
@@ -952,12 +997,15 @@ func (d *DB) GetFinding(id int64) (*Finding, error) {
 	if line.Valid {
 		f.Line = &line.Int64
 	}
+	if checkRun.Valid {
+		f.CheckRunID = &checkRun.Int64
+	}
 	return &f, nil
 }
 
 // ListFindings returns a run's findings in order.
 func (d *DB) ListFindings(runID int64) ([]Finding, error) {
-	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note FROM findings WHERE run_id = ? ORDER BY ordinal", runID)
+	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note, check_status, check_run_id FROM findings WHERE run_id = ? ORDER BY ordinal", runID)
 	if err != nil {
 		return nil, err
 	}
@@ -965,8 +1013,8 @@ func (d *DB) ListFindings(runID int64) ([]Finding, error) {
 	var out []Finding
 	for rows.Next() {
 		var f Finding
-		var origin, line sql.NullInt64
-		if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.VerifyNote); err != nil {
+		var origin, line, checkRun sql.NullInt64
+		if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.VerifyNote, &f.CheckStatus, &checkRun); err != nil {
 			return nil, err
 		}
 		if origin.Valid {
@@ -974,6 +1022,9 @@ func (d *DB) ListFindings(runID int64) ([]Finding, error) {
 		}
 		if line.Valid {
 			f.Line = &line.Int64
+		}
+		if checkRun.Valid {
+			f.CheckRunID = &checkRun.Int64
 		}
 		out = append(out, f)
 	}

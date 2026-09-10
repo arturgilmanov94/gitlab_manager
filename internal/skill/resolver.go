@@ -23,12 +23,13 @@ const (
 
 // Dashboard actions. The strings equal the run kinds stored in the database (package db must not be imported here).
 const (
-	ActionReviewFull   = "review_full"
-	ActionReviewQuick  = "review_quick"
-	ActionReviewVerify = "review_verify"
-	ActionFixComments  = "fix_comments"
-	ActionPlan         = "plan"
-	ActionImplement    = "implement"
+	ActionReviewFull    = "review_full"
+	ActionReviewQuick   = "review_quick"
+	ActionReviewVerify  = "review_verify"
+	ActionFixComments   = "fix_comments"
+	ActionPlan          = "plan"
+	ActionImplement     = "implement"
+	ActionVerifyFinding = "verify_finding"
 )
 
 // Action is one dashboard action and the project skill it looks for.
@@ -60,6 +61,13 @@ var Actions = []Action{
 		Title: "Проверка изменений после ревью",
 		Contract: "Получает прежний SHA, текущий head и список открытых замечаний. По каждому решает: исправлено / открыто / неактуально " +
 			"с доказательством, и ищет только новые проблемы из новых коммитов. Без своего skill используется skill полного ревью.",
+	},
+	{
+		Kind: ActionVerifyFinding, SkillName: "mr-verify-finding", EnvKey: "SKILL_VERIFY_FINDING", Fallback: ActionReviewFull,
+		Title: "Проверка одного замечания",
+		Contract: "Получает ссылку на MR, head SHA и одно замечание ревью (файл, строка, описание, предложение). Не считая его верным априори, " +
+			"перепроверяет по коду: подтверждено / ложное срабатывание / неактуально / недостаточно данных, с доказательством. Ничего не меняет. " +
+			"Без своего skill используется skill полного ревью.",
 	},
 	{
 		Kind: ActionFixComments, SkillName: "mr-fix-comments", EnvKey: "SKILL_FIX_COMMENTS",

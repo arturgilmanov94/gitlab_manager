@@ -73,3 +73,17 @@ func TestPayloadHelpers(t *testing.T) {
 		t.Fatalf("fallback to web_url: %s", project)
 	}
 }
+
+func TestParseCompare(t *testing.T) {
+	obj := map[string]any{
+		"commits": []any{map[string]any{"id": "a"}, map[string]any{"id": "b"}},
+		"diffs": []any{
+			map[string]any{"diff": "--- a/x.php\n+++ b/x.php\n@@ -1,2 +1,3 @@\n-old\n+new\n+more\n context\n"},
+			map[string]any{"diff": "+++ b/y.php\n+only\n"},
+		},
+	}
+	got := ParseCompare(obj)
+	if got != (Changes{Commits: 2, Files: 2, Additions: 3, Deletions: 1}) {
+		t.Fatalf("%+v", got)
+	}
+}

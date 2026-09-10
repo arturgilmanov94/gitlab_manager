@@ -158,6 +158,8 @@ textarea { width: 100%; max-width: 820px; resize: vertical; }
 .context-picker select { max-width: 100%; font-size: 12.5px; padding: 5px 8px; }
 .context-picker .hint { font-size: 12px; color: var(--muted); }
 .chain a { font-family: var(--mono); }
+.check { margin-top: 4px; } .check-confirmed b { color: var(--danger); } .check-false_positive b, .check-obsolete b { color: var(--muted); } .check-unclear b { color: var(--warning); }
+.check-note { color: var(--fg-2); } .check-note p { margin: 2px 0; }
 
 /* list filters: facet chips under the toolbar; state is kept per page in localStorage */
 .filters { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: -4px 0 12px; }

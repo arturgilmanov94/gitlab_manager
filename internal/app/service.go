@@ -39,6 +39,7 @@ type Service struct {
 	sem       chan struct{}
 	mu        sync.Mutex
 	cancels   map[int64]context.CancelFunc
+	changes   map[string]gitlab.Changes       // compare results per "ref from..to" (Changes)
 	decisions map[int64]chan approvalDecision // pending approval id → channel the run goroutine waits on
 	username  string
 	userOnce  sync.Once
@@ -536,6 +537,74 @@ func (s *Service) StartReview(mrID int64, kind, runnerName string, continueRunID
 	return s.enqueue(run)
 }
 
+// StartVerifyFinding queues a read-only mini run that re-examines one finding of the MR's review («Проверить
+// замечание»). Several finding checks may run in parallel; a review of the same MR must not be active.
+func (s *Service) StartVerifyFinding(mrID, findingID int64, runnerName string, continueRunID int64) (int64, error) {
+	if _, err := s.requireRoot(); err != nil {
+		return 0, err
+	}
+	finding, _ := s.DB.GetFinding(findingID)
+	if finding == nil {
+		return 0, userErr("finding #%d not found", findingID)
+	}
+	origin, _ := s.DB.GetRun(finding.RunID)
+	if origin == nil || origin.MRID == nil || *origin.MRID != mrID {
+		return 0, userErr("finding #%d does not belong to this merge request", findingID)
+	}
+	if finding.Status != "open" {
+		return 0, userErr("finding #%d is not open (%s); reopen it first", findingID, finding.Status)
+	}
+	prev, err := s.continuation(continueRunID, &mrID, nil, s.Settings.ProjectRoot)
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		runnerName = prev.Runner
+	}
+	r, err := s.pickRunner(runnerName)
+	if err != nil {
+		return 0, err
+	}
+	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil && active.Kind != db.KindVerifyFinding {
+		return 0, userErr("a run for this merge request is already queued or running (#%d)", active.ID)
+	}
+	if active, _ := s.DB.ActiveFindingCheck(findingID); active != nil {
+		return 0, userErr("this finding is already being checked (#%d)", active.ID)
+	}
+	mr, err := s.RefreshMR(mrID)
+	if err != nil {
+		return 0, err
+	}
+	fid := finding.ID
+	return s.enqueue(db.Run{Kind: db.KindVerifyFinding, MRID: &mr.ID, FindingID: &fid, HeadSHA: mr.HeadSHA, Runner: r.Name(),
+		SkillIdentifier: skillID(s.SkillFor(db.KindVerifyFinding)), ContinueRunID: runIDPtr(prev)})
+}
+
+// Changes summarises what happened on the MR since a reviewed SHA (compare API), cached per SHA pair.
+func (s *Service) Changes(mr *db.MergeRequest, fromSHA string) *gitlab.Changes {
+	if mr == nil || fromSHA == "" || mr.HeadSHA == "" || fromSHA == mr.HeadSHA {
+		return nil
+	}
+	key := fmt.Sprintf("%s/%s!%d %s..%s", mr.GitLabHost, mr.ProjectPath, mr.IID, fromSHA, mr.HeadSHA)
+	s.mu.Lock()
+	cached, ok := s.changes[key]
+	s.mu.Unlock()
+	if ok {
+		return &cached
+	}
+	changes, err := s.GitLab.Compare(gitlab.Ref{Host: mr.GitLabHost, ProjectPath: mr.ProjectPath, IID: mr.IID}, fromSHA, mr.HeadSHA)
+	if err != nil {
+		return nil
+	}
+	s.mu.Lock()
+	if s.changes == nil {
+		s.changes = map[string]gitlab.Changes{}
+	}
+	s.changes[key] = changes
+	s.mu.Unlock()
+	return &changes
+}
+
 // StartFixComments queues an edit run that addresses unresolved reviewer discussions in a worktree of the MR branch.
 // continueRunID > 0 continues the agent session of an earlier run in the same worktree (0 = new chat).
 func (s *Service) StartFixComments(mrID int64, runnerName, notes string, continueRunID int64) (int64, error) {
@@ -735,6 +804,11 @@ func (s *Service) Retry(runID int64) (int64, error) {
 			return 0, userErr("run has no merge request")
 		}
 		return s.StartFixComments(*run.MRID, run.Runner, run.Notes, derefID(run.ContinueRunID))
+	case db.KindVerifyFinding:
+		if run.MRID == nil || run.FindingID == nil {
+			return 0, userErr("run has no finding")
+		}
+		return s.StartVerifyFinding(*run.MRID, *run.FindingID, run.Runner, derefID(run.ContinueRunID))
 	case db.KindPlan:
 		if run.IssueID == nil {
 			return 0, userErr("run has no issue")
@@ -878,6 +952,20 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			}
 			req.Prompt, req.Schema = prompts.Verify(pm, sk, baseSHA, toPrev(previous)), prompts.VerifySchema
 		}
+	case db.KindVerifyFinding:
+		mr, _ := s.DB.GetMR(*run.MRID)
+		if mr == nil {
+			s.fail(runID, "merge request disappeared")
+			return
+		}
+		finding, _ := s.DB.GetFinding(derefID(run.FindingID))
+		if finding == nil {
+			s.fail(runID, "finding disappeared")
+			return
+		}
+		req.Prompt, req.Schema = prompts.VerifyFinding(promptMR(mr), sk, prompts.CheckedFinding{ID: finding.ID, Severity: finding.Severity, Category: finding.Category,
+			File: finding.File, Line: finding.Line, Title: finding.Title, Description: finding.Description, Suggestion: finding.Suggestion}), prompts.VerifyFindingSchema
+		req.SessionName = fmt.Sprintf("verify-finding !%d #%d", mr.IID, runID)
 	case db.KindFixComments:
 		mr, _ := s.DB.GetMR(*run.MRID)
 		if mr == nil {
@@ -1188,6 +1276,20 @@ type reviewResult struct {
 
 func (s *Service) store(run *db.Run, structured json.RawMessage, previous []db.Finding, fields map[string]any) error {
 	fields["result_json"] = string(structured)
+	if run.Kind == db.KindVerifyFinding {
+		var check struct {
+			Status   string `json:"status"`
+			Evidence string `json:"evidence"`
+		}
+		if err := json.Unmarshal(structured, &check); err != nil {
+			return err
+		}
+		fields["summary"], fields["verdict"] = check.Evidence, check.Status
+		if run.FindingID == nil {
+			return errors.New("run has no finding")
+		}
+		return s.DB.SetFindingCheck(*run.FindingID, check.Status, check.Evidence, run.ID)
+	}
 	if !run.IsReview() {
 		var generic struct {
 			Summary string `json:"summary"`

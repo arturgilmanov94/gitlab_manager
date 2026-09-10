@@ -655,3 +655,74 @@ func mustRuns(t *testing.T, svc *Service, mrID int64) []db.RunSummary {
 	}
 	return runs
 }
+
+// «Проверить замечание»: a read-only mini run re-examines one finding and records the outcome on it.
+func TestVerifyFinding(t *testing.T) {
+	svc, gl, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	reviewID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, reviewID) == db.StatusDone })
+	findings, _ := svc.DB.ListFindings(reviewID)
+
+	if _, err := svc.StartVerifyFinding(mr.ID, 999, "", 0); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("unknown finding: %v", err)
+	}
+	gl.MRs[43] = testutil.MRPayload(43, "sha-x")
+	other, _ := svc.AddMR("!43")
+	if _, err := svc.StartVerifyFinding(other.ID, findings[0].ID, "", 0); err == nil || !strings.Contains(err.Error(), "does not belong") {
+		t.Fatalf("finding of another MR: %v", err)
+	}
+
+	fr.Outputs = []map[string]any{{"status": "false_positive", "evidence": "The null check exists three lines above; `src/A.php:7` guards the call.", "severity": "", "suggestion": ""}}
+	checkID, err := svc.StartVerifyFinding(mr.ID, findings[0].ID, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, checkID) == db.StatusDone })
+	req := fr.Requests[len(fr.Requests)-1]
+	if req.Mode != runner.ModeReadOnly || req.Agent != "mr-review" || !strings.Contains(req.Prompt, "VERIFY ONE FINDING") || !strings.Contains(req.Prompt, "Null deref") || strings.Contains(req.Prompt, "Naming") {
+		t.Fatalf("prompt must carry only the checked finding and use the review skill as fallback: %+v", req)
+	}
+	run, _ := svc.DB.GetRun(checkID)
+	if run.Kind != db.KindVerifyFinding || run.FindingID == nil || *run.FindingID != findings[0].ID || run.Verdict != "false_positive" || run.SkillIdentifier != "agent:mr-review" {
+		t.Fatalf("%+v", run)
+	}
+	f, _ := svc.DB.GetFinding(findings[0].ID)
+	if f.Status != "false_positive" || f.CheckStatus != "false_positive" || f.CheckRunID == nil || *f.CheckRunID != checkID || !strings.Contains(f.VerifyNote, "guards the call") {
+		t.Fatalf("finding must record the check: %+v", f)
+	}
+	if _, err := svc.StartVerifyFinding(mr.ID, findings[0].ID, "", 0); err == nil || !strings.Contains(err.Error(), "not open") {
+		t.Fatalf("closed finding cannot be checked again: %v", err)
+	}
+	// A confirmed finding stays open; the verdict of the review follows the remaining open findings.
+	fr.Outputs = []map[string]any{{"status": "confirmed", "evidence": "Inconsistent naming remains in `src/B.php` (camelCase next to snake_case).", "severity": "INFO", "suggestion": ""}}
+	checkID, _ = svc.StartVerifyFinding(mr.ID, findings[1].ID, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, checkID) == db.StatusDone })
+	if f, _ := svc.DB.GetFinding(findings[1].ID); f.Status != "open" || f.CheckStatus != "confirmed" {
+		t.Fatalf("%+v", f)
+	}
+	items, _ := svc.DB.ListMRs()
+	var item db.MRListItem
+	for _, it := range items {
+		if it.IID == 42 {
+			item = it
+		}
+	}
+	if item.Last == nil || item.Last.Kind != db.KindReviewFull || item.Done == nil || item.Done.Open() != 1 {
+		t.Fatalf("finding checks must not become the MR's last run; open findings: %+v", item)
+	}
+	// What changed since the reviewed SHA (compare API) is cached per SHA pair.
+	gl.MRs[42] = testutil.MRPayload(42, "sha-2")
+	fresh, _ := svc.RefreshMR(mr.ID)
+	if c := svc.Changes(fresh, "sha-1"); c == nil || c.Commits != 2 || c.Additions != 10 {
+		t.Fatalf("%+v", c)
+	}
+	svc.Changes(fresh, "sha-1")
+	if n := strings.Count(strings.Join(gl.Calls, "\n"), "compare sha-1..sha-2"); n != 1 {
+		t.Fatalf("compare must be cached: %d calls", n)
+	}
+	if svc.Changes(fresh, "sha-2") != nil {
+		t.Fatal("same SHA: nothing changed")
+	}
+}

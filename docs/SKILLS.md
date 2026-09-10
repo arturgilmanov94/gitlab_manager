@@ -16,6 +16,7 @@ Dashboard — это интерфейс поверх агентов **вашег
 | Запустить ревью / Полное ревью | `review_full` | `mr-review` | `SKILL_REVIEW_FULL` (алиас `REVIEW_SKILL`) | любой агент/skill, чьё имя или описание упоминают review + merge request; иначе CLAUDE.md + промпт dashboard |
 | Быстрое ревью | `review_quick` | `mr-review-quick` | `SKILL_REVIEW_QUICK` | skill `review_full` с пометкой «быстрый проход: только diff» |
 | Проверить изменения | `review_verify` | `mr-review-verify` | `SKILL_REVIEW_VERIFY` | skill `review_full` с прежними findings в промпте |
+| Проверить замечание | `verify_finding` | `mr-verify-finding` | `SKILL_VERIFY_FINDING` | skill `review_full` с одним замечанием в промпте |
 | Исправить замечания ревьюеров | `fix_comments` | `mr-fix-comments` | `SKILL_FIX_COMMENTS` | CLAUDE.md + промпт dashboard |
 | Исследовать | `plan` | `task-plan` | `SKILL_PLAN` | CLAUDE.md + промпт dashboard |
 | Решить задачу / Реализовать этот план | `implement` | `task-implement` | `SKILL_IMPLEMENT` | CLAUDE.md + промпт dashboard |
@@ -57,6 +58,15 @@ git-состояние не трогать, в GitLab не писать.
 
 **Результат:** `summary`, `verdict`, `reviewed_sha`, `verified[]` (`finding_id`, `status` `open` | `fixed` | `obsolete`, `note`),
 `new_findings[]` (только проблемы из новых коммитов), `unresolved_discussions[]`.
+
+### `verify_finding` — проверка одного замечания
+
+**Вход:** как у полного ревью, плюс одно замечание в JSON (`finding_id`, `severity`, `category`, `file`, `line`, `title`,
+`description`, `suggestion`). Задача — второе мнение: не доверять замечанию, перепроверить по коду на head SHA, остальной MR не ревьюить.
+
+**Результат:** `status` (`confirmed` | `false_positive` | `obsolete` | `unclear`), `evidence` (markdown с путями и строками),
+`severity` (уточнённая или пустая), `suggestion` (уточнённый фикс или пусто). Dashboard переносит итог на замечание:
+ложное и неактуальное закрывают его, подтверждённое остаётся открытым с пометкой.
 
 ### `fix_comments` — исправление замечаний ревьюеров
 

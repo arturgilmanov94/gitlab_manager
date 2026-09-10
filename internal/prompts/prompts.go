@@ -80,6 +80,19 @@ var VerifySchema = []byte(`{
   "additionalProperties": false
 }`)
 
+// VerifyFindingSchema is the structured result of re-examining one finding.
+var VerifyFindingSchema = []byte(`{
+  "type": "object",
+  "properties": {
+    "status": {"type": "string", "enum": ["confirmed", "false_positive", "obsolete", "unclear"], "description": "confirmed = the problem is real at the current head; false_positive = the finding is wrong; obsolete = the code changed and the concern no longer applies; unclear = cannot decide from the code alone"},
+    "evidence": {"type": "string", "minLength": 40, "description": "markdown, 2-6 sentences: what exactly in the code (path:line in inline code) proves the decision; for unclear — what information is missing"},
+    "severity": {"type": "string", "enum": ["", "CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"], "description": "corrected severity if the original one is wrong, else empty"},
+    "suggestion": {"type": "string", "description": "markdown: a better or more concrete fix if you have one, else empty"}
+  },
+  "required": ["status", "evidence", "severity", "suggestion"],
+  "additionalProperties": false
+}`)
+
 // PlanSchema is the structured result of a read-only task analysis.
 var PlanSchema = []byte(`{
   "type": "object",
@@ -267,6 +280,28 @@ func Implement(issue Issue, notes, branch, baseBranch string, s *skill.Skill) st
 // readOnlyRules / editRules are the dashboard constraints plus the report-language rule.
 func readOnlyRules() string { return readOnlyRulesText + languageRule() }
 func editRules() string     { return editRulesText + languageRule() }
+
+// CheckedFinding is one finding handed to a verify_finding run.
+type CheckedFinding struct {
+	ID          int64  `json:"finding_id"`
+	Severity    string `json:"severity"`
+	Category    string `json:"category"`
+	File        string `json:"file"`
+	Line        *int64 `json:"line"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Suggestion  string `json:"suggestion"`
+}
+
+// VerifyFinding builds the prompt that re-examines a single finding without trusting it.
+func VerifyFinding(mr MR, s *skill.Skill, f CheckedFinding) string {
+	body, _ := json.MarshalIndent(f, "", "  ")
+	return SlashPrefix(s, mr.WebURL) + "Mode: VERIFY ONE FINDING (second opinion on a single review finding)\n\n" + mrBlock(mr) + "\n" + skillLine(s) + "\n\n" +
+		"An earlier review reported the finding below. Do NOT assume it is correct. Read the code at the head SHA above (and the MR diff " +
+		"where helpful) and decide: `confirmed` (the problem is real), `false_positive` (the finding is wrong), `obsolete` (the code changed, " +
+		"the concern no longer applies) or `unclear` (cannot be decided from the code alone). Give concrete evidence with file paths and lines. " +
+		"Stay focused on this one finding: do not review the rest of the MR.\n\nFinding (JSON):\n" + string(body) + "\n\n" + readOnlyRules()
+}
 
 // Continued prefixes the prompt of a run that the developer chose to start inside an earlier agent session
 // (Phase C: "Продолжить сессию #N" instead of a new chat).

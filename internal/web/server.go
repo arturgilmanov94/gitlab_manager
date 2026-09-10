@@ -19,6 +19,7 @@ import (
 	"mr-review/internal/config"
 	"mr-review/internal/db"
 	"mr-review/internal/doctor"
+	"mr-review/internal/gitlab"
 	"mr-review/internal/runner"
 	"mr-review/internal/skill"
 )
@@ -136,6 +137,8 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 		"pipelineLabel": pipelineLabel,
 		"pipelineTone":  pipelineTone,
 		"fstatusLabel":  findingStatusLabel,
+		"checkLabel":    checkLabel,
+		"list":          func(items ...any) []any { return items },
 		"tokens":        formatTokens,
 		"tokensTip": func(in, out, read, write int64) string {
 			return fmt.Sprintf("Токены за запуск, суммарно по всем моделям (агент + субагенты)\nвход: %s · выход: %s · чтение кэша: %s · запись кэша: %s",
@@ -360,11 +363,13 @@ func runSlug(kind string) string {
 		return "task-plan"
 	case db.KindImplement:
 		return "task-implement"
+	case db.KindVerifyFinding:
+		return "verify-finding"
 	}
 	return "run"
 }
 
-var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "fix-comments": true, "task-plan": true, "task-implement": true, "run": true}
+var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "verify-finding": true, "fix-comments": true, "task-plan": true, "task-implement": true, "run": true}
 
 func runPath(kind string, id any) string { return fmt.Sprintf("/-/%s/%v", runSlug(kind), id) }
 func mrPath(id any) string               { return fmt.Sprintf("/-/mr/%v", id) }
@@ -516,6 +521,29 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "runs", map[string]any{"Base": s.base("runs", "Сессии"), "Active": active, "Finished": finished})
 }
 
+// changesIf returns what changed since the reviewed SHA when the review is stale (nil otherwise).
+func changesIf(stale bool, svc *app.Service, mr *db.MergeRequest, latest *db.Run) *gitlab.Changes {
+	if !stale || latest == nil {
+		return nil
+	}
+	return svc.Changes(mr, latest.HeadSHA)
+}
+
+// checkLabel is the human label of a finding check outcome.
+func checkLabel(status string) string {
+	switch status {
+	case "confirmed":
+		return "подтверждено агентом"
+	case "false_positive":
+		return "ложное срабатывание"
+	case "obsolete":
+		return "неактуально"
+	case "unclear":
+		return "недостаточно данных"
+	}
+	return status
+}
+
 // runRow is a run of the sessions list with the other runs of the same agent session.
 type runRow struct {
 	db.RunListItem
@@ -593,6 +621,7 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "mr", map[string]any{
 		"Base": s.base("mrs", fmt.Sprintf("!%d %s", mr.IID, mr.Title)), "MR": mr, "Runs": runs, "Latest": latest,
 		"Sessions": s.svc.Resumable(runs, s.svc.Settings.ProjectRoot),
+		"Changes":  changesIf(stale, s.svc, mr, latest),
 		"Findings": findings, "Discussions": discussions, "Active": active, "LastRun": lastRun,
 		"Stale": stale, "State": state, "OpenMajor": major, "OpenMinor": minor, "OpenInfo": info,
 		"IsMine": username != "" && mr.Author == username,
@@ -690,6 +719,19 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 	if run.IsReview() {
 		data["Findings"], _ = s.svc.DB.ListFindings(run.ID)
 		data["Discussions"], _ = s.svc.DB.ListDiscussions(run.ID)
+	}
+	if run.Kind == db.KindVerifyFinding && run.FindingID != nil {
+		if finding, _ := s.svc.DB.GetFinding(*run.FindingID); finding != nil {
+			data["Finding"] = finding
+			if origin, _ := s.svc.DB.GetRun(finding.RunID); origin != nil {
+				data["FindingRun"] = origin
+			}
+		}
+		if run.ResultJSON != "" {
+			var check map[string]any
+			_ = json.Unmarshal([]byte(run.ResultJSON), &check)
+			data["Check"] = check
+		}
 	}
 	if run.Kind == db.KindPlan && run.ResultJSON != "" {
 		var plan map[string]any
@@ -791,8 +833,11 @@ func (s *Server) apiStartMRRun(w http.ResponseWriter, r *http.Request) {
 		runID, err = s.svc.StartReview(id, db.KindReviewVerify, body["runner"], cont)
 	case "fix":
 		runID, err = s.svc.StartFixComments(id, body["runner"], body["notes"], cont)
+	case "verify_finding":
+		findingID, _ := strconv.ParseInt(body["finding"], 10, 64)
+		runID, err = s.svc.StartVerifyFinding(id, findingID, body["runner"], cont)
 	default:
-		writeJSON(w, 400, map[string]any{"error": "kind must be quick, full, verify or fix"})
+		writeJSON(w, 400, map[string]any{"error": "kind must be quick, full, verify, verify_finding or fix"})
 		return
 	}
 	if err != nil {
@@ -946,6 +991,8 @@ func kindLabel(kind string) string {
 		return "Полное ревью"
 	case db.KindReviewVerify:
 		return "Проверка изменений"
+	case db.KindVerifyFinding:
+		return "Проверка замечания"
 	case db.KindFixComments:
 		return "Исправление замечаний"
 	case db.KindPlan:
@@ -964,6 +1011,8 @@ func kindTip(kind string) string {
 		return "AI заново проверит весь MR на текущем HEAD по правилам проекта: контекст кода, регрессии, безопасность, все уровни замечаний."
 	case "verify":
 		return "AI проверит только изменения после последнего ревью и обновит статусы прежних замечаний: исправлено / открыто / неактуально."
+	case "verify_finding":
+		return "AI перепроверит только это замечание, не считая его верным априори: подтверждено / ложное срабатывание / неактуально / недостаточно данных, с доказательством из кода. Только чтение, остальной MR не трогается."
 	case "fix":
 		return "Агент создаст отдельный workspace на ветке MR и исправит код по нерешённым обсуждениям ревьюеров. Commit и push — только по вашей кнопке."
 	case "plan":
@@ -1244,6 +1293,8 @@ func errorTitle(kind string) string {
 	switch kind {
 	case db.KindReviewQuick, db.KindReviewFull, db.KindReviewVerify:
 		return "Не удалось выполнить ревью"
+	case db.KindVerifyFinding:
+		return "Не удалось проверить замечание"
 	case db.KindPlan:
 		return "Не удалось исследовать задачу"
 	case db.KindImplement:

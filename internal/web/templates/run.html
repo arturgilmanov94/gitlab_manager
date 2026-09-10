@@ -93,6 +93,22 @@
 </section>
 {{end}}
 
+{{if .Finding}}
+<section class="card">
+  <div class="card-head"><h2>Проверяемое замечание</h2>{{if .FindingRun}}<a class="small" href="{{runPath .FindingRun.Kind .FindingRun.ID}}">из сессии #{{.FindingRun.ID}} · {{kindLabel .FindingRun.Kind}}</a>{{end}}</div>
+  {{template "findings" (dict "Findings" (list .Finding) "Blob" .Blob "SHA" .SHA "MR" nil)}}
+</section>
+{{if and (eq .Run.Status "done") .Check}}
+<section class="card">
+  <div class="card-head"><h2>Итог проверки</h2><span class="check check-{{index .Check "status"}}"><b>{{checkLabel (index .Check "status")}}</b></span></div>
+  <div class="summary">{{md (index .Check "evidence") .Blob .SHA}}</div>
+  {{with index .Check "severity"}}<p class="small">Уточнённая severity: <span class="sev sev-{{.}}">{{.}}</span></p>{{end}}
+  {{with index .Check "suggestion"}}<details class="fix"><summary>Уточнённый фикс</summary>{{md . $.Blob $.SHA}}</details>{{end}}
+  {{if .MR}}<p class="small muted">Статус замечания обновлён на странице <a href="{{mrPath .MR.ID}}#results">MR</a>. Ложное срабатывание и неактуальное закрывают замечание; подтверждённое остаётся открытым.</p>{{end}}
+</section>
+{{end}}
+{{end}}
+
 {{if and (eq .Run.Status "done") .Plan}}
 <section class="card">
   <div class="card-head"><h2>План решения</h2><span class="badge">оценка: {{index .Plan "estimate"}}</span></div>

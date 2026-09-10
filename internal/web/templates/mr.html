@@ -75,7 +75,7 @@
   <div class="status-block tone-neutral">
     <div class="label">Агент для запусков</div>
     <div class="value">{{template "runner-picker" .Base.Runners}}</div>
-    {{if not .Closed}}{{template "context-picker" (dict "Sessions" .Sessions "Kinds" "quick full verify")}}{{end}}
+    {{if not .Closed}}{{template "context-picker" (dict "Sessions" .Sessions "Kinds" "quick full verify verify_finding")}}{{end}}
     <div class="detail">{{if .Base.Skill}}skill ревью проекта: <span class="mono">{{.Base.Skill.Identifier}}</span>{{else}}review-skill проекта не найден, работают правила CLAUDE.md{{end}} · <a href="/doctor#skills">все действия</a></div>
   </div>
 </section>
@@ -102,7 +102,7 @@
 <section class="card" id="results">
   <div class="card-head">
     <h2>Результат AI review · <a href="{{runPath .Latest.Kind .Latest.ID}}">сессия #{{.Latest.ID}}</a> · {{kindLabel .Latest.Kind}}</h2>
-    <div>{{if .Stale}}<span class="badge badge-warning tip" data-tip="Результат относится к коммиту {{shortSHA .Latest.HeadSHA}}; с тех пор появились новые коммиты. Нажмите «Проверить изменения».">по коммиту {{shortSHA .Latest.HeadSHA}} · есть новые изменения</span>{{else}}<span class="badge badge-success">актуально для HEAD {{shortSHA .Latest.HeadSHA}}</span>{{end}}</div>
+    <div>{{if .Stale}}<span class="badge badge-warning tip" data-tip="Результат относится к коммиту {{shortSHA .Latest.HeadSHA}}; с тех пор появились новые коммиты. Нажмите «Проверить изменения».">по коммиту {{shortSHA .Latest.HeadSHA}} · есть новые изменения{{with .Changes}}: {{.Commits}} коммитов, {{.Files}} файлов, <span class="text-success">+{{.Additions}}</span> <span class="text-danger">−{{.Deletions}}</span>{{end}}</span>{{else}}<span class="badge badge-success">актуально для HEAD {{shortSHA .Latest.HeadSHA}}</span>{{end}}</div>
   </div>
   <div class="summary"><span class="verdict-{{.Latest.Verdict}}">{{verdict .Latest.Verdict}}.</span> {{md .Latest.Summary .Blob .SHA}}</div>
   {{template "findings" .}}

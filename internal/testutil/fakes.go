@@ -139,6 +139,15 @@ func (f *FakeGitLab) ListOpenIssues(host, username, projectPath string) ([]map[s
 	}
 	return out, nil
 }
+
+// Compare returns a fixed summary of "what changed" between two SHAs.
+func (f *FakeGitLab) Compare(ref gitlab.Ref, from, to string) (gitlab.Changes, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, "compare "+from+".."+to)
+	return gitlab.Changes{Commits: 2, Files: 1, Additions: 10, Deletions: 3}, nil
+}
+
 func (f *FakeGitLab) CreateMR(host, projectPath, sourceBranch, targetBranch, title, description string) (string, error) {
 	f.CreatedMR = fmt.Sprintf("%s|%s|%s|%s|%s", projectPath, sourceBranch, targetBranch, title, description)
 	return "https://gitlab.example.com/group/sub/project/-/merge_requests/100", nil

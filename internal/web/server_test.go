@@ -414,7 +414,7 @@ func TestContextPickerAndChain(t *testing.T) {
 		t.Fatalf("%d %v", code, out)
 	}
 	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
-	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `<option value="1" data-kinds="quick full verify">Продолжить сессию #1 · Полное ревью · claude`) {
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `<option value="1" data-kinds="quick full verify verify_finding">Продолжить сессию #1 · Полное ревью · claude`) {
 		t.Fatal("finished review must be offered as a context")
 	}
 	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, ">контекст #1<") {
@@ -436,5 +436,38 @@ func TestContextPickerAndChain(t *testing.T) {
 	}
 	if code, out := postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "fix", "continue_run": "1"}); code == 200 || !strings.Contains(out["error"].(string), "another directory") {
 		t.Fatalf("fix comments cannot continue a project-root session: %d %v", code, out)
+	}
+}
+
+// «Проверить замечание» in the UI: menu item on open findings, run page with the outcome, "what changed" on a stale review.
+func TestVerifyFindingPages(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "full"})
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `startRun('/api/mrs/1/runs', 'verify_finding', this, {finding: '1'})`) || !strings.Contains(body, "Проверить замечание") {
+		t.Fatal("open findings must offer the check")
+	}
+	fr.Outputs = []map[string]any{{"status": "obsolete", "evidence": "The method was removed in the latest commit; `src/A.php` no longer calls it at all.", "severity": "", "suggestion": ""}}
+	code, out := postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "verify_finding", "finding": "1"})
+	if code != 200 || out["redirect"] != "/-/verify-finding/2" {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(2); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/verify-finding/2"); !strings.Contains(body, "Проверяемое замечание") || !strings.Contains(body, "Итог проверки") || !strings.Contains(body, "неактуально") || !strings.Contains(body, "no longer calls it") {
+		t.Fatal("run page must show the finding and the outcome")
+	}
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `class="fstatus fstatus-obsolete">неактуально`) || !strings.Contains(body, `href="/-/verify-finding/2">проверка #2</a>`) || strings.Contains(body, `{finding: '1'}`) {
+		t.Fatal("mr page must show the check outcome on the finding and stop offering the check")
+	}
+	if _, body := get(t, ts.URL+"/runs"); !strings.Contains(body, "Проверка замечания") {
+		t.Fatal("sessions list must name the run kind")
+	}
+	// New commits: the stale badge says what changed since the reviewed SHA.
+	svc.GitLab.(*testutil.FakeGitLab).MRs[42] = testutil.MRPayload(42, "sha-2")
+	postJSON(t, ts.URL+"/api/mrs/1/refresh", map[string]any{})
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, "есть новые изменения: 2 коммитов, 1 файлов, <span class=\"text-success\">+10</span> <span class=\"text-danger\">−3</span>") {
+		t.Fatal("stale badge must summarise the compare result")
 	}
 }

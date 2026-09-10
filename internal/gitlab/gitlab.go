@@ -143,6 +143,15 @@ type Client interface {
 	GetIssue(ref Ref) (map[string]any, error)
 	ListOpenIssues(host, username, projectPath string) ([]map[string]any, error)
 	CreateMR(host, projectPath, sourceBranch, targetBranch, title, description string) (string, error)
+	Compare(ref Ref, from, to string) (Changes, error)
+}
+
+// Changes summarises what happened between two commits of an MR (the compare API): the "что изменилось" line.
+type Changes struct {
+	Commits   int
+	Files     int
+	Additions int
+	Deletions int
 }
 
 // Glab runs the glab CLI.
@@ -286,6 +295,40 @@ func (g *Glab) GetMR(ref Ref) (map[string]any, error) {
 		return nil, fmt.Errorf("merge request %s!%d not found", ref.ProjectPath, ref.IID)
 	}
 	return obj, nil
+}
+
+// Compare returns commits and line counts between two SHAs (what changed since the last review).
+func (g *Glab) Compare(ref Ref, from, to string) (Changes, error) {
+	obj, err := g.apiObject(ref.Host, fmt.Sprintf("projects/%s/repository/compare?from=%s&to=%s", ref.EncodedProject(), url.QueryEscape(from), url.QueryEscape(to)))
+	if err != nil {
+		return Changes{}, err
+	}
+	return ParseCompare(obj), nil
+}
+
+// ParseCompare counts commits, files and +/- lines in a compare payload (diff text is counted line by line).
+func ParseCompare(obj map[string]any) Changes {
+	var c Changes
+	commits, _ := obj["commits"].([]any)
+	c.Commits = len(commits)
+	diffs, _ := obj["diffs"].([]any)
+	for _, item := range diffs {
+		d, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		c.Files++
+		for _, line := range strings.Split(Str(d, "diff"), "\n") {
+			switch {
+			case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+			case strings.HasPrefix(line, "+"):
+				c.Additions++
+			case strings.HasPrefix(line, "-"):
+				c.Deletions++
+			}
+		}
+	}
+	return c
 }
 
 // Approvals is the approval state of a merge request.
