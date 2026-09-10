@@ -28,7 +28,7 @@
   <td class="ref-cell"><a class="ref" href="{{runPath .Kind .ID}}">#{{.ID}}</a></td>
   <td class="title-cell">
     {{if .MRIID}}<a class="title" href="{{mrPath (deref .MRID)}}">!{{.MRIID}} {{.MRTitle}}</a>{{else if .IssueIID}}<a class="title" href="{{issuePath (deref .IssueID)}}">#{{.IssueIID}} {{.IssueTitle}}</a>{{else}}<span class="muted">—</span>{{end}}
-    <div class="sub">{{.ObjectProject}}{{if .Branch}} · <span class="mono">{{.Branch}}</span>{{end}}</div>
+    <div class="sub">{{.ObjectProject}}{{if .Branch}} · <span class="mono">{{.Branch}}</span>{{end}}{{if .Chain}} · <span class="chain tip" data-tip="Запуски в одной сессии агента: общий контекст, один чат.">сессия: {{range $i, $r := .Chain}}{{if $i}} → {{end}}{{if eq $r.ID $.ID}}<b>#{{$r.ID}}</b>{{else}}<a href="{{runPath $r.Kind $r.ID}}">#{{$r.ID}}</a>{{end}}{{end}}</span>{{end}}</div>
   </td>
   <td data-label="Тип">{{kindLabel .Kind}}</td>
   <td data-label="Состояние">

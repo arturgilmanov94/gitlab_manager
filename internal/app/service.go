@@ -496,7 +496,9 @@ func (s *Service) DeleteIssue(id int64) error {
 // ---------------------------------------------------------------------------------- starting runs
 
 // StartReview queues a quick/full/verify review of an MR.
-func (s *Service) StartReview(mrID int64, kind, runnerName string) (int64, error) {
+// StartReview queues a review run. continueRunID > 0 starts it inside the agent session of that earlier run
+// of the same MR (the developer's choice of context); 0 = new chat.
+func (s *Service) StartReview(mrID int64, kind, runnerName string, continueRunID int64) (int64, error) {
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
@@ -504,6 +506,13 @@ func (s *Service) StartReview(mrID int64, kind, runnerName string) (int64, error
 	case db.KindReviewQuick, db.KindReviewFull, db.KindReviewVerify:
 	default:
 		return 0, userErr("unknown review kind %q", kind)
+	}
+	prev, err := s.continuation(continueRunID, &mrID, nil, s.Settings.ProjectRoot)
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		runnerName = prev.Runner
 	}
 	r, err := s.pickRunner(runnerName)
 	if err != nil {
@@ -516,7 +525,7 @@ func (s *Service) StartReview(mrID int64, kind, runnerName string) (int64, error
 	if err != nil {
 		return 0, err
 	}
-	run := db.Run{Kind: kind, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), SkillIdentifier: skillID(s.SkillFor(kind))}
+	run := db.Run{Kind: kind, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), SkillIdentifier: skillID(s.SkillFor(kind)), ContinueRunID: runIDPtr(prev)}
 	if kind == db.KindReviewVerify {
 		base, _ := s.DB.LatestDoneReview(mrID)
 		if base == nil {
@@ -528,12 +537,9 @@ func (s *Service) StartReview(mrID int64, kind, runnerName string) (int64, error
 }
 
 // StartFixComments queues an edit run that addresses unresolved reviewer discussions in a worktree of the MR branch.
-func (s *Service) StartFixComments(mrID int64, runnerName, notes string) (int64, error) {
+// continueRunID > 0 continues the agent session of an earlier run in the same worktree (0 = new chat).
+func (s *Service) StartFixComments(mrID int64, runnerName, notes string, continueRunID int64) (int64, error) {
 	if _, err := s.requireRoot(); err != nil {
-		return 0, err
-	}
-	r, err := s.pickRunner(runnerName)
-	if err != nil {
 		return 0, err
 	}
 	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil {
@@ -546,15 +552,94 @@ func (s *Service) StartFixComments(mrID int64, runnerName, notes string) (int64,
 	if mr.SourceBranch == "" {
 		return 0, userErr("the merge request has no source branch")
 	}
-	run := db.Run{Kind: db.KindFixComments, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), Notes: notes,
+	prev, err := s.continuation(continueRunID, &mrID, nil, s.Worktrees.Path(mr.SourceBranch))
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		runnerName = prev.Runner
+	}
+	r, err := s.pickRunner(runnerName)
+	if err != nil {
+		return 0, err
+	}
+	run := db.Run{Kind: db.KindFixComments, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), Notes: notes, ContinueRunID: runIDPtr(prev),
 		Branch: mr.SourceBranch, WorkDir: s.Worktrees.Path(mr.SourceBranch), SkillIdentifier: skillID(s.SkillFor(db.KindFixComments))}
 	return s.enqueue(run)
 }
 
-// StartPlan queues a read-only task analysis.
-func (s *Service) StartPlan(issueID int64, runnerName, notes string) (int64, error) {
+// continuation resolves the developer's choice to start a run inside an earlier agent session. The earlier run must
+// belong to the same MR/issue, be finished, have reported a session id and have worked in the same directory:
+// Claude Code keeps sessions per working directory, so a review session (project root) cannot continue in a worktree.
+// The new run inherits the runner of that session. continueRunID <= 0 means "new chat" and returns nil.
+func (s *Service) continuation(continueRunID int64, mrID, issueID *int64, dir string) (*db.Run, error) {
+	if continueRunID <= 0 {
+		return nil, nil
+	}
+	prev, _ := s.DB.GetRun(continueRunID)
+	if prev == nil {
+		return nil, userErr("session #%d not found", continueRunID)
+	}
+	if (mrID != nil && (prev.MRID == nil || *prev.MRID != *mrID)) || (issueID != nil && (prev.IssueID == nil || *prev.IssueID != *issueID)) {
+		return nil, userErr("session #%d belongs to another merge request or task", continueRunID)
+	}
+	if prev.Active() {
+		return nil, userErr("session #%d is still active: wait for it to finish or start a new chat", continueRunID)
+	}
+	if prev.SessionID == "" {
+		return nil, userErr("session #%d cannot be continued: the %s agent did not report a session id", continueRunID, prev.Runner)
+	}
+	if prev.WorkDir != "" && prev.WorkDir != dir {
+		return nil, userErr("session #%d worked in another directory (%s); an agent session can only be continued from the same workspace", continueRunID, prev.WorkDir)
+	}
+	return prev, nil
+}
+
+// derefID is the value of a nullable run id (0 when nil).
+func derefID(id *int64) int64 {
+	if id == nil {
+		return 0
+	}
+	return *id
+}
+
+// runIDPtr is the id of a run as a nullable reference.
+func runIDPtr(run *db.Run) *int64 {
+	if run == nil {
+		return nil
+	}
+	id := run.ID
+	return &id
+}
+
+// Resumable filters the runs of an object down to those whose agent session can be continued from dir: finished,
+// with a session id, same working directory (runs older than work_dir tracking count as project-root runs).
+func (s *Service) Resumable(runs []db.RunSummary, dir string) []db.RunSummary {
+	var out []db.RunSummary
+	for _, run := range runs {
+		workDir := run.WorkDir
+		if workDir == "" {
+			workDir = s.Settings.ProjectRoot
+		}
+		if !run.Active() && run.SessionID != "" && workDir == dir {
+			out = append(out, run)
+		}
+	}
+	return out
+}
+
+// StartPlan queues a read-only task analysis. continueRunID > 0 continues the agent session of an earlier
+// project-root run of the same issue (0 = new chat).
+func (s *Service) StartPlan(issueID int64, runnerName, notes string, continueRunID int64) (int64, error) {
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
+	}
+	prev, err := s.continuation(continueRunID, nil, &issueID, s.Settings.ProjectRoot)
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		runnerName = prev.Runner
 	}
 	r, err := s.pickRunner(runnerName)
 	if err != nil {
@@ -567,16 +652,13 @@ func (s *Service) StartPlan(issueID int64, runnerName, notes string) (int64, err
 	if err != nil {
 		return 0, err
 	}
-	return s.enqueue(db.Run{Kind: db.KindPlan, IssueID: &issue.ID, Runner: r.Name(), Notes: notes, SkillIdentifier: skillID(s.SkillFor(db.KindPlan))})
+	return s.enqueue(db.Run{Kind: db.KindPlan, IssueID: &issue.ID, Runner: r.Name(), Notes: notes, SkillIdentifier: skillID(s.SkillFor(db.KindPlan)), ContinueRunID: runIDPtr(prev)})
 }
 
-// StartImplement queues an edit run in a worktree on `branch` (default: the issue reference).
-func (s *Service) StartImplement(issueID int64, runnerName, notes, branch string) (int64, error) {
+// StartImplement queues an edit run in a worktree on `branch` (default: the issue reference). continueRunID > 0
+// continues the agent session of an earlier run in that same worktree (0 = new chat).
+func (s *Service) StartImplement(issueID int64, runnerName, notes, branch string, continueRunID int64) (int64, error) {
 	if _, err := s.requireRoot(); err != nil {
-		return 0, err
-	}
-	r, err := s.pickRunner(runnerName)
-	if err != nil {
 		return 0, err
 	}
 	if active, _ := s.DB.ActiveRunForIssue(issueID); active != nil {
@@ -593,7 +675,18 @@ func (s *Service) StartImplement(issueID int64, runnerName, notes, branch string
 	if strings.ContainsAny(branch, " \t~^:?*[\\") || strings.HasPrefix(branch, "-") {
 		return 0, userErr("invalid branch name %q", branch)
 	}
-	return s.enqueue(db.Run{Kind: db.KindImplement, IssueID: &issue.ID, Runner: r.Name(), Notes: notes,
+	prev, err := s.continuation(continueRunID, nil, &issueID, s.Worktrees.Path(branch))
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		runnerName = prev.Runner
+	}
+	r, err := s.pickRunner(runnerName)
+	if err != nil {
+		return 0, err
+	}
+	return s.enqueue(db.Run{Kind: db.KindImplement, IssueID: &issue.ID, Runner: r.Name(), Notes: notes, ContinueRunID: runIDPtr(prev),
 		Branch: branch, WorkDir: s.Worktrees.Path(branch), SkillIdentifier: skillID(s.SkillFor(db.KindImplement))})
 }
 
@@ -636,22 +729,22 @@ func (s *Service) Retry(runID int64) (int64, error) {
 		if run.MRID == nil {
 			return 0, userErr("run has no merge request")
 		}
-		return s.StartReview(*run.MRID, run.Kind, run.Runner)
+		return s.StartReview(*run.MRID, run.Kind, run.Runner, derefID(run.ContinueRunID))
 	case db.KindFixComments:
 		if run.MRID == nil {
 			return 0, userErr("run has no merge request")
 		}
-		return s.StartFixComments(*run.MRID, run.Runner, run.Notes)
+		return s.StartFixComments(*run.MRID, run.Runner, run.Notes, derefID(run.ContinueRunID))
 	case db.KindPlan:
 		if run.IssueID == nil {
 			return 0, userErr("run has no issue")
 		}
-		return s.StartPlan(*run.IssueID, run.Runner, run.Notes)
+		return s.StartPlan(*run.IssueID, run.Runner, run.Notes, derefID(run.ContinueRunID))
 	case db.KindImplement:
 		if run.IssueID == nil {
 			return 0, userErr("run has no issue")
 		}
-		return s.StartImplement(*run.IssueID, run.Runner, run.Notes, run.Branch)
+		return s.StartImplement(*run.IssueID, run.Runner, run.Notes, run.Branch, derefID(run.ContinueRunID))
 	}
 	return 0, userErr("cannot retry a %s run", run.Kind)
 }
@@ -822,6 +915,15 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 	default:
 		s.fail(runID, "unknown run kind "+run.Kind)
 		return
+	}
+
+	// The developer chose to run inside an earlier agent session (Phase C): resume it instead of a new chat.
+	if run.ContinueRunID != nil {
+		if prev, _ := s.DB.GetRun(*run.ContinueRunID); prev != nil && prev.SessionID != "" {
+			req.ResumeSessionID, req.Agent = prev.SessionID, ""
+			req.Prompt = prompts.Continued(prev.Kind) + req.Prompt
+			logln(fmt.Sprintf("continuing agent session of run #%d (chosen by the developer)", prev.ID))
+		}
 	}
 
 	_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusRunning, "started_at": db.Now(), "prompt": req.Prompt, "log_path": logPath, "work_dir": req.Dir})

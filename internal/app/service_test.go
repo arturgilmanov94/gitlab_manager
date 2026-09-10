@@ -101,7 +101,7 @@ func TestSyncScopesMRs(t *testing.T) {
 	// Alice is removed from the reviewers of 43 and 44: the reviewed one goes to the history, the untouched one is pruned.
 	mr43 := findMR(t, svc, 43)
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha")}
-	runID, _ := svc.StartReview(mr43.ID, db.KindReviewQuick, "")
+	runID, _ := svc.StartReview(mr43.ID, db.KindReviewQuick, "", 0)
 	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
 	gl.MRs[43]["reviewers"] = []any{}
 	gl.MRs[44]["reviewers"] = []any{}
@@ -173,11 +173,11 @@ func TestParallelRunsOnDifferentMRs(t *testing.T) {
 	b, _ := svc.AddMR("!43")
 	fr.Block = make(chan struct{})
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1"), testutil.FullReviewOutput("sha-43")}
-	runA, err := svc.StartReview(a.ID, db.KindReviewFull, "")
+	runA, err := svc.StartReview(a.ID, db.KindReviewFull, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runB, err := svc.StartReview(b.ID, db.KindReviewFull, "")
+	runB, err := svc.StartReview(b.ID, db.KindReviewFull, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestParallelRunsOnDifferentMRs(t *testing.T) {
 		t.Fatalf("expected 2 concurrent agent invocations, got %d", inFlight)
 	}
 	// A second run on the same MR is still refused while the first is active.
-	if _, err := svc.StartReview(a.ID, db.KindReviewQuick, ""); err == nil || !strings.Contains(err.Error(), "already queued or running") {
+	if _, err := svc.StartReview(a.ID, db.KindReviewQuick, "", 0); err == nil || !strings.Contains(err.Error(), "already queued or running") {
 		t.Fatalf("%v", err)
 	}
 	close(fr.Block)
@@ -204,7 +204,7 @@ func TestPermissionPromptAnsweredFromDashboard(t *testing.T) {
 	// Allowed with the agent's suggested rules: the decision reaches the runner and the run finishes.
 	fr.AskWrite("/tmp/claude/a.txt")
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
-	runID, err := svc.StartReview(mr.ID, db.KindReviewFull, "")
+	runID, err := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestPermissionPromptAnsweredFromDashboard(t *testing.T) {
 		t.Fatalf("%+v", run)
 	}
 	// A second run on the same MR is still refused while this one waits.
-	if _, err := svc.StartReview(mr.ID, db.KindReviewQuick, ""); err == nil {
+	if _, err := svc.StartReview(mr.ID, db.KindReviewQuick, "", 0); err == nil {
 		t.Fatal("waiting run must count as active")
 	}
 	if err := svc.Decide(pending.ID, "allow_always", ""); err != nil {
@@ -245,7 +245,7 @@ func TestPermissionPromptAnsweredFromDashboard(t *testing.T) {
 	// Denied with a note: the agent gets the note, the run still completes, the denial is recorded on the run.
 	fr.AskWrite("/tmp/claude/b.txt")
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
-	runID, _ = svc.StartReview(mr.ID, db.KindReviewQuick, "")
+	runID, _ = svc.StartReview(mr.ID, db.KindReviewQuick, "", 0)
 	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusWaiting })
 	pending, _ = svc.DB.PendingApproval(runID)
 	if err := svc.Decide(pending.ID, "deny", "use $TMPDIR instead"); err != nil {
@@ -266,7 +266,7 @@ func TestPermissionPromptAnsweredFromDashboard(t *testing.T) {
 	// Cancelled while waiting: the prompt expires, the run is cancelled.
 	fr.AskWrite("/tmp/claude/c.txt")
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
-	runID, _ = svc.StartReview(mr.ID, db.KindReviewFull, "")
+	runID, _ = svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
 	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusWaiting })
 	pending, _ = svc.DB.PendingApproval(runID)
 	if !svc.Cancel(runID) {
@@ -286,7 +286,7 @@ func TestExportPlanWritesMarkdown(t *testing.T) {
 	svc.Settings.PlansDir = filepath.Join(t.TempDir(), "plans")
 	issue, _ := svc.AddIssue("#7")
 	fr.Outputs = []map[string]any{testutil.PlanOutput()}
-	planID, _ := svc.StartPlan(issue.ID, "", "be careful")
+	planID, _ := svc.StartPlan(issue.ID, "", "be careful", 0)
 	testutil.WaitFor(t, func() bool { return status(svc, planID) == db.StatusDone })
 	path, err := svc.ExportPlan(planID)
 	if err != nil {
@@ -309,7 +309,7 @@ func TestExportPlanWritesMarkdown(t *testing.T) {
 	// Only finished plans can be exported.
 	mr, _ := svc.AddMR("!42")
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
-	reviewID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "")
+	reviewID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
 	testutil.WaitFor(t, func() bool { return status(svc, reviewID) == db.StatusDone })
 	if _, err := svc.ExportPlan(reviewID); err == nil {
 		t.Fatal("a review is not a plan")
@@ -325,8 +325,8 @@ func TestConcurrencyOneQueuesSecondMR(t *testing.T) {
 	b, _ := svc.AddMR("!43")
 	fr.Block = make(chan struct{})
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1"), testutil.FullReviewOutput("sha-43")}
-	runA, _ := svc.StartReview(a.ID, db.KindReviewFull, "")
-	runB, _ := svc.StartReview(b.ID, db.KindReviewFull, "")
+	runA, _ := svc.StartReview(a.ID, db.KindReviewFull, "", 0)
+	runB, _ := svc.StartReview(b.ID, db.KindReviewFull, "", 0)
 	testutil.WaitFor(t, func() bool { return status(svc, runA) == db.StatusRunning })
 	if status(svc, runB) != db.StatusQueued {
 		t.Fatalf("second MR must wait in the queue, got %s", status(svc, runB))
@@ -350,7 +350,7 @@ func TestAddSyncReviewVerify(t *testing.T) {
 	}
 
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
-	runID, err := svc.StartReview(mr.ID, db.KindReviewFull, "")
+	runID, err := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +379,7 @@ func TestAddSyncReviewVerify(t *testing.T) {
 	// New commits arrive; verify.
 	gl.MRs[42] = testutil.MRPayload(42, "sha-2")
 	fr.Outputs = []map[string]any{testutil.VerifyOutput(findings[0].ID, findings[1].ID, "sha-2")}
-	verifyID, err := svc.StartReview(mr.ID, db.KindReviewVerify, "claude")
+	verifyID, err := svc.StartReview(mr.ID, db.KindReviewVerify, "claude", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +416,7 @@ func TestAddSyncReviewVerify(t *testing.T) {
 
 	// Quick review prompt is different.
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-2")}
-	quickID, _ := svc.StartReview(mr.ID, db.KindReviewQuick, "")
+	quickID, _ := svc.StartReview(mr.ID, db.KindReviewQuick, "", 0)
 	testutil.WaitFor(t, func() bool { return status(svc, quickID) == db.StatusDone })
 	if !strings.Contains(fr.Requests[2].Prompt, "QUICK REVIEW") {
 		t.Fatal("quick prompt")
@@ -426,17 +426,17 @@ func TestAddSyncReviewVerify(t *testing.T) {
 func TestVerifyNeedsBaseAndSingleActive(t *testing.T) {
 	svc, _, fr := newService(t)
 	mr, _ := svc.AddMR("!42")
-	if _, err := svc.StartReview(mr.ID, db.KindReviewVerify, ""); err == nil || !strings.Contains(err.Error(), "full review first") {
+	if _, err := svc.StartReview(mr.ID, db.KindReviewVerify, "", 0); err == nil || !strings.Contains(err.Error(), "full review first") {
 		t.Fatalf("%v", err)
 	}
 	fr.Block = make(chan struct{})
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
-	runID, err := svc.StartReview(mr.ID, db.KindReviewFull, "")
+	runID, err := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusRunning })
-	if _, err := svc.StartReview(mr.ID, db.KindReviewFull, ""); err == nil || !strings.Contains(err.Error(), "already queued or running") {
+	if _, err := svc.StartReview(mr.ID, db.KindReviewFull, "", 0); err == nil || !strings.Contains(err.Error(), "already queued or running") {
 		t.Fatalf("%v", err)
 	}
 	if !svc.Cancel(runID) {
@@ -452,7 +452,7 @@ func TestFailureAndRecover(t *testing.T) {
 	svc, _, fr := newService(t)
 	mr, _ := svc.AddMR("!42")
 	fr.FailWith = "claude timed out after 1s"
-	runID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "")
+	runID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
 	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusFailed })
 	run, _ := svc.DB.GetRun(runID)
 	if !strings.Contains(run.Error, "timed out") {
@@ -471,7 +471,7 @@ func TestPlanImplementAndWorktreeActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	fr.Outputs = []map[string]any{testutil.PlanOutput()}
-	planID, err := svc.StartPlan(issue.ID, "", "be careful")
+	planID, err := svc.StartPlan(issue.ID, "", "be careful", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func TestPlanImplementAndWorktreeActions(t *testing.T) {
 	// The project provides an implementation agent: the run is handed to it.
 	testutil.AddProjectAgent(t, svc.Settings.ProjectRoot, "task-implement", "Implement a GitLab task")
 	fr.Outputs = []map[string]any{testutil.ImplementOutput()}
-	implID, err := svc.StartImplement(issue.ID, "", "", "")
+	implID, err := svc.StartImplement(issue.ID, "", "", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +542,7 @@ func TestFixCommentsUsesMRBranchWorktree(t *testing.T) {
 	mr, _ := svc.AddMR("!42")
 	fr.Outputs = []map[string]any{testutil.ImplementOutput()}
 	// The MR branch does not exist on origin in this fixture; Prepare must create it from origin/develop.
-	runID, err := svc.StartFixComments(mr.ID, "", "only file A")
+	runID, err := svc.StartFixComments(mr.ID, "", "only file A", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +563,7 @@ func TestAskResumesSession(t *testing.T) {
 	svc, _, fr := newService(t)
 	mr, _ := svc.AddMR("!42")
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
-	runID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "")
+	runID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
 	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
 	fr.Texts = []string{"Because it can be nil."}
 	answer, err := svc.Ask(runID, "why HIGH?")
@@ -578,4 +578,80 @@ func TestAskResumesSession(t *testing.T) {
 	if len(msgs) != 2 || msgs[0].Role != "user" || msgs[1].Role != "assistant" {
 		t.Fatalf("%+v", msgs)
 	}
+}
+
+// Phase C: the developer chooses to start a run inside an earlier agent session of the same object.
+func TestContinueSessionByChoice(t *testing.T) {
+	svc, gl, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	gl.MRs[43] = testutil.MRPayload(43, "sha-x")
+	other, _ := svc.AddMR("!43")
+
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	first, err := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, first) == db.StatusDone })
+	if got := svc.Resumable(mustRuns(t, svc, mr.ID), svc.Settings.ProjectRoot); len(got) != 1 || got[0].ID != first {
+		t.Fatalf("the finished review must be offered as a context: %+v", got)
+	}
+
+	// Wrong choices are rejected with a clear message.
+	if _, err := svc.StartReview(other.ID, db.KindReviewFull, "", first); err == nil || !strings.Contains(err.Error(), "another merge request") {
+		t.Fatalf("session of another MR must be refused: %v", err)
+	}
+	if _, err := svc.StartReview(mr.ID, db.KindReviewFull, "", 999); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("unknown session: %v", err)
+	}
+	if _, err := svc.StartFixComments(mr.ID, "", "", first); err == nil || !strings.Contains(err.Error(), "another directory") {
+		t.Fatalf("a project-root session cannot continue in a worktree: %v", err)
+	}
+
+	// A new full review inside the first session: resume instead of --agent, the prompt says it is a continuation.
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	second, err := svc.StartReview(mr.ID, db.KindReviewFull, "", first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, second) == db.StatusDone })
+	run, _ := svc.DB.GetRun(second)
+	if run.ContinueRunID == nil || *run.ContinueRunID != first || run.SessionID != "sess-1" {
+		t.Fatalf("%+v", run)
+	}
+	req := fr.Requests[len(fr.Requests)-1]
+	if req.ResumeSessionID != "sess-1" || req.Agent != "" || !strings.Contains(req.Prompt, "continuing your own earlier session") || !strings.Contains(req.Prompt, "Mode: FULL REVIEW") {
+		t.Fatalf("request must resume the chosen session: %+v", req)
+	}
+	if chain, _ := svc.DB.ListRunsBySession("sess-1"); len(chain) != 2 || chain[0].ID != first || chain[1].ID != second {
+		t.Fatalf("chain: %+v", chain)
+	}
+	// Retry keeps the chosen context.
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	third, err := svc.Retry(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, third) == db.StatusDone })
+	if r, _ := svc.DB.GetRun(third); r.ContinueRunID == nil || *r.ContinueRunID != first {
+		t.Fatalf("retry must keep the context: %+v", r)
+	}
+
+	// An agent that reports no session id leaves nothing to continue.
+	fr.Session = "-"
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	fourth, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, fourth) == db.StatusDone })
+	if got := svc.Resumable(mustRuns(t, svc, mr.ID), svc.Settings.ProjectRoot); len(got) != 3 {
+		t.Fatalf("runs without a session id are not offered: %+v", got)
+	}
+}
+
+func mustRuns(t *testing.T, svc *Service, mrID int64) []db.RunSummary {
+	t.Helper()
+	runs, err := svc.DB.ListRunsForMR(mrID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runs
 }

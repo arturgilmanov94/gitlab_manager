@@ -262,6 +262,7 @@ type LastRun struct {
 	CreatedAt    string
 	OpenFindings int64
 	Tokens       int64
+	SessionID    string // agent session the run left behind ("" = cannot be continued)
 }
 
 // DoneReview summarises the latest completed review of an MR.
@@ -282,22 +283,27 @@ func (r DoneReview) Open() int64 { return r.OpenMajor + r.OpenMinor + r.OpenInfo
 // MRListItem is an MR with its latest run and latest completed review.
 type MRListItem struct {
 	MergeRequest
-	Last  *LastRun
-	Done  *DoneReview
-	Stale bool
+	Last         *LastRun
+	Done         *DoneReview
+	Stale        bool
+	ContextRunID int64 // newest finished run with an agent session that can be continued (0 = none)
 }
+
+// contextRunSQL picks the newest finished run of an object that left a resumable agent session.
+const contextRunSQL = "(SELECT id FROM runs c WHERE c.%s = %s.id AND c.session_id != '' AND c.status NOT IN ('queued', 'running', 'waiting') ORDER BY c.id DESC LIMIT 1)"
 
 // ListMRs returns all MRs, newest GitLab activity first, with their latest run.
 func (d *DB) ListMRs() ([]MRListItem, error) {
 	rows, err := d.sql.Query(`
 		SELECT ` + prefixed(mrColumns, "mr.") + `,
-		       r.id, r.kind, r.status, r.verdict, r.head_sha, r.runner, r.model, r.finished_at, r.created_at,
+		       r.id, r.kind, r.status, r.verdict, r.head_sha, r.runner, r.model, r.finished_at, r.created_at, r.session_id,
 		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = r.id AND f.status = 'open'),
 		       r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens,
 		       d.id, d.kind, d.verdict, d.head_sha, d.finished_at,
 		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = d.id AND f.status = 'open' AND f.severity IN ('CRITICAL', 'HIGH')),
 		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = d.id AND f.status = 'open' AND f.severity = 'MEDIUM'),
-		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = d.id AND f.status = 'open' AND f.severity IN ('LOW', 'INFO'))
+		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = d.id AND f.status = 'open' AND f.severity IN ('LOW', 'INFO')),
+		       COALESCE(` + fmt.Sprintf(contextRunSQL, "mr_id", "mr") + `, 0)
 		FROM merge_requests mr
 		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE mr_id = mr.id ORDER BY id DESC LIMIT 1)
 		LEFT JOIN runs d ON d.id = (SELECT id FROM runs WHERE mr_id = mr.id AND status = 'done' AND kind IN ('review_full', 'review_verify', 'review_quick') ORDER BY id DESC LIMIT 1)
@@ -311,17 +317,17 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 		var item MRListItem
 		var last LastRun
 		var id, open, tokens, dID, dMajor, dMinor, dInfo sql.NullInt64
-		var kind, status, verdict, sha, runner, model, finished, created, dKind, dVerdict, dSHA, dFinished sql.NullString
+		var kind, status, verdict, sha, runner, model, finished, created, session, dKind, dVerdict, dSHA, dFinished sql.NullString
 		var draft, approved, manual, hidden int
 		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Author, &item.SourceBranch, &item.TargetBranch, &item.State, &item.HeadSHA, &item.Unresolved, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
 			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual, &hidden, &item.Labels,
-			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &open, &tokens,
-			&dID, &dKind, &dVerdict, &dSHA, &dFinished, &dMajor, &dMinor, &dInfo); err != nil {
+			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &session, &open, &tokens,
+			&dID, &dKind, &dVerdict, &dSHA, &dFinished, &dMajor, &dMinor, &dInfo, &item.ContextRunID); err != nil {
 			return nil, err
 		}
 		item.Draft, item.ApprovedByMe, item.Manual, item.Hidden = draft == 1, approved == 1, manual == 1, hidden == 1
 		if id.Valid {
-			last = LastRun{id.Int64, kind.String, status.String, verdict.String, sha.String, runner.String, model.String, finished.String, created.String, open.Int64, tokens.Int64}
+			last = LastRun{ID: id.Int64, Kind: kind.String, Status: status.String, Verdict: verdict.String, HeadSHA: sha.String, Runner: runner.String, Model: model.String, FinishedAt: finished.String, CreatedAt: created.String, OpenFindings: open.Int64, Tokens: tokens.Int64, SessionID: session.String}
 			item.Last = &last
 		}
 		if dID.Valid {
@@ -400,14 +406,16 @@ func (d *DB) DeleteIssue(id int64) error {
 // IssueListItem is an issue with its latest run.
 type IssueListItem struct {
 	Issue
-	Last *LastRun
+	Last         *LastRun
+	ContextRunID int64 // newest finished run with an agent session that can be continued (0 = none)
 }
 
 // ListIssues returns all issues with their latest run.
 func (d *DB) ListIssues() ([]IssueListItem, error) {
 	rows, err := d.sql.Query(`
 		SELECT ` + prefixed(issueColumns, "i.") + `,
-		       r.id, r.kind, r.status, r.verdict, r.head_sha, r.runner, r.model, r.finished_at, r.created_at
+		       r.id, r.kind, r.status, r.verdict, r.head_sha, r.runner, r.model, r.finished_at, r.created_at, r.session_id,
+		       COALESCE(` + fmt.Sprintf(contextRunSQL, "issue_id", "i") + `, 0)
 		FROM issues i
 		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE issue_id = i.id ORDER BY id DESC LIMIT 1)
 		ORDER BY CASE WHEN i.gitlab_updated_at = '' THEN i.added_at ELSE i.gitlab_updated_at END DESC, i.id DESC`)
@@ -419,13 +427,13 @@ func (d *DB) ListIssues() ([]IssueListItem, error) {
 	for rows.Next() {
 		var item IssueListItem
 		var id sql.NullInt64
-		var kind, status, verdict, sha, runner, model, finished, created sql.NullString
+		var kind, status, verdict, sha, runner, model, finished, created, session sql.NullString
 		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Description, &item.Author, &item.State, &item.Labels, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
-			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created); err != nil {
+			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &session, &item.ContextRunID); err != nil {
 			return nil, err
 		}
 		if id.Valid {
-			item.Last = &LastRun{ID: id.Int64, Kind: kind.String, Status: status.String, Verdict: verdict.String, HeadSHA: sha.String, Runner: runner.String, Model: model.String, FinishedAt: finished.String, CreatedAt: created.String}
+			item.Last = &LastRun{ID: id.Int64, Kind: kind.String, Status: status.String, Verdict: verdict.String, HeadSHA: sha.String, Runner: runner.String, Model: model.String, FinishedAt: finished.String, CreatedAt: created.String, SessionID: session.String}
 		}
 		out = append(out, item)
 	}
@@ -441,6 +449,7 @@ type Run struct {
 	MRID             *int64
 	IssueID          *int64
 	BaseRunID        *int64
+	ContinueRunID    *int64 // run whose agent session this one continues (developer's choice); nil = new chat
 	HeadSHA          string
 	Status           string
 	Runner           string
@@ -492,14 +501,17 @@ func (r Run) IsReview() bool {
 // IsEdit reports whether the run edits files in a worktree.
 func (r Run) IsEdit() bool { return r.Kind == KindImplement || r.Kind == KindFixComments }
 
-const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path"
+const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path, continue_run_id"
 
 func scanRun(s scanner) (*Run, error) {
 	var r Run
-	var mrID, issueID, baseID sql.NullInt64
-	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.CreatedAt, &r.StartedAt, &r.FinishedAt, &r.Progress, &r.DenialsJSON, &r.PlanPath)
+	var mrID, issueID, baseID, contID sql.NullInt64
+	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.CreatedAt, &r.StartedAt, &r.FinishedAt, &r.Progress, &r.DenialsJSON, &r.PlanPath, &contID)
 	if err != nil {
 		return nil, err
+	}
+	if contID.Valid {
+		r.ContinueRunID = &contID.Int64
 	}
 	if mrID.Valid {
 		r.MRID = &mrID.Int64
@@ -516,9 +528,9 @@ func scanRun(s scanner) (*Run, error) {
 // CreateRun inserts a queued run and returns its id.
 func (d *DB) CreateRun(r Run) (int64, error) {
 	res, err := d.sql.Exec(`
-		INSERT INTO runs (kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, work_dir, branch, created_at)
-		VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
-		r.Kind, nullInt(r.MRID), nullInt(r.IssueID), nullInt(r.BaseRunID), r.HeadSHA, r.Runner, r.Model, r.SkillIdentifier, r.Notes, r.WorkDir, r.Branch, Now())
+		INSERT INTO runs (kind, mr_id, issue_id, base_run_id, continue_run_id, head_sha, status, runner, model, skill_identifier, notes, work_dir, branch, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
+		r.Kind, nullInt(r.MRID), nullInt(r.IssueID), nullInt(r.BaseRunID), nullInt(r.ContinueRunID), r.HeadSHA, r.Runner, r.Model, r.SkillIdentifier, r.Notes, r.WorkDir, r.Branch, Now())
 	if err != nil {
 		return 0, err
 	}
@@ -569,9 +581,12 @@ func (d *DB) listRuns(where string, arg any) ([]RunSummary, error) {
 	var out []RunSummary
 	for rows.Next() {
 		var s RunSummary
-		var mrID, issueID, baseID sql.NullInt64
-		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &s.OpenFindings, &s.TotalFindings); err != nil {
+		var mrID, issueID, baseID, contID sql.NullInt64
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &s.OpenFindings, &s.TotalFindings); err != nil {
 			return nil, err
+		}
+		if contID.Valid {
+			s.ContinueRunID = &contID.Int64
 		}
 		if mrID.Valid {
 			s.MRID = &mrID.Int64
@@ -653,9 +668,9 @@ func (d *DB) ListRuns(limit int) ([]RunListItem, error) {
 	var out []RunListItem
 	for rows.Next() {
 		var s RunListItem
-		var mrID, issueID, baseID sql.NullInt64
+		var mrID, issueID, baseID, contID sql.NullInt64
 		var mrProject, issueProject string
-		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &s.OpenFindings, &s.TotalFindings,
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &s.OpenFindings, &s.TotalFindings,
 			&s.MRIID, &s.MRTitle, &s.MRWebURL, &mrProject, &s.IssueIID, &s.IssueTitle, &s.IssueWebURL, &issueProject); err != nil {
 			return nil, err
 		}
@@ -669,6 +684,9 @@ func (d *DB) ListRuns(limit int) ([]RunListItem, error) {
 		}
 		if baseID.Valid {
 			s.BaseRunID = &baseID.Int64
+		}
+		if contID.Valid {
+			s.ContinueRunID = &contID.Int64
 		}
 		out = append(out, s)
 	}

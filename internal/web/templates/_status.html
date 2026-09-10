@@ -2,6 +2,20 @@
 {{define "status"}}<span class="state state-{{statusTone .}}" data-status="{{.}}">{{if eq . "running"}}<span class="spinner"></span>{{else if eq . "queued"}}<span class="dot-pulse"></span>{{else}}<span class="glyph">{{glyph (statusTone .)}}</span>{{end}} {{statusLabel .}}</span>{{end}}
 
 {{/* AI review state: . is never|queued|running|current|stale|failed */}}
+{{/* Context picker: which agent session a new run starts in. . is a dict: Sessions ([]db.RunSummary, resumable) and
+     Kinds (space separated startRun kinds the sessions fit); optional More: a second dict {Title, Sessions, Kinds}. */}}
+{{define "context-picker"}}
+<div class="context-picker" id="context-picker">
+  <label class="small secondary" for="context">Контекст:</label>
+  <select id="context" class="context-select">
+    <option value="">Новый чат · пустой контекст</option>
+    {{range .Sessions}}<option value="{{.ID}}" data-kinds="{{$.Kinds}}">Продолжить сессию #{{.ID}} · {{kindLabel .Kind}} · {{.Runner}} · {{tokens .TotalTokens}} токенов · {{when .FinishedAt}}</option>{{end}}
+    {{with .More}}{{range .Sessions}}<option value="{{.ID}}" data-kinds="{{$.More.Kinds}}">Продолжить сессию #{{.ID}} · {{kindLabel .Kind}} · {{.Runner}} · {{tokens .TotalTokens}} токенов · {{when .FinishedAt}}</option>{{end}}{{end}}
+  </select>
+  <span class="hint tip" data-tip="Продолжение = та же сессия агента (resume): он помнит объект и прежние результаты, но и весь уже накопленный контекст в токенах. Сессия продолжается тем же агентом и из того же каталога, поэтому предлагаются только подходящие сессии. Codex и Cursor могут не вернуть идентификатор сессии — тогда доступен только новый чат.">{{if or .Sessions (and .More .More.Sessions)}}как это работает?{{else}}пока нет завершённых сессий с сохранённым контекстом{{end}}</span>
+</div>
+{{end}}
+
 {{define "ai-state"}}<span class="state state-{{aiTone .}}">{{if eq . "running"}}<span class="spinner"></span>{{else if eq . "queued"}}<span class="dot-pulse"></span>{{else}}<span class="glyph">{{glyph (aiTone .)}}</span>{{end}} {{aiLabel .}}</span>{{end}}
 
 {{define "runner-picker"}}

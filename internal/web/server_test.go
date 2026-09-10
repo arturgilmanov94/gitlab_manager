@@ -399,3 +399,42 @@ func TestIssuesPages(t *testing.T) {
 		t.Fatalf("%d %v", code, out)
 	}
 }
+
+// Phase C in the UI: the MR page offers finished sessions as a context, the run page names the chosen one before the
+// run finishes, and the sessions list shows the chain.
+func TestContextPickerAndChain(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `<option value="">Новый чат · пустой контекст</option>`) || !strings.Contains(body, "пока нет завершённых сессий") {
+		t.Fatal("mr page must show the context picker with only the new chat")
+	}
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	code, out := postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "full"})
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `<option value="1" data-kinds="quick full verify">Продолжить сессию #1 · Полное ревью · claude`) {
+		t.Fatal("finished review must be offered as a context")
+	}
+	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, ">контекст #1<") {
+		t.Fatal("list row must flag the available context")
+	}
+	fr.Block = make(chan struct{})
+	code, out = postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "quick", "continue_run": "1"})
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if _, body := get(t, ts.URL+"/-/quick-review/2"); !strings.Contains(body, "Продолжение сессии #2") && !strings.Contains(body, "Продолжение сессии #1") || !strings.Contains(body, "по вашему выбору агент продолжает контекст «Полное ревью»") {
+		t.Fatal("run page must name the chosen context while the run is still active")
+	}
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	close(fr.Block)
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(2); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/runs"); !strings.Contains(body, "сессия: <a href=\"/-/review/1\">#1</a> → <b>#2</b>") {
+		t.Fatal("sessions list must show the conversation chain")
+	}
+	if code, out := postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "fix", "continue_run": "1"}); code == 200 || !strings.Contains(out["error"].(string), "another directory") {
+		t.Fatalf("fix comments cannot continue a project-root session: %d %v", code, out)
+	}
+}

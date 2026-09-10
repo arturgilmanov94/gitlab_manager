@@ -494,15 +494,32 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	var active, finished []db.RunListItem
+	// Runs sharing an agent session form one conversation chain (Phase C): shown in the row, oldest first.
+	chains := map[string][]db.RunListItem{}
 	for _, run := range runs {
+		if run.SessionID != "" {
+			chains[run.SessionID] = append([]db.RunListItem{run}, chains[run.SessionID]...)
+		}
+	}
+	var active, finished []runRow
+	for _, run := range runs {
+		row := runRow{RunListItem: run}
+		if chain := chains[run.SessionID]; len(chain) > 1 {
+			row.Chain = chain
+		}
 		if run.Active() {
-			active = append(active, run)
+			active = append(active, row)
 		} else {
-			finished = append(finished, run)
+			finished = append(finished, row)
 		}
 	}
 	s.render(w, "runs", map[string]any{"Base": s.base("runs", "Сессии"), "Active": active, "Finished": finished})
+}
+
+// runRow is a run of the sessions list with the other runs of the same agent session.
+type runRow struct {
+	db.RunListItem
+	Chain []db.RunListItem
 }
 
 func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
@@ -575,6 +592,7 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, "mr", map[string]any{
 		"Base": s.base("mrs", fmt.Sprintf("!%d %s", mr.IID, mr.Title)), "MR": mr, "Runs": runs, "Latest": latest,
+		"Sessions": s.svc.Resumable(runs, s.svc.Settings.ProjectRoot),
 		"Findings": findings, "Discussions": discussions, "Active": active, "LastRun": lastRun,
 		"Stale": stale, "State": state, "OpenMajor": major, "OpenMinor": minor, "OpenInfo": info,
 		"IsMine": username != "" && mr.Author == username,
@@ -619,6 +637,7 @@ func (s *Server) issuePage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "issue", map[string]any{
 		"Base": s.base("issues", fmt.Sprintf("#%d %s", issue.IID, issue.Title)), "Issue": issue, "Runs": runs, "Active": active,
 		"Plan": plan, "Impl": impl, "Failed": failed, "State": state,
+		"PlanSessions": s.svc.Resumable(runs, s.svc.Settings.ProjectRoot), "ImplSessions": s.svc.Resumable(runs, s.svc.Worktrees.Path(issue.Ref())),
 		"DefaultBranch": issue.Ref(), "BaseBranch": s.svc.Settings.BaseBranch,
 	})
 }
@@ -661,6 +680,11 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		data["Chain"] = chain
 		if chain[0].ID != run.ID {
 			data["ContinuedFrom"] = chain[0]
+		}
+	}
+	if run.ContinueRunID != nil {
+		if prev, _ := s.svc.DB.GetRun(*run.ContinueRunID); prev != nil {
+			data["ContinueFrom"] = prev
 		}
 	}
 	if run.IsReview() {
@@ -757,15 +781,16 @@ func (s *Server) apiStartMRRun(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
 	var runID int64
 	var err error
+	cont, _ := strconv.ParseInt(body["continue_run"], 10, 64) // agent session to continue; 0 = new chat
 	switch body["kind"] {
 	case "quick":
-		runID, err = s.svc.StartReview(id, db.KindReviewQuick, body["runner"])
+		runID, err = s.svc.StartReview(id, db.KindReviewQuick, body["runner"], cont)
 	case "full", "":
-		runID, err = s.svc.StartReview(id, db.KindReviewFull, body["runner"])
+		runID, err = s.svc.StartReview(id, db.KindReviewFull, body["runner"], cont)
 	case "verify":
-		runID, err = s.svc.StartReview(id, db.KindReviewVerify, body["runner"])
+		runID, err = s.svc.StartReview(id, db.KindReviewVerify, body["runner"], cont)
 	case "fix":
-		runID, err = s.svc.StartFixComments(id, body["runner"], body["notes"])
+		runID, err = s.svc.StartFixComments(id, body["runner"], body["notes"], cont)
 	default:
 		writeJSON(w, 400, map[string]any{"error": "kind must be quick, full, verify or fix"})
 		return
@@ -782,9 +807,10 @@ func (s *Server) apiStartIssueRun(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
 	var runID int64
 	var err error
+	cont, _ := strconv.ParseInt(body["continue_run"], 10, 64) // agent session to continue; 0 = new chat
 	switch body["kind"] {
 	case "plan", "":
-		runID, err = s.svc.StartPlan(id, body["runner"], body["notes"])
+		runID, err = s.svc.StartPlan(id, body["runner"], body["notes"], cont)
 	case "implement":
 		notes := body["notes"]
 		if planID, perr := strconv.ParseInt(body["plan_run"], 10, 64); perr == nil && planID > 0 {
@@ -792,7 +818,7 @@ func (s *Server) apiStartIssueRun(w http.ResponseWriter, r *http.Request) {
 				notes = strings.TrimSpace(notes + "\n\nPlan from the investigation run (follow it unless it contradicts the code you find):\n" + planAsText(plan.ResultJSON))
 			}
 		}
-		runID, err = s.svc.StartImplement(id, body["runner"], notes, body["branch"])
+		runID, err = s.svc.StartImplement(id, body["runner"], notes, body["branch"], cont)
 	default:
 		writeJSON(w, 400, map[string]any{"error": "kind must be plan or implement"})
 		return

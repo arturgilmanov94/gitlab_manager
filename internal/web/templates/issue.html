@@ -64,6 +64,7 @@
   <div class="status-block tone-neutral">
     <div class="label">Агент для запусков</div>
     <div class="value">{{template "runner-picker" .Base.Runners}}</div>
+    {{template "context-picker" (dict "Sessions" .PlanSessions "Kinds" "plan" "More" (dict "Sessions" .ImplSessions "Kinds" "implement"))}}
     <div class="detail">запуски стартуют из корня проекта с его правилами и skills · <a href="/doctor#skills">какие skills ожидаются</a></div>
   </div>
 </section>

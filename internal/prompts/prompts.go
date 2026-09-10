@@ -268,6 +268,14 @@ func Implement(issue Issue, notes, branch, baseBranch string, s *skill.Skill) st
 func readOnlyRules() string { return readOnlyRulesText + languageRule() }
 func editRules() string     { return editRulesText + languageRule() }
 
+// Continued prefixes the prompt of a run that the developer chose to start inside an earlier agent session
+// (Phase C: "Продолжить сессию #N" instead of a new chat).
+func Continued(previousKind string) string {
+	return "CONTEXT: you are continuing your own earlier session on this object (your previous task there: " + previousKind + "). " +
+		"Reuse what you already learned; re-read only what may have changed since then. The task below is a NEW task in that same conversation — " +
+		"answer it in full with the requested structured result.\n\n"
+}
+
 // FollowUp wraps a developer question for a resumed session.
 func FollowUp(question string) string {
 	name := languageNames[strings.ToLower(Language)]

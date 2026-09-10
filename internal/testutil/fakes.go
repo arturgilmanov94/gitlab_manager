@@ -224,6 +224,8 @@ func (f *FakeRunner) Run(ctx context.Context, req runner.Request) (*runner.Resul
 	session := f.Session
 	if session == "" {
 		session = "sess-1"
+	} else if session == "-" { // "-" = the agent reports no session id (Codex/Cursor may not)
+		session = ""
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -580,7 +580,7 @@ func review(settings *config.Settings, args []string) int {
 			}
 			mrID = mr.ID
 		}
-		runID, err := s.StartReview(mrID, kind, runnerName)
+		runID, err := s.StartReview(mrID, kind, runnerName, 0)
 		if err != nil {
 			return err
 		}

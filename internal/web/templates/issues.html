@@ -26,7 +26,7 @@
     <td class="nowrap ref-cell"><a class="ref" href="{{issuePath .ID}}">#{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
     <td class="title-cell">
       <a class="title" href="{{issuePath .ID}}">{{.Title}}</a>
-      <div class="sub">{{.Author}}{{template "labels" .Labels}} · обновлена {{when .GitLabUpdatedAt}}{{with otherLabels .Labels}} · <span class="muted">{{.}}</span>{{end}}</div>
+      <div class="sub">{{.Author}}{{template "labels" .Labels}}{{if and .ContextRunID (not $busy)}}<a class="badge badge-ctx tip" href="{{issuePath .ID}}#context-picker" data-tip="У агента есть сессия с контекстом этой задачи (запуск #{{.ContextRunID}}). На странице задачи её можно продолжить вместо нового чата.">контекст #{{.ContextRunID}}</a>{{end}} · обновлена {{when .GitLabUpdatedAt}}{{with otherLabels .Labels}} · <span class="muted">{{.}}</span>{{end}}</div>
     </td>
     <td data-label="Состояние">
       <div class="state-stack">

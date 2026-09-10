@@ -30,9 +30,10 @@
 <section class="status-panel">
   <div class="status-block tone-neutral">
     <div class="label">Контекст сессии</div>
-    <div class="value">{{if .ContinuedFrom}}Продолжение сессии #{{.ContinuedFrom.ID}}{{else if .Messages}}Новая сессия, был диалог{{else}}Новая сессия{{end}}</div>
+    <div class="value">{{if .ContinueFrom}}Продолжение сессии #{{.ContinueFrom.ID}}{{else if .ContinuedFrom}}Продолжение сессии #{{.ContinuedFrom.ID}}{{else if .Messages}}Новая сессия, был диалог{{else}}Новая сессия{{end}}</div>
     <div class="detail">
-      {{if .ContinuedFrom}}агент продолжил контекст «{{kindLabel .ContinuedFrom.Kind}}» ({{tokens .ContinuedFrom.TotalTokens}} токенов){{if .Messages}} и помнит {{len .Messages}} сообщений диалога{{end}}
+      {{if .ContinueFrom}}по вашему выбору агент продолжает контекст «{{kindLabel .ContinueFrom.Kind}}» ({{tokens .ContinueFrom.TotalTokens}} токенов, <a href="{{runPath .ContinueFrom.Kind .ContinueFrom.ID}}">сессия #{{.ContinueFrom.ID}}</a>){{if .Messages}} и помнит {{len .Messages}} сообщений диалога{{end}}
+      {{else if .ContinuedFrom}}агент продолжил контекст «{{kindLabel .ContinuedFrom.Kind}}» ({{tokens .ContinuedFrom.TotalTokens}} токенов){{if .Messages}} и помнит {{len .Messages}} сообщений диалога{{end}}
       {{else if .Run.SessionID}}агент начал с пустого контекста и помнит этот запуск{{if .Messages}} и {{len .Messages}} сообщений диалога{{end}}; можно продолжить ниже
       {{else}}агент не вернул идентификатор сессии — продолжить нельзя{{end}}
       {{if .Chain}}<div class="small" style="margin-top:4px">цепочка: {{range $i, $r := .Chain}}{{if $i}} → {{end}}{{if eq $r.ID $.Run.ID}}<b>#{{$r.ID}} {{kindLabel $r.Kind}}</b>{{else}}<a href="{{runPath $r.Kind $r.ID}}">#{{$r.ID}} {{kindLabel $r.Kind}}</a>{{end}}{{end}}</div>{{end}}

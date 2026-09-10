@@ -81,8 +81,22 @@
   };
   // Start a run and stay on the current page: the row/page shows the new state, several runs can be
   // started from a list one after another. The run page is one click away («Открыть прогресс»).
+  // Context picker (MR / task pages): which agent session the run starts in. Empty = new chat.
+  function selectedContext(kind) {
+    const select = document.getElementById('context');
+    if (!select || !select.value) return { ok: true, value: '' };
+    const option = select.options[select.selectedIndex];
+    const kinds = (option.dataset.kinds || '').split(/\s+/).filter(Boolean);
+    if (kinds.length && !kinds.includes(kind)) {
+      flash('Выбранная сессия относится к другому действию. Выберите «Новый чат» или сессию для этого действия.', false);
+      return { ok: false };
+    }
+    return { ok: true, value: select.value };
+  }
   window.startRun = async function (url, kind, button, extra) {
-    const body = Object.assign({ kind, runner: selectedRunner() }, extra || {});
+    const context = selectedContext(kind);
+    if (!context.ok) return;
+    const body = Object.assign({ kind, runner: selectedRunner(), continue_run: context.value }, extra || {});
     const data = await call('POST', url, body, button);
     if (data && data.redirect) { flash(startedLabels[kind] || 'Запуск поставлен в очередь', true); setTimeout(reload, 500); }
   };
