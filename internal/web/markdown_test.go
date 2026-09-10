@@ -42,3 +42,11 @@ func TestRenderMarkdown(t *testing.T) {
 		t.Fatal("unsafe paths must not link")
 	}
 }
+
+func TestFormatDuration(t *testing.T) {
+	for ms, want := range map[int64]string{0: "—", 48000: "48 с", 400000: "6 мин 40 с", 4320000: "1 ч 12 мин"} {
+		if got := formatDuration(ms); got != want {
+			t.Fatalf("%d: %q != %q", ms, got, want)
+		}
+	}
+}

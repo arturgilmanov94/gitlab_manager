@@ -97,6 +97,7 @@ type Result struct {
 	Structured json.RawMessage // parsed structured output (when Schema was given)
 	Text       string          // final plain-text answer
 	SessionID  string
+	Models     []string // models the agent actually used (main agent and subagents), when the runner reports them
 	CostUSD    float64
 	Usage      Usage
 	DurationMs int64

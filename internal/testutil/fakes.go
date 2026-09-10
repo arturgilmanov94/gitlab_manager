@@ -281,7 +281,7 @@ func (f *FakeRunner) Run(ctx context.Context, req runner.Request) (*runner.Resul
 	if req.Mode == runner.ModeEdit {
 		_ = os.WriteFile(filepath.Join(req.Dir, "CHANGED.txt"), []byte("changed by fake agent\n"), 0o644)
 	}
-	res := &runner.Result{Structured: raw, SessionID: session, CostUSD: 0.1, Usage: runner.Usage{Input: 1000, Output: 200, CacheRead: 50000, CacheWrite: 3000}, DurationMs: 5, Raw: []byte(`{"ok":1}`)}
+	res := &runner.Result{Structured: raw, SessionID: session, Models: []string{"claude-opus-4-1", "claude-haiku-4-5"}, CostUSD: 0.1, Usage: runner.Usage{Input: 1000, Output: 200, CacheRead: 50000, CacheWrite: 3000}, DurationMs: 5, Raw: []byte(`{"ok":1}`)}
 	if len(denials) > 0 {
 		res.Denials, _ = json.Marshal(denials)
 	}

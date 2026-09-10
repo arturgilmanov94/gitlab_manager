@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -186,6 +187,7 @@ func (c *Claude) Run(ctx context.Context, req Request) (*Result, error) {
 	raw, _ := json.Marshal(payload)
 	res := &Result{
 		SessionID:  str(payload["session_id"]),
+		Models:     ClaudeModels(payload),
 		CostUSD:    num(payload["total_cost_usd"]),
 		Usage:      ClaudeUsage(payload),
 		DurationMs: int64(num(payload["duration_ms"])),
@@ -404,6 +406,34 @@ func ClaudeUsage(payload map[string]any) Usage {
 		u.CacheWrite = int64(num(usage["cache_creation_input_tokens"]))
 	}
 	return u
+}
+
+// ClaudeModels lists the models in modelUsage, the one with most output tokens first.
+func ClaudeModels(payload map[string]any) []string {
+	models, ok := payload["modelUsage"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	type mu struct {
+		name string
+		out  float64
+	}
+	var list []mu
+	for name, v := range models {
+		m, _ := v.(map[string]any)
+		list = append(list, mu{name, num(m["outputTokens"])})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].out != list[j].out {
+			return list[i].out > list[j].out
+		}
+		return list[i].name < list[j].name
+	})
+	out := make([]string, 0, len(list))
+	for _, m := range list {
+		out = append(out, m.name)
+	}
+	return out
 }
 
 // ParseClaudeJSON parses a single-JSON `claude -p` output (stored raw results), tolerating leading noise.

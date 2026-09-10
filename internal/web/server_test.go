@@ -744,3 +744,30 @@ func TestFixSelectedPages(t *testing.T) {
 		t.Fatal("fixed finding shows the agent's verdict and is no longer selectable")
 	}
 }
+
+// Every result page states when the run started and finished, how long it took, agent + model, skill and tokens.
+func TestRunFactsOnPages(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "full"})
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	if run, _ := svc.DB.GetRun(1); run.Model != "claude-opus-4-1, claude-haiku-4-5" {
+		t.Fatalf("models reported by the agent must be stored: %q", run.Model)
+	}
+	for _, path := range []string{"/-/mr/1", "/-/review/1"} {
+		_, body := get(t, ts.URL+path)
+		for _, want := range []string{`class="k">старт</span>`, `class="k">финиш</span>`, `class="k">длилось</span>`, `class="k">агент</span>claude · <span class="mono">claude-opus-4-1, claude-haiku-4-5</span>`, `class="k">skill</span><span class="mono">agent:mr-review</span>`, `class="k">токены</span>`} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s missing %q", path, want)
+			}
+		}
+	}
+	postJSON(t, ts.URL+"/api/issues", map[string]any{"url": "#7"})
+	fr.Outputs = []map[string]any{testutil.PlanOutput()}
+	postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "plan"})
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(2); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/issue/1"); !strings.Contains(body, `class="k">длилось</span>`) || !strings.Contains(body, "CLAUDE.md + промпт") {
+		t.Fatal("task page must show the facts of the plan run, including the missing skill")
+	}
+}

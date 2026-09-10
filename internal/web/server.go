@@ -76,6 +76,8 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 			}
 			return fmt.Sprintf("%ds", ms/1000)
 		},
+		"duration": formatDuration,
+		"whenFull": formatWhenFull,
 		"money": func(v float64) string {
 			if v <= 0 {
 				return "—"
@@ -1159,6 +1161,32 @@ func formatWhen(value string) string {
 	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
 		if t, err := time.Parse(layout, value); err == nil {
 			return t.Local().Format("02.01 15:04")
+		}
+	}
+	return value
+}
+
+// formatDuration renders a duration in ms as "48 с", "6 мин 40 с" or "1 ч 12 мин".
+func formatDuration(ms int64) string {
+	if ms <= 0 {
+		return "—"
+	}
+	sec := ms / 1000
+	switch {
+	case sec < 60:
+		return fmt.Sprintf("%d с", sec)
+	case sec < 3600:
+		return fmt.Sprintf("%d мин %02d с", sec/60, sec%60)
+	default:
+		return fmt.Sprintf("%d ч %02d мин", sec/3600, (sec%3600)/60)
+	}
+}
+
+// formatWhenFull is the timestamp with the year and seconds (tooltips).
+func formatWhenFull(value string) string {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t.Local().Format("02.01.2006 15:04:05")
 		}
 	}
 	return value

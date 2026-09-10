@@ -70,9 +70,10 @@
     <div class="detail">
       {{if .Active}}{{kindLabel .Active.Kind}} · {{.Active.Runner}} · <span data-started="{{.Active.StartedAt}}"><span class="elapsed">—</span></span>
       {{else if eq .State "failed"}}{{firstLine .LastRun.Error}}
-      {{else if .Latest}}проверено на <span class="mono">{{shortSHA .Latest.HeadSHA}}</span>{{if .Stale}}, текущий HEAD <span class="mono">{{shortSHA .MR.HeadSHA}}</span> — есть новые коммиты{{end}} · {{findingsSummary .OpenMajor .OpenMinor .OpenInfo}}
+      {{else if .Latest}}проверено на <span class="mono">{{shortSHA .Latest.HeadSHA}}</span>{{if .Stale}}, текущий HEAD <span class="mono">{{shortSHA .MR.HeadSHA}}</span> — есть новые коммиты{{end}} · {{findingsSummary .OpenMajor .OpenMinor .OpenInfo}} · <a href="{{runPath .Latest.Kind .Latest.ID}}">сессия #{{.Latest.ID}}</a>
       {{else}}запустите ревью, чтобы получить замечания по правилам проекта{{end}}
     </div>
+    {{if .Active}}{{template "run-facts" .Active}}{{else if and (eq .State "failed") .LastRun}}{{template "run-facts" .LastRun}}{{else if .Latest}}{{template "run-facts" .Latest}}{{end}}
   </div>
   <div class="status-block tone-neutral">
     <div class="label">Агент для запусков</div>

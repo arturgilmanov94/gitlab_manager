@@ -19,6 +19,17 @@
 {{/* Structural progress: phases of a run in order, the current one marked. . is []db.PhaseSummary. */}}
 {{define "timeline"}}{{range $i, $p := .}}{{if $i}}<span class="tl-arrow">→</span>{{end}}<span class="tl-phase{{if $p.Current}} current{{end}}"><span class="glyph">{{if $p.Current}}●{{else}}✓{{end}}</span> {{$p.Label}} <span class="tl-count">{{$p.Count}}</span>{{if and $p.Current $p.LastDetail}}<span class="tl-detail mono">{{$p.LastDetail}}</span>{{end}}</span>{{end}}{{end}}
 
+{{/* Facts about one run: when it started and finished, how long it took, which agent/model/skill, how many tokens.
+     . is a db.Run or db.RunSummary. Shown under status blocks and in the session header. */}}
+{{define "run-facts"}}<div class="facts">
+  <span class="fact tip" data-tip="Старт: {{whenFull .StartedAt}}"><span class="k">старт</span>{{when .StartedAt}}</span>
+  {{if .FinishedAt}}<span class="fact tip" data-tip="Финиш: {{whenFull .FinishedAt}}"><span class="k">финиш</span>{{when .FinishedAt}}</span><span class="fact tip" data-tip="Время работы агента, суммарно по этапам запуска"><span class="k">длилось</span>{{duration .DurationMs}}</span>
+  {{else if .Active}}<span class="fact" data-started="{{.StartedAt}}"><span class="k">идёт</span><span class="elapsed">—</span></span>{{end}}
+  <span class="fact tip" data-tip="{{if .Model}}Модели, которые реально использовал агент (основная и субагенты), по данным его ответа{{else}}Модель выбирает агент по настройкам проекта; dashboard её не задаёт{{end}}"><span class="k">агент</span>{{.Runner}}{{if .Model}} · <span class="mono">{{.Model}}</span>{{else}} · модель по умолчанию{{end}}</span>
+  <span class="fact tip" data-tip="{{if .SkillIdentifier}}Skill проекта, с которым выполнялся запуск{{else}}У проекта нет skill для этого действия: работали CLAUDE.md / AGENTS.md и промпт dashboard{{end}}"><span class="k">skill</span>{{if .SkillIdentifier}}<span class="mono">{{.SkillIdentifier}}</span>{{else}}CLAUDE.md + промпт{{end}}</span>
+  <span class="fact tip" data-tip="{{tokensTip .InputTokens .OutputTokens .CacheReadTokens .CacheWriteTokens}}"><span class="k">токены</span>{{tokens .TotalTokens}}</span>
+</div>{{end}}
+
 {{define "ai-state"}}<span class="state state-{{aiTone .}}">{{if eq . "running"}}<span class="spinner"></span>{{else if eq . "queued"}}<span class="dot-pulse"></span>{{else}}<span class="glyph">{{glyph (aiTone .)}}</span>{{end}} {{aiLabel .}}</span>{{end}}
 
 {{define "runner-picker"}}

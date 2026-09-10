@@ -1597,6 +1597,9 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		fields["cache_read_tokens"] = run.CacheReadTokens + result.Usage.CacheRead
 		fields["cache_write_tokens"] = run.CacheWriteTokens + result.Usage.CacheWrite
 		fields["session_id"] = firstOf(result.SessionID, run.SessionID)
+		if len(result.Models) > 0 {
+			fields["model"] = strings.Join(result.Models, ", ")
+		}
 		fields["denials_json"] = string(result.Denials)
 		if len(result.Raw) > 0 && len(result.Raw) < 2_000_000 {
 			fields["raw_result"] = string(result.Raw)

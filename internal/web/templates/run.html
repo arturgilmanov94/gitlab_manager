@@ -7,15 +7,11 @@
     <h1>{{kindLabel .Run.Kind}} <span class="muted">· сессия #{{.Run.ID}}</span></h1>
     <div class="meta">
       <span data-run-status="{{.Run.ID}}" data-status="{{.Run.Status}}" {{if .Run.Active}}data-reload="1"{{end}}>{{template "status" .Run.Status}}</span>
-      <span class="sep"></span><span>агент <b>{{.Run.Runner}}</b></span>
-      {{if .Run.SkillIdentifier}}<span class="sep"></span><span>skill <span class="mono">{{.Run.SkillIdentifier}}</span></span>{{end}}
       {{if .Run.HeadSHA}}<span class="sep"></span><span>HEAD <span class="mono">{{shortSHA .Run.HeadSHA}}</span></span>{{end}}
       {{if .Run.Branch}}<span class="sep"></span><span>ветка <span class="mono">{{.Run.Branch}}</span></span>{{end}}
-      <span class="sep"></span><span>старт {{when .Run.StartedAt}}</span>
-      {{if .Run.FinishedAt}}<span class="sep"></span><span>финиш {{when .Run.FinishedAt}} · {{seconds .Run.DurationMs}}</span>{{end}}
-      <span class="sep"></span><span class="tip" data-tip="{{tokensTip .Run.InputTokens .Run.OutputTokens .Run.CacheReadTokens .Run.CacheWriteTokens}}">{{tokens .Run.TotalTokens}} токенов</span>
-      {{if .Run.BaseRunID}}<span class="sep"></span><span>проверяет <a href="/run/{{deref .Run.BaseRunID}}">#{{deref .Run.BaseRunID}}</a></span>{{end}}
+      {{if .Run.BaseRunID}}<span class="sep"></span><span>по результатам <a href="/run/{{deref .Run.BaseRunID}}">#{{deref .Run.BaseRunID}}</a></span>{{end}}
     </div>
+    {{template "run-facts" .Run}}
   </div>
   <div class="actions">
     {{if .Run.Active}}

@@ -60,6 +60,7 @@
       {{else if eq .State "planned"}}{{if .PlanIsBug}}разбор бага{{else}}исследование{{end}} #{{.Plan.ID}} от {{when .Plan.FinishedAt}}; {{if .PlanIsBug}}root cause и предложение исправления будут переданы агенту{{else}}план будет передан агенту при реализации{{end}}
       {{else}}агент ещё не работал над задачей{{end}}
     </div>
+    {{if .Active}}{{template "run-facts" .Active}}{{else if and (eq .State "failed") .Failed}}{{template "run-facts" .Failed}}{{else if and (eq .State "ready") .Impl}}{{template "run-facts" .Impl}}{{else if and (eq .State "planned") .Plan}}{{template "run-facts" .Plan}}{{end}}
   </div>
   <div class="status-block tone-neutral">
     <div class="label">Агент для запусков</div>
