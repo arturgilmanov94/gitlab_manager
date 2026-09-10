@@ -4,10 +4,11 @@
     <div class="meta"><span>MR, которые вас больше не касаются (одобрены вами, влиты или закрыты, вас сняли с ревью) или которые вы убрали сами. Все действия доступны как в основном списке; убранные можно вернуть через ⋯.</span></div></div>
   <div class="actions">
     <input type="text" data-filter="#history-table" placeholder="Фильтр…" size="30">
-    <span class="small muted" id="filter-count"></span>
     <span class="small secondary">Агент:</span> {{template "runner-picker" .Base.Runners}}
   </div>
 </section>
+
+{{if .MRs}}{{template "filters" (dict "Target" "#history-table" "Labels" .Base.Labels "Mine" true "Draft" true)}}{{end}}
 
 {{if not .MRs}}
 <div class="empty"><b>История пуста.</b><br>Сюда попадают MR после того, как вы их одобрили, они влиты или закрыты, или вас сняли с ревью. MR без запусков при этом убираются из dashboard совсем.</div>
@@ -19,6 +20,7 @@
   {{range .MRs}}{{template "mr-row" (dict "MR" . "Username" $.Base.Username)}}{{end}}
   </tbody>
 </table>
+<div class="empty filter-empty" hidden>Под фильтр ничего не подходит. <a href="#" data-reset-link>Сбросить фильтры</a></div>
 </div>
 {{end}}
 {{end}}

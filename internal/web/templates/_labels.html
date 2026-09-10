@@ -1,0 +1,26 @@
+{{/* Highlighted GitLab labels as coloured badges (HIGHLIGHT_LABELS); . is the comma separated label list. */}}
+{{define "labels"}}{{range keyLabels .}}<span class="badge label label-{{.Color}} tip" data-tip="Метка GitLab «{{.Name}}»">{{.Name}}</span>{{end}}{{end}}
+
+{{/* Filter chips for a list. . is a dict: Target (table selector), Labels (highlight styles), and optional
+     Mine/Draft/AI/Status booleans switching facet groups on. State is kept in localStorage per page. */}}
+{{define "filters"}}
+<div class="filters" data-filter-target="{{.Target}}">
+  {{if .Mine}}<div class="fgroup" data-facet="mine">
+    <button type="button" class="fchip" data-value="1">Мои</button><button type="button" class="fchip" data-value="0">Чужие</button>
+  </div>{{end}}
+  {{if .Draft}}<div class="fgroup" data-facet="draft">
+    <button type="button" class="fchip tip" data-value="0" data-tip="Без Draft: MR, которые автор считает готовыми к ревью">Готовые</button><button type="button" class="fchip" data-value="1">Draft</button>
+  </div>{{end}}
+  {{if .AI}}<div class="fgroup" data-facet="ai">
+    <button type="button" class="fchip" data-value="never">Ещё не проверены</button><button type="button" class="fchip" data-value="stale">Новые изменения</button><button type="button" class="fchip" data-value="current">Проверены</button><button type="button" class="fchip" data-value="queued running waiting">Выполняется</button><button type="button" class="fchip" data-value="failed">Ошибки</button>
+  </div>{{end}}
+  {{if .Status}}<div class="fgroup" data-facet="status">
+    <button type="button" class="fchip" data-value="queued running">Активные</button><button type="button" class="fchip" data-value="waiting">Нужен ответ</button><button type="button" class="fchip" data-value="done">Завершённые</button><button type="button" class="fchip" data-value="failed">Ошибки</button><button type="button" class="fchip" data-value="cancelled">Остановленные</button>
+  </div>{{end}}
+  {{if .Labels}}<div class="fgroup fgroup-labels" data-facet="labels" data-multi="1">
+    {{range .Labels}}<button type="button" class="fchip label-{{.Color}}" data-value="{{lower .Name}}">{{.Name}}</button>{{end}}
+  </div>{{end}}
+  <button type="button" class="fchip freset" data-reset hidden>Сбросить</button>
+  <span class="small muted" data-filter-count></span>
+</div>
+{{end}}

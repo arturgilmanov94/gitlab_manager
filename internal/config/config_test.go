@@ -56,3 +56,24 @@ func TestSplitTools(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+func TestHighlightLabels(t *testing.T) {
+	got := ParseHighlightLabels(DefaultHighlightLabels)
+	want := []LabelStyle{{"high", "red"}, {"product", "yellow"}, {"bug", "orange"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("defaults: %v", got)
+	}
+	got = ParseHighlightLabels(" urgent:purple, Bug , bug:orange,:red")
+	want = []LabelStyle{{"urgent", "gray"}, {"Bug", "gray"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unknown colour → gray, duplicates and empty names dropped: %v", got)
+	}
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, ".env"), []byte("HIGHLIGHT_LABELS=p1:red\n"), 0o644)
+	if s := Load(dir, nil, true); len(s.HighlightLabels) != 1 || s.HighlightLabels[0].Name != "p1" {
+		t.Fatalf("%v", s.HighlightLabels)
+	}
+	if s := Load(dir, nil, false); len(s.HighlightLabels) != 3 {
+		t.Fatalf("defaults expected without .env: %v", s.HighlightLabels)
+	}
+}

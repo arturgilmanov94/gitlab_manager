@@ -145,6 +145,8 @@ type MergeRequest struct {
 	ApprovedByMe bool
 	Manual       bool
 	Hidden       bool // hidden by the developer ("Убрать из dashboard"): lives in the history until brought back
+	// Labels is the comma separated GitLab label list (same form as Issue.Labels).
+	Labels string
 }
 
 // Ref is "project!iid".
@@ -162,12 +164,12 @@ func (m MergeRequest) Relevant() bool {
 // relevantWhere is the SQL form of Relevant().
 const relevantWhere = "state NOT IN ('merged', 'closed') AND hidden = 0 AND approved_by_me = 0 AND (my_roles != '' OR manual = 1)"
 
-const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, hidden"
+const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, hidden, labels"
 
 func scanMRInto(m *MergeRequest, s scanner) error {
 	var draft, approved, manual, hidden int
 	if err := s.Scan(&m.ID, &m.GitLabHost, &m.ProjectPath, &m.IID, &m.WebURL, &m.Title, &m.Author, &m.SourceBranch, &m.TargetBranch, &m.State, &m.HeadSHA, &m.Unresolved, &m.GitLabUpdatedAt, &m.SyncedAt, &m.AddedAt,
-		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount, &m.MyRoles, &approved, &manual, &hidden); err != nil {
+		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount, &m.MyRoles, &approved, &manual, &hidden, &m.Labels); err != nil {
 		return err
 	}
 	m.Draft, m.ApprovedByMe, m.Manual, m.Hidden = draft == 1, approved == 1, manual == 1, hidden == 1
@@ -206,8 +208,8 @@ func (d *DB) UpsertMR(m MergeRequest) (*MergeRequest, error) {
 	// `manual` is sticky: once added by hand the MR stays until removed by hand.
 	_, err := d.sql.Exec(`
 		INSERT INTO merge_requests (gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at,
-			pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, labels)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (gitlab_host, project_path, iid) DO UPDATE SET
 			web_url = excluded.web_url, title = excluded.title, author = excluded.author,
 			source_branch = excluded.source_branch, target_branch = excluded.target_branch,
@@ -215,9 +217,10 @@ func (d *DB) UpsertMR(m MergeRequest) (*MergeRequest, error) {
 			gitlab_updated_at = excluded.gitlab_updated_at, synced_at = excluded.synced_at,
 			pipeline_status = excluded.pipeline_status, approvals_given = excluded.approvals_given, approvals_required = excluded.approvals_required,
 			diverged = excluded.diverged, draft = excluded.draft, changes_count = excluded.changes_count,
-			my_roles = excluded.my_roles, approved_by_me = excluded.approved_by_me, manual = MAX(merge_requests.manual, excluded.manual)`,
+			my_roles = excluded.my_roles, approved_by_me = excluded.approved_by_me, manual = MAX(merge_requests.manual, excluded.manual),
+			labels = excluded.labels`,
 		m.GitLabHost, m.ProjectPath, m.IID, m.WebURL, m.Title, m.Author, m.SourceBranch, m.TargetBranch, m.State, m.HeadSHA, m.Unresolved, m.GitLabUpdatedAt, now, now,
-		m.PipelineStatus, m.ApprovalsGiven, m.ApprovalsRequired, m.Diverged, flag(m.Draft), m.ChangesCount, m.MyRoles, flag(m.ApprovedByMe), flag(m.Manual))
+		m.PipelineStatus, m.ApprovalsGiven, m.ApprovalsRequired, m.Diverged, flag(m.Draft), m.ChangesCount, m.MyRoles, flag(m.ApprovedByMe), flag(m.Manual), m.Labels)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +314,7 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 		var kind, status, verdict, sha, runner, model, finished, created, dKind, dVerdict, dSHA, dFinished sql.NullString
 		var draft, approved, manual, hidden int
 		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Author, &item.SourceBranch, &item.TargetBranch, &item.State, &item.HeadSHA, &item.Unresolved, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
-			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual, &hidden,
+			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual, &hidden, &item.Labels,
 			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &open, &tokens,
 			&dID, &dKind, &dVerdict, &dSHA, &dFinished, &dMajor, &dMinor, &dInfo); err != nil {
 			return nil, err

@@ -5,11 +5,11 @@
 {{$st := aiState .}}
 {{$busy := or (eq $st "running") (eq $st "queued") (eq $st "waiting")}}
 {{$closed := .Closed}}
-<tr>
+<tr data-mine="{{if and $username (eq .Author $username)}}1{{else}}0{{end}}" data-draft="{{if .Draft}}1{{else}}0{{end}}" data-ai="{{$st}}" data-labels="{{labelSlugs .Labels}}">
   <td class="nowrap ref-cell"><a class="ref" href="{{mrPath .ID}}">!{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
   <td class="title-cell">
     <a class="title" href="{{mrPath .ID}}">{{.Title}}</a>
-    <div class="sub">{{.Author}}{{if and $username (eq .Author $username)}}<span class="badge badge-info tip" data-tip="Автор MR — вы.">мой</span>{{end}}{{if .Draft}}<span class="badge">Draft</span>{{end}}{{if .Hidden}}<span class="badge badge-warning tip" data-tip="Вы убрали этот MR из основного списка. Вернуть — в меню ⋯.">скрыт вами</span>{{end}}{{if .ApprovedByMe}}<span class="badge badge-success tip" data-tip="Вы одобрили этот MR.">одобрен мной</span>{{end}}{{if and (not .MyRoles) (not .Manual)}}<span class="badge tip" data-tip="Вы больше не автор, assignee и не reviewer этого MR.">без роли</span>{{end}} · обновлён {{when .GitLabUpdatedAt}}{{if .ChangesCount}} · {{.ChangesCount}} файлов{{end}}</div>
+    <div class="sub">{{.Author}}{{if and $username (eq .Author $username)}}<span class="badge badge-info tip" data-tip="Автор MR — вы.">мой</span>{{end}}{{if .Draft}}<span class="badge">Draft</span>{{end}}{{template "labels" .Labels}}{{if .Hidden}}<span class="badge badge-warning tip" data-tip="Вы убрали этот MR из основного списка. Вернуть — в меню ⋯.">скрыт вами</span>{{end}}{{if .ApprovedByMe}}<span class="badge badge-success tip" data-tip="Вы одобрили этот MR.">одобрен мной</span>{{end}}{{if and (not .MyRoles) (not .Manual)}}<span class="badge tip" data-tip="Вы больше не автор, assignee и не reviewer этого MR.">без роли</span>{{end}} · обновлён {{when .GitLabUpdatedAt}}{{if .ChangesCount}} · {{.ChangesCount}} файлов{{end}}</div>
   </td>
   <td class="mono small hide-lg" data-label="Ветка">{{.SourceBranch}}<div class="muted">→ {{.TargetBranch}}</div></td>
   <td data-label="GitLab">

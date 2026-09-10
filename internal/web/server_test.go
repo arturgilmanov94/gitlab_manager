@@ -86,6 +86,17 @@ func TestPagesAndFlow(t *testing.T) {
 	if code, body := get(t, ts.URL+"/mrs"); code != 200 || !strings.Contains(body, "MR 42") || !strings.Contains(body, "data-tip=") || !strings.Contains(body, `data-filter="#mrs-table"`) {
 		t.Fatalf("%d", code)
 	}
+	// Highlighted GitLab labels are badges (case-insensitive match, configured colour) and row filter attributes;
+	// the other labels stay out of the row. Filter chips: mine/others, draft, AI state, labels.
+	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, `label-red tip" data-tip="Метка GitLab «high»">high<`) || !strings.Contains(body, `data-labels="high"`) ||
+		!strings.Contains(body, `data-mine="1" data-draft="0" data-ai="never"`) || strings.Contains(body, ">backend<") ||
+		!strings.Contains(body, `data-facet="mine"`) || !strings.Contains(body, `data-facet="ai"`) || !strings.Contains(body, `class="fchip label-orange" data-value="bug"`) {
+		t.Fatal("list must show highlighted labels as badges, row facets and filter chips")
+	}
+	postJSON(t, ts.URL+"/api/issues", map[string]any{"url": "#7"})
+	if _, body := get(t, ts.URL+"/issues"); !strings.Contains(body, `data-labels=""`) || !strings.Contains(body, `data-facet="labels"`) || !strings.Contains(body, ">backend<") {
+		t.Fatal("issues list must carry label facets and chips and keep the other labels as text")
+	}
 	// The overview lists the own MR with a failed pipeline; the never-reviewed MR is not offered for review (own MR).
 	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "Pipeline failed") || !strings.Contains(body, "Открыть pipeline") {
 		t.Fatal("overview must surface the failed pipeline of my MR")

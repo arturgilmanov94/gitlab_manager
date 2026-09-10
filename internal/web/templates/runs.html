@@ -1,10 +1,11 @@
 {{define "content"}}
 <section class="toolbar">
   <input type="text" data-filter="#runs-table" placeholder="Фильтр: номер, название, тип, агент…" size="44">
-  <span class="small muted" id="filter-count"></span>
   <span class="spacer"></span>
   <span class="small secondary">Сессий: {{len .Active}} активных · {{len .Finished}} завершённых</span>
 </section>
+
+{{if or .Active .Finished}}{{template "filters" (dict "Target" "#runs-table" "Status" true)}}{{end}}
 
 {{if and (not .Active) (not .Finished)}}
 <div class="empty"><b>Сессий ещё не было.</b><br>Запустите ревью MR или исследование задачи — здесь появится история всех запусков агентов.</div>
@@ -17,12 +18,13 @@
   {{range .Finished}}{{template "run-row" .}}{{end}}
   </tbody>
 </table>
+<div class="empty filter-empty" hidden>Под фильтр ничего не подходит. <a href="#" data-reset-link>Сбросить фильтры</a></div>
 </div>
 {{end}}
 {{end}}
 
 {{define "run-row"}}
-<tr>
+<tr data-status="{{.Status}}">
   <td class="ref-cell"><a class="ref" href="{{runPath .Kind .ID}}">#{{.ID}}</a></td>
   <td class="title-cell">
     {{if .MRIID}}<a class="title" href="{{mrPath (deref .MRID)}}">!{{.MRIID}} {{.MRTitle}}</a>{{else if .IssueIID}}<a class="title" href="{{issuePath (deref .IssueID)}}">#{{.IssueIID}} {{.IssueTitle}}</a>{{else}}<span class="muted">—</span>{{end}}

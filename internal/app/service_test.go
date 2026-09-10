@@ -92,6 +92,9 @@ func TestSyncScopesMRs(t *testing.T) {
 	if mr42.MyRoles != "author,assignee" || mr42.ApprovedByMe || !mr42.Relevant() {
 		t.Fatalf("%+v", mr42)
 	}
+	if mr42.Labels != "High, backend" {
+		t.Fatalf("GitLab labels must be stored on the MR: %q", mr42.Labels)
+	}
 	if findMR(t, svc, 43).MyRoles != "reviewer" {
 		t.Fatal("reviewer role expected")
 	}

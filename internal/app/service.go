@@ -236,6 +236,7 @@ func (s *Service) mrFromPayload(payload map[string]any, ref gitlab.Ref) db.Merge
 		Diverged:        gitlab.Int(payload, "diverged_commits_count"),
 		Draft:           gitlab.Bool(payload, "draft") || gitlab.Bool(payload, "work_in_progress"),
 		ChangesCount:    gitlab.Str(payload, "changes_count"),
+		Labels:          gitlab.Labels(payload),
 	}
 }
 

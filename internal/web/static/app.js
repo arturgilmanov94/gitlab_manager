@@ -87,19 +87,70 @@
     if (data && data.redirect) { flash(startedLabels[kind] || 'Запуск поставлен в очередь', true); setTimeout(reload, 500); }
   };
 
-  // ---- client-side filter for lists (input[data-filter="<table selector>"])
-  document.querySelectorAll('input[data-filter]').forEach((input) => {
-    const rows = () => Array.from(document.querySelectorAll(input.dataset.filter + ' tbody tr'));
+  // ---- list filters: text input (input[data-filter="#table"]) plus facet chips (.filters[data-filter-target="#table"]).
+  // Rows carry data-<facet> attributes (space separated values); a chip's data-value may list several values.
+  // Facets persist per page in localStorage (survive restarts); the text query lives in sessionStorage (per tab).
+  document.querySelectorAll('table.list[id]').forEach((table) => {
+    const selector = '#' + table.id;
+    const input = document.querySelector(`input[data-filter="${selector}"]`);
+    const box = document.querySelector(`.filters[data-filter-target="${selector}"]`);
+    if (!input && !box) return;
+    const key = 'filters:' + location.pathname;
+    let state = {};
+    try { state = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (e) { state = {}; }
+    const rows = () => Array.from(table.querySelectorAll('tbody tr'));
+    const emptyNote = table.parentElement.querySelector('.filter-empty');
+    const facetsActive = () => Object.values(state).some((v) => Array.isArray(v) && v.length);
+    const matches = (row) => Object.keys(state).every((facet) => {
+      const want = state[facet];
+      if (!Array.isArray(want) || !want.length) return true;
+      const have = (row.dataset[facet] || '').split(/\s+/).filter(Boolean);
+      return want.some((value) => String(value).split(/\s+/).some((v) => have.includes(v)));
+    });
     const apply = () => {
-      const q = input.value.trim().toLowerCase();
+      const q = input ? input.value.trim().toLowerCase() : '';
       let shown = 0;
-      rows().forEach((row) => { const hit = !q || row.textContent.toLowerCase().includes(q); row.hidden = !hit; if (hit) shown++; });
-      const counter = document.getElementById('filter-count');
-      if (counter) counter.textContent = q ? `${shown} из ${rows().length}` : '';
+      rows().forEach((row) => {
+        const hit = matches(row) && (!q || row.textContent.toLowerCase().includes(q));
+        row.hidden = !hit;
+        if (hit) shown++;
+      });
+      if (box) {
+        const counter = box.querySelector('[data-filter-count]');
+        if (counter) counter.textContent = (q || facetsActive()) ? `${shown} из ${rows().length}` : '';
+        const reset = box.querySelector('[data-reset]');
+        if (reset) reset.hidden = !facetsActive();
+        box.querySelectorAll('.fgroup').forEach((group) => {
+          const selected = state[group.dataset.facet] || [];
+          group.querySelectorAll('.fchip').forEach((chip) => chip.classList.toggle('on', selected.includes(chip.dataset.value)));
+        });
+      }
+      if (emptyNote) emptyNote.hidden = shown > 0 || !rows().length;
     };
-    input.addEventListener('input', apply);
-    try { const saved = sessionStorage.getItem('filter:' + location.pathname); if (saved) { input.value = saved; apply(); } } catch (e) { /* ignore */ }
-    input.addEventListener('input', () => { try { sessionStorage.setItem('filter:' + location.pathname, input.value); } catch (e) { /* ignore */ } });
+    const save = () => { try { localStorage.setItem(key, JSON.stringify(state)); } catch (e) { /* ignore */ } };
+    const reset = () => { state = {}; save(); apply(); };
+    if (box) {
+      box.querySelectorAll('.fgroup').forEach((group) => {
+        const facet = group.dataset.facet;
+        const multi = group.dataset.multi === '1';
+        group.querySelectorAll('.fchip').forEach((chip) => chip.addEventListener('click', () => {
+          const value = chip.dataset.value;
+          const selected = state[facet] || [];
+          if (selected.includes(value)) state[facet] = selected.filter((v) => v !== value);
+          else state[facet] = multi ? selected.concat([value]) : [value];
+          save();
+          apply();
+        }));
+      });
+      const resetButton = box.querySelector('[data-reset]');
+      if (resetButton) resetButton.addEventListener('click', reset);
+    }
+    if (emptyNote) emptyNote.querySelectorAll('[data-reset-link]').forEach((a) => a.addEventListener('click', (event) => { event.preventDefault(); if (input) { input.value = ''; try { sessionStorage.removeItem('filter:' + location.pathname); } catch (e) { /* ignore */ } } reset(); }));
+    if (input) {
+      try { const saved = sessionStorage.getItem('filter:' + location.pathname); if (saved) input.value = saved; } catch (e) { /* ignore */ }
+      input.addEventListener('input', () => { try { sessionStorage.setItem('filter:' + location.pathname, input.value); } catch (e) { /* ignore */ } apply(); });
+    }
+    apply();
   });
 
   // ---- technical log: light syntax colouring by line prefix

@@ -148,6 +148,23 @@ textarea { width: 100%; max-width: 820px; resize: vertical; }
 .badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; background: var(--neutral-soft); color: var(--fg-2); white-space: nowrap; }
 .badge-info { background: var(--info-soft); color: var(--info); } .badge-warning { background: var(--warning-soft); color: var(--warning); }
 .badge-success { background: var(--success-soft); color: var(--success); } .badge-danger { background: var(--danger-soft); color: var(--danger); }
+/* GitLab labels worth highlighting (HIGHLIGHT_LABELS): each colour sets --lc (text) and --lb (background) */
+.label-red { --lc: var(--danger); --lb: var(--danger-soft); } .label-orange { --lc: #c2410c; --lb: #fff0e6; }
+.label-yellow { --lc: #8a6100; --lb: #fff3bf; } .label-green { --lc: var(--success); --lb: var(--success-soft); }
+.label-blue { --lc: var(--info); --lb: var(--info-soft); } .label-gray { --lc: var(--fg-2); --lb: var(--neutral-soft); }
+.badge.label { background: var(--lb); color: var(--lc); text-transform: lowercase; }
+
+/* list filters: facet chips under the toolbar; state is kept per page in localStorage */
+.filters { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: -4px 0 12px; }
+.fgroup { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.fchip { font: inherit; font-size: 12px; font-weight: 500; line-height: 1.2; padding: 5px 10px; background: var(--surface); color: var(--fg-2); cursor: pointer; border: 1px solid var(--border-strong); border-radius: var(--radius); white-space: nowrap; }
+.fgroup .fchip { border: 0; border-right: 1px solid var(--border); border-radius: 0; }
+.fgroup .fchip:last-child { border-right: 0; }
+.fchip:hover { background: var(--surface-2); color: var(--fg); }
+.fchip.on { background: var(--lb, var(--primary-soft)); color: var(--lc, var(--primary)); font-weight: 600; }
+.fchip.freset { border-style: dashed; }
+.filter-empty { border: 0; border-top: 1px solid var(--border); border-radius: 0; padding: 22px; }
+
 .doctor-OK { background: var(--success-soft); color: var(--success); } .doctor-WARN { background: var(--warning-soft); color: var(--warning); } .doctor-FAIL { background: var(--danger-soft); color: var(--danger); }
 
 .state { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; white-space: nowrap; }

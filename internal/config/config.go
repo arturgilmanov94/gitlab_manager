@@ -53,6 +53,42 @@ type Settings struct {
 
 	BaseBranch     string
 	RunConcurrency int
+
+	// HighlightLabels are the GitLab labels worth showing (and filtering by) in the lists, with their colours.
+	// Every other label stays out of the way. Configured by HIGHLIGHT_LABELS=high:red,product:yellow,bug:orange.
+	HighlightLabels []LabelStyle
+}
+
+// LabelStyle is a GitLab label shown as a coloured badge.
+type LabelStyle struct {
+	Name  string // label text as in GitLab (matched case-insensitively)
+	Color string // red | orange | yellow | green | blue | gray
+}
+
+// DefaultHighlightLabels is the built-in HIGHLIGHT_LABELS value.
+const DefaultHighlightLabels = "high:red,product:yellow,bug:orange"
+
+// labelColors are the colours a highlighted label may use (CSS classes .label-<color>).
+var labelColors = map[string]bool{"red": true, "orange": true, "yellow": true, "green": true, "blue": true, "gray": true}
+
+// ParseHighlightLabels reads "name:color,name:color"; a missing or unknown colour becomes gray, duplicates are dropped.
+func ParseHighlightLabels(value string) []LabelStyle {
+	var out []LabelStyle
+	seen := map[string]bool{}
+	for _, item := range splitList(value) {
+		name, color, _ := strings.Cut(item, ":")
+		name = strings.TrimSpace(name)
+		if name == "" || seen[strings.ToLower(name)] {
+			continue
+		}
+		color = strings.ToLower(strings.TrimSpace(color))
+		if !labelColors[color] {
+			color = "gray"
+		}
+		seen[strings.ToLower(name)] = true
+		out = append(out, LabelStyle{Name: name, Color: color})
+	}
+	return out
 }
 
 // EnvFile returns the path of the local .env file.
@@ -182,6 +218,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		GitLabSyncOnlyProject: boolean("GITLAB_SYNC_ONLY_PROJECT", true),
 		BaseBranch:            str("BASE_BRANCH", "develop"),
 		RunConcurrency:        num("RUN_CONCURRENCY", 4),
+		HighlightLabels:       ParseHighlightLabels(str("HIGHLIGHT_LABELS", DefaultHighlightLabels)),
 	}
 	if s.RunConcurrency < 1 {
 		s.RunConcurrency = 1

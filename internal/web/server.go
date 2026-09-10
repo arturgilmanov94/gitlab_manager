@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"mr-review/internal/app"
+	"mr-review/internal/config"
 	"mr-review/internal/db"
 	"mr-review/internal/doctor"
 	"mr-review/internal/runner"
@@ -43,7 +44,8 @@ type pageBase struct {
 	Runners     []runner.Info
 	Username    string
 	Counts      map[string]int64
-	Pending     []db.Approval // open permission prompts across all runs (header badge)
+	Pending     []db.Approval       // open permission prompts across all runs (header badge)
+	Labels      []config.LabelStyle // highlighted GitLab labels (filter chips)
 	Nav         string
 	Title       string
 	Started     time.Time
@@ -126,6 +128,9 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 			}
 			return out
 		},
+		"keyLabels":     func(labels string) []config.LabelStyle { return keyLabels(svc.Settings.HighlightLabels, labels) },
+		"otherLabels":   func(labels string) string { return otherLabels(svc.Settings.HighlightLabels, labels) },
+		"labelSlugs":    func(labels string) string { return labelSlugs(svc.Settings.HighlightLabels, labels) },
 		"blobBase":      blobBase,
 		"fileLink":      fileLink,
 		"pipelineLabel": pipelineLabel,
@@ -292,6 +297,7 @@ func (s *Server) base(nav, title string) pageBase {
 		Username:    s.svc.CurrentUser(),
 		Counts:      s.svc.DB.Counts(),
 		Pending:     pending,
+		Labels:      s.svc.Settings.HighlightLabels,
 		Nav:         nav,
 		Title:       title,
 		Started:     s.started,
@@ -968,6 +974,56 @@ func kindTip(kind string) string {
 		return "Загрузить из GitLab по ссылке и добавить в dashboard. Ничего не запускается."
 	}
 	return ""
+}
+
+// splitLabels turns the stored "a, b, c" label list into trimmed names.
+func splitLabels(labels string) []string {
+	var out []string
+	for _, item := range strings.Split(labels, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+// keyLabels returns the highlighted labels present on an object, in the configured order and with their colours.
+func keyLabels(styles []config.LabelStyle, labels string) []config.LabelStyle {
+	present := map[string]bool{}
+	for _, name := range splitLabels(labels) {
+		present[strings.ToLower(name)] = true
+	}
+	var out []config.LabelStyle
+	for _, style := range styles {
+		if present[strings.ToLower(style.Name)] {
+			out = append(out, style)
+		}
+	}
+	return out
+}
+
+// otherLabels returns the labels that are not highlighted, comma separated (shown as plain muted text).
+func otherLabels(styles []config.LabelStyle, labels string) string {
+	key := map[string]bool{}
+	for _, style := range styles {
+		key[strings.ToLower(style.Name)] = true
+	}
+	var out []string
+	for _, name := range splitLabels(labels) {
+		if !key[strings.ToLower(name)] {
+			out = append(out, name)
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
+// labelSlugs is the space separated lower-case list of highlighted labels on an object (row filter attribute).
+func labelSlugs(styles []config.LabelStyle, labels string) string {
+	var out []string
+	for _, style := range keyLabels(styles, labels) {
+		out = append(out, strings.ToLower(style.Name))
+	}
+	return strings.Join(out, " ")
 }
 
 // pipelineLabel / pipelineTone render the GitLab head pipeline status.

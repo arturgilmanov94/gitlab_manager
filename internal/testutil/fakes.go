@@ -29,6 +29,7 @@ func MRPayload(iid int64, sha string) map[string]any {
 		"source_branch": "feature", "target_branch": "develop", "state": "opened", "sha": sha,
 		"diff_refs":     map[string]any{"head_sha": sha},
 		"head_pipeline": map[string]any{"status": "failed"}, "diverged_commits_count": 3.0, "draft": false, "changes_count": "7",
+		"labels":     []any{"High", "backend"},
 		"references": map[string]any{"full": fmt.Sprintf("group/sub/project!%d", iid)},
 		"updated_at": "2026-09-01T10:00:00+03:00",
 	}
