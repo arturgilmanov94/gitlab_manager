@@ -3,8 +3,11 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -469,5 +472,68 @@ func TestVerifyFindingPages(t *testing.T) {
 	postJSON(t, ts.URL+"/api/mrs/1/refresh", map[string]any{})
 	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, "есть новые изменения: 2 коммитов, 1 файлов, <span class=\"text-success\">+10</span> <span class=\"text-danger\">−3</span>") {
 		t.Fatal("stale badge must summarise the compare result")
+	}
+}
+
+// «Открыть в терминале»: the dashboard starts a terminal emulator on its own machine in the run's directory,
+// continuing the agent session; the page offers the button and the copyable command.
+func TestOpenTerminal(t *testing.T) {
+	settings, _ := testutil.Settings(t)
+	dir := t.TempDir()
+	record := filepath.Join(dir, "args.txt")
+	script := filepath.Join(dir, "term.sh")
+	_ = os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > "+record+"\n"), 0o755)
+	settings.TerminalCmd = script + " {dir} {cmd}"
+	t.Setenv("DISPLAY", ":0")
+	database, err := db.Open(settings.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = database.Migrate()
+	fr := &testutil.FakeRunner{}
+	svc := app.New(settings, database, testutil.NewFakeGitLab(), []runner.Runner{fr})
+	srv, err := New(svc, "test", []runner.Runner{fr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); svc.Shutdown(); database.Close() })
+
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "full"})
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	want := "cd '" + settings.ProjectRoot + "' && claude --resume sess-1"
+	if _, body := get(t, ts.URL+"/-/review/1"); !strings.Contains(body, "Продолжить в терминале") || !strings.Contains(body, "openTerminal('1', true, this)") || !strings.Contains(body, template.HTMLEscapeString(want)) {
+		t.Fatal("run page must offer the terminal and the copyable command")
+	}
+	code, out := postJSON(t, ts.URL+"/api/runs/1/terminal", map[string]any{"resume": "1"})
+	if code != 200 || out["command"] != want {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool {
+		data, err := os.ReadFile(record)
+		return err == nil && strings.Contains(string(data), "claude --resume sess-1")
+	})
+	data, _ := os.ReadFile(record)
+	if !strings.Contains(string(data), settings.ProjectRoot) || !strings.Contains(string(data), `exec "${SHELL:-bash}"`) {
+		t.Fatalf("terminal must open in the run directory and keep a shell: %s", data)
+	}
+	if _, body := get(t, ts.URL+"/runs"); !strings.Contains(body, "openTerminal('1', true, this)") {
+		t.Fatal("sessions list must offer the terminal too")
+	}
+	if code, out := postJSON(t, ts.URL+"/api/runs/999/terminal", map[string]any{}); code == 200 || !strings.Contains(out["error"].(string), "not found") {
+		t.Fatalf("%d %v", code, out)
+	}
+}
+
+// Without a terminal emulator the buttons are disabled with the reason instead of failing on click.
+func TestTerminalUnavailable(t *testing.T) {
+	ts, _, _ := newServer(t)
+	t.Setenv("DISPLAY", "")
+	t.Setenv("WAYLAND_DISPLAY", "")
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	if code, out := postJSON(t, ts.URL+"/api/runs/1/terminal", map[string]any{"resume": "1"}); code == 200 {
+		t.Fatalf("%d %v", code, out)
 	}
 }

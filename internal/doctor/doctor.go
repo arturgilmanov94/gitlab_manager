@@ -14,6 +14,7 @@ import (
 	"mr-review/internal/projectroot"
 	rn "mr-review/internal/runner"
 	"mr-review/internal/skill"
+	"mr-review/internal/terminal"
 )
 
 // Statuses.
@@ -200,6 +201,13 @@ func Run(s *config.Settings, version string, gl gitlab.Client, runners []rn.Runn
 		add(Check{"Logs", FAIL, err.Error(), "Fix LOG_DIR in .env."})
 	} else {
 		add(Check{"Logs", OK, s.LogDir, ""})
+	}
+	if em, problem := terminal.Detect(s.TerminalCmd); em == nil {
+		add(Check{"Terminal", WARN, problem, "Optional: «Открыть в терминале» needs a terminal emulator on this machine; set TERMINAL_CMD in .env (e.g. `gnome-terminal --working-directory={dir} -- bash -lc {cmd}`)."})
+	} else if !terminal.GraphicalSession() {
+		add(Check{"Terminal", WARN, em.Name + " found, but no DISPLAY / WAYLAND_DISPLAY in this process", "Start the dashboard from the desktop session (double-click or a graphical terminal) to open terminal windows from the UI."})
+	} else {
+		add(Check{"Terminal", OK, fmt.Sprintf("%s (%s)", em.Name, em.Path), ""})
 	}
 	add(Check{"Server", OK, s.URL(), ""})
 	return report

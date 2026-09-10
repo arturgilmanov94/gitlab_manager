@@ -47,6 +47,8 @@ type pageBase struct {
 	Counts      map[string]int64
 	Pending     []db.Approval       // open permission prompts across all runs (header badge)
 	Labels      []config.LabelStyle // highlighted GitLab labels (filter chips)
+	Terminal    bool                // «Открыть в терминале» works on this machine
+	TerminalWhy string              // reason when it does not
 	Nav         string
 	Title       string
 	Started     time.Time
@@ -138,6 +140,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 		"pipelineTone":  pipelineTone,
 		"fstatusLabel":  findingStatusLabel,
 		"checkLabel":    checkLabel,
+		"termCommand":   func(run *db.Run) string { return svc.TerminalCommand(run) },
 		"list":          func(items ...any) []any { return items },
 		"tokens":        formatTokens,
 		"tokensTip": func(in, out, read, write int64) string {
@@ -251,6 +254,11 @@ func (s *Server) routes() {
 		}
 		s.runStarted(w, runID)
 	})
+	s.mux.HandleFunc("POST /api/runs/{id}/terminal", func(w http.ResponseWriter, r *http.Request) {
+		body := readBody(r)
+		command, err := s.svc.OpenTerminal(pathID(r), body["resume"] == "1")
+		s.result(w, map[string]any{"command": command}, err)
+	})
 	s.mux.HandleFunc("POST /api/runs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": s.svc.Cancel(pathID(r))})
 	})
@@ -292,6 +300,10 @@ func (s *Server) routes() {
 
 func (s *Server) base(nav, title string) pageBase {
 	pending, _ := s.svc.DB.PendingApprovals()
+	termOK, termWhy := s.svc.TerminalAvailable()
+	if termOK {
+		termWhy = ""
+	}
 	return pageBase{
 		Version:     s.version,
 		ProjectRoot: s.svc.Settings.ProjectRoot,
@@ -301,6 +313,8 @@ func (s *Server) base(nav, title string) pageBase {
 		Counts:      s.svc.DB.Counts(),
 		Pending:     pending,
 		Labels:      s.svc.Settings.HighlightLabels,
+		Terminal:    termOK,
+		TerminalWhy: termWhy,
 		Nav:         nav,
 		Title:       title,
 		Started:     s.started,
@@ -1047,6 +1061,12 @@ func kindTip(kind string) string {
 		return "Подтянуть открытые задачи, где вы assignee. Ничего не запускается."
 	case "add":
 		return "Загрузить из GitLab по ссылке и добавить в dashboard. Ничего не запускается."
+	case "terminal":
+		return "Откроет окно терминала на этой машине в каталоге сессии и продолжит её интерактивно (resume той же сессии агента). В терминале действуют ваши обычные права агента, а не ограничения dashboard."
+	case "terminal-dir":
+		return "Откроет окно терминала на этой машине в каталоге сессии (workspace или корень проекта) без запуска агента."
+	case "terminal-copy":
+		return "Скопировать команду: перейти в каталог сессии и продолжить её. Для случая, когда dashboard открыт с другой машины."
 	}
 	return ""
 }

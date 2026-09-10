@@ -228,6 +228,12 @@
     }
   };
 
+  // Open a terminal window on the dashboard machine for a run (resume = continue the agent session there).
+  window.openTerminal = async function (runId, resume, button) {
+    const data = await call('POST', `/api/runs/${runId}/terminal`, { resume: resume ? '1' : '' }, button);
+    if (data) flash('Терминал открыт: ' + data.command, true);
+  };
+
   window.copyText = async function (text) {
     try { await navigator.clipboard.writeText(text); flash('Скопировано', true); } catch (e) { flash('Не удалось скопировать', false); }
   };

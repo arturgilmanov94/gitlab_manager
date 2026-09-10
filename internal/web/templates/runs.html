@@ -14,8 +14,8 @@
 <table class="table list" id="runs-table">
   <thead><tr><th>#</th><th>Объект</th><th>Тип</th><th>Состояние</th><th class="hide-lg">Агент · skill</th><th class="hide-lg">Токены</th><th>Когда</th><th class="right"></th></tr></thead>
   <tbody>
-  {{range .Active}}{{template "run-row" .}}{{end}}
-  {{range .Finished}}{{template "run-row" .}}{{end}}
+  {{range .Active}}{{template "run-row" (dict "Row" . "Base" $.Base)}}{{end}}
+  {{range .Finished}}{{template "run-row" (dict "Row" . "Base" $.Base)}}{{end}}
   </tbody>
 </table>
 <div class="empty filter-empty" hidden>Под фильтр ничего не подходит. <a href="#" data-reset-link>Сбросить фильтры</a></div>
@@ -24,11 +24,14 @@
 {{end}}
 
 {{define "run-row"}}
+{{$base := .Base}}
+{{with .Row}}
+{{$rowID := .ID}}
 <tr data-status="{{.Status}}">
   <td class="ref-cell"><a class="ref" href="{{runPath .Kind .ID}}">#{{.ID}}</a></td>
   <td class="title-cell">
     {{if .MRIID}}<a class="title" href="{{mrPath (deref .MRID)}}">!{{.MRIID}} {{.MRTitle}}</a>{{else if .IssueIID}}<a class="title" href="{{issuePath (deref .IssueID)}}">#{{.IssueIID}} {{.IssueTitle}}</a>{{else}}<span class="muted">—</span>{{end}}
-    <div class="sub">{{.ObjectProject}}{{if .Branch}} · <span class="mono">{{.Branch}}</span>{{end}}{{if .Chain}} · <span class="chain tip" data-tip="Запуски в одной сессии агента: общий контекст, один чат.">сессия: {{range $i, $r := .Chain}}{{if $i}} → {{end}}{{if eq $r.ID $.ID}}<b>#{{$r.ID}}</b>{{else}}<a href="{{runPath $r.Kind $r.ID}}">#{{$r.ID}}</a>{{end}}{{end}}</span>{{end}}</div>
+    <div class="sub">{{.ObjectProject}}{{if .Branch}} · <span class="mono">{{.Branch}}</span>{{end}}{{if .Chain}} · <span class="chain tip" data-tip="Запуски в одной сессии агента: общий контекст, один чат.">сессия: {{range $i, $r := .Chain}}{{if $i}} → {{end}}{{if eq $r.ID $rowID}}<b>#{{$r.ID}}</b>{{else}}<a href="{{runPath $r.Kind $r.ID}}">#{{$r.ID}}</a>{{end}}{{end}}</span>{{end}}</div>
   </td>
   <td data-label="Тип">{{kindLabel .Kind}}</td>
   <td data-label="Состояние">
@@ -50,6 +53,7 @@
         <summary title="Ещё действия">⋯</summary>
         <div class="menu-items">
           <a class="item" href="{{runPath .Kind .ID}}/log" target="_blank">Технический лог</a>
+          {{if and (not .Active) .SessionID}}{{if $base.Terminal}}<button class="item tip" data-tip="{{kindTip "terminal"}}" onclick="openTerminal('{{.ID}}', true, this)">Продолжить в терминале</button>{{else}}<span class="item tip" aria-disabled="true" data-tip="{{$base.TerminalWhy}}">Продолжить в терминале</span>{{end}}{{end}}
           {{if not .Active}}<button class="item tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.ID}}/retry', {}, this).then(r => r && reload())">Повторить</button>{{end}}
           {{if .Active}}<div class="divider"></div><button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
         </div>
@@ -57,4 +61,5 @@
     </div>
   </td>
 </tr>
+{{end}}
 {{end}}

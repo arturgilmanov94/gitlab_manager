@@ -23,7 +23,19 @@
     {{else if eq .Run.Status "failed"}}
       <button class="btn btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Run.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Повторить</button>
     {{end}}
+    {{if and (not .Run.Active) .Run.SessionID}}
+      {{if .Base.Terminal}}<button class="btn tip" data-tip="{{kindTip "terminal"}}" onclick="openTerminal('{{.Run.ID}}', true, this)">Продолжить в терминале</button>
+      {{else}}<span class="disabled-wrap tip" data-tip="{{.Base.TerminalWhy}}"><button class="btn" disabled>Продолжить в терминале</button></span>{{end}}
+    {{end}}
     <a class="btn tip" data-tip="Команда, промпт, stderr и stdout агента — для диагностики." href="{{runPath .Run.Kind .Run.ID}}/log" target="_blank">Технический лог</a>
+    <details class="menu">
+      <summary title="Ещё действия">⋯</summary>
+      <div class="menu-items">
+        {{if .Base.Terminal}}<button class="item tip" data-tip="{{kindTip "terminal-dir"}}" onclick="openTerminal('{{.Run.ID}}', false, this)">Открыть терминал в каталоге сессии</button>
+        {{else}}<span class="item tip" aria-disabled="true" data-tip="{{.Base.TerminalWhy}}">Открыть терминал в каталоге сессии</span>{{end}}
+        <button class="item tip" data-tip="{{kindTip "terminal-copy"}}" onclick="copyText({{termCommand .Run}})">Скопировать команду для терминала<span class="sub mono">{{termCommand .Run}}</span></button>
+      </div>
+    </details>
   </div>
 </section>
 
@@ -156,6 +168,7 @@
       <summary title="Ещё действия">⋯</summary>
       <div class="menu-items">
         <button class="item" onclick="copyText('{{.Worktree.Path}}')">Скопировать путь workspace</button>
+        {{if .Base.Terminal}}<button class="item tip" data-tip="{{kindTip "terminal-dir"}}" onclick="openTerminal('{{.Run.ID}}', false, this)">Открыть терминал в workspace</button>{{end}}
         <div class="divider"></div>
         <button class="item danger tip" data-tip="Удалить каталог workspace из runtime/. Ветка и коммиты остаются в репозитории; незакоммиченные изменения будут потеряны." onclick="confirm('Удалить workspace? Незакоммиченные изменения пропадут.') && del('/api/runs/{{.Run.ID}}/worktree', this).then(r => r && reload())">Удалить workspace</button>
       </div>

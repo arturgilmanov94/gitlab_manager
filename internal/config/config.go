@@ -57,6 +57,9 @@ type Settings struct {
 	BaseBranch     string
 	RunConcurrency int
 
+	// TerminalCmd is the TERMINAL_CMD template for «Открыть в терминале» ("" = detect gnome-terminal, konsole, ...).
+	TerminalCmd string
+
 	// HighlightLabels are the GitLab labels worth showing (and filtering by) in the lists, with their colours.
 	// Every other label stays out of the way. Configured by HIGHLIGHT_LABELS=high:red,product:yellow,bug:orange.
 	HighlightLabels []LabelStyle
@@ -223,6 +226,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		BaseBranch:            str("BASE_BRANCH", "develop"),
 		RunConcurrency:        num("RUN_CONCURRENCY", 4),
 		HighlightLabels:       ParseHighlightLabels(str("HIGHLIGHT_LABELS", DefaultHighlightLabels)),
+		TerminalCmd:           strings.TrimSpace(get("TERMINAL_CMD")),
 	}
 	if s.RunConcurrency < 1 {
 		s.RunConcurrency = 1

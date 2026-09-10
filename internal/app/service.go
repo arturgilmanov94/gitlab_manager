@@ -18,6 +18,7 @@ import (
 	"mr-review/internal/prompts"
 	"mr-review/internal/runner"
 	"mr-review/internal/skill"
+	"mr-review/internal/terminal"
 	"mr-review/internal/worktree"
 )
 
@@ -35,6 +36,9 @@ type Service struct {
 	GitLab    gitlab.Client
 	Runners   map[string]runner.Runner
 	Worktrees *worktree.Manager
+
+	terminal     *terminal.Emulator // detected once at start; nil = «Открыть в терминале» unavailable
+	terminalNote string             // why no terminal is available
 
 	sem       chan struct{}
 	mu        sync.Mutex
@@ -55,6 +59,7 @@ type approvalDecision struct {
 
 // New wires the service. Only detected runners are kept.
 func New(settings *config.Settings, database *db.DB, gl gitlab.Client, runners []runner.Runner) *Service {
+	em, note := terminal.Detect(settings.TerminalCmd)
 	s := &Service{
 		Settings:  settings,
 		DB:        database,
@@ -64,6 +69,7 @@ func New(settings *config.Settings, database *db.DB, gl gitlab.Client, runners [
 		cancels:   map[int64]context.CancelFunc{},
 		decisions: map[int64]chan approvalDecision{},
 	}
+	s.terminal, s.terminalNote = em, note
 	for _, r := range runners {
 		if _, _, ok := r.Detect(); ok {
 			s.Runners[r.Name()] = r
@@ -588,6 +594,84 @@ func (s *Service) StartVerifyFinding(mrID, findingID int64, runnerName string, c
 	fid := finding.ID
 	return s.enqueue(db.Run{Kind: db.KindVerifyFinding, MRID: &mr.ID, FindingID: &fid, HeadSHA: mr.HeadSHA, Runner: r.Name(),
 		SkillIdentifier: skillID(s.SkillFor(db.KindVerifyFinding)), ContinueRunID: runIDPtr(prev)})
+}
+
+// TerminalAvailable reports whether «Открыть в терминале» can work here, with the reason when it cannot.
+func (s *Service) TerminalAvailable() (bool, string) {
+	if s.terminal == nil {
+		return false, s.terminalNote
+	}
+	if !terminal.GraphicalSession() {
+		return false, "the dashboard runs without a graphical session (DISPLAY / WAYLAND_DISPLAY unset), so it cannot open windows"
+	}
+	return true, s.terminal.Name
+}
+
+// TerminalDir is the directory a run's terminal opens in: its workspace when it still exists, else the project root.
+func (s *Service) TerminalDir(run *db.Run) string {
+	if run.WorkDir != "" && dirExists(run.WorkDir) {
+		return run.WorkDir
+	}
+	return s.Settings.ProjectRoot
+}
+
+// ResumeCommand is the interactive command that continues the run's agent session ("" when there is none).
+func (s *Service) ResumeCommand(run *db.Run) string {
+	if run == nil || run.SessionID == "" {
+		return ""
+	}
+	bin := run.Runner
+	switch run.Runner {
+	case "claude":
+		bin = s.Settings.ClaudeBin
+	case "codex":
+		bin = s.Settings.CodexBin
+	case "cursor":
+		bin = "cursor-agent"
+	}
+	return terminal.ResumeCommand(run.Runner, bin, run.SessionID)
+}
+
+// TerminalCommand is the full shell line a developer can paste: cd into the run's directory and resume the session.
+func (s *Service) TerminalCommand(run *db.Run) string {
+	dir := s.TerminalDir(run)
+	if resume := s.ResumeCommand(run); resume != "" {
+		return "cd " + terminal.Quote(dir) + " && " + resume
+	}
+	return "cd " + terminal.Quote(dir)
+}
+
+// OpenTerminal opens a terminal window for a run: in its directory, continuing the agent session when resume is
+// set and the run has finished with a session id. Returns the command that was started inside the terminal.
+func (s *Service) OpenTerminal(runID int64, resume bool) (string, error) {
+	run, _ := s.DB.GetRun(runID)
+	if run == nil {
+		return "", userErr("run #%d not found", runID)
+	}
+	if ok, why := s.TerminalAvailable(); !ok {
+		return "", userErr("cannot open a terminal: %s", why)
+	}
+	command := ""
+	if resume {
+		if run.Active() {
+			return "", userErr("the session is still running; wait for it to finish, then continue it in the terminal")
+		}
+		command = s.ResumeCommand(run)
+		if command == "" {
+			return "", userErr("this run has no resumable session (the %s agent did not report one)", run.Runner)
+		}
+	}
+	dir := s.TerminalDir(run)
+	if dir == "" {
+		return "", userErr("project root is unknown")
+	}
+	if err := s.terminal.Open(dir, terminal.ShellCommand(command)); err != nil {
+		return "", &UserError{err.Error()}
+	}
+	if command == "" {
+		return "cd " + terminal.Quote(dir), nil
+	}
+	return "cd " + terminal.Quote(dir) + " && " + command, nil
 }
 
 // Changes summarises what happened on the MR since a reviewed SHA (compare API), cached per SHA pair.
