@@ -243,7 +243,8 @@ Draft), метку «новые коммиты», когда MR ушёл впе�
 | `PLANS_DIR` | `<проект>/.claude/plans` | Куда «Сохранить план в проект» пишет markdown |
 | `REPORT_LANGUAGE` | `ru` | Язык текстов агента в результатах (summary, замечания, планы); код, пути и сообщения коммитов не переводятся |
 | `GLAB_BIN`, `GITLAB_HOST`, `GITLAB_PROJECT` | `glab`, из `git remote`, из `git remote` | GitLab; host/project задаются вручную, если remote не разбирается |
-| `GITLAB_SYNC_ROLES`, `GITLAB_SYNC_ONLY_PROJECT` | `reviewer,assignee,author`, `1` | Что синхронизировать (author = мои MR) |
+| `GITLAB_SYNC_ROLES`, `GITLAB_SYNC_ONLY_PROJECT` | `reviewer,assignee,author`, `1` | Какие MR синхронизировать (author = мои MR; только текущий проект) |
+| `GITLAB_ISSUE_PROJECTS` | пусто | Из каких проектов брать задачи, где вы assignee. Пусто = из всех проектов GitLab (задачи часто ведутся не в репозитории кода) |
 | `HIGHLIGHT_LABELS` | `high:red,product:yellow,bug:orange` | Метки GitLab, которые показываются цветными бейджами на MR и задачах и доступны как фильтры; остальные метки — серым текстом у задач. Цвета: red, orange, yellow, green, blue, gray |
 | `BASE_BRANCH` | `develop` | От чего создаются ветки задач |
 | `RUN_CONCURRENCY` | `4` | Сколько агентов работают одновременно (по разным MR/задачам; один объект — один активный запуск) |

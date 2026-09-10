@@ -50,6 +50,9 @@ type Settings struct {
 	GitLabProject         string // override when the origin remote cannot be parsed
 	GitLabSyncRoles       []string
 	GitLabSyncOnlyProject bool
+	// GitLabIssueProjects lists the project paths whose issues are synchronised (tasks often live in other trackers
+	// than the code). Empty = every project where I am the assignee. GITLAB_ISSUE_PROJECTS=tn/project/eu/eu,tn/core/tradernet
+	GitLabIssueProjects []string
 
 	BaseBranch     string
 	RunConcurrency int
@@ -216,6 +219,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		GitLabProject:         strings.TrimSpace(get("GITLAB_PROJECT")),
 		GitLabSyncRoles:       splitList(str("GITLAB_SYNC_ROLES", "reviewer,assignee,author")),
 		GitLabSyncOnlyProject: boolean("GITLAB_SYNC_ONLY_PROJECT", true),
+		GitLabIssueProjects:   splitList(get("GITLAB_ISSUE_PROJECTS")),
 		BaseBranch:            str("BASE_BRANCH", "develop"),
 		RunConcurrency:        num("RUN_CONCURRENCY", 4),
 		HighlightLabels:       ParseHighlightLabels(str("HIGHLIGHT_LABELS", DefaultHighlightLabels)),

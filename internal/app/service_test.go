@@ -726,3 +726,45 @@ func TestVerifyFinding(t *testing.T) {
 		t.Fatal("same SHA: nothing changed")
 	}
 }
+
+// Tasks are tracked in other GitLab projects than the code: issue sync spans every project by default and can be
+// narrowed with GITLAB_ISSUE_PROJECTS.
+func TestSyncIssuesAcrossProjects(t *testing.T) {
+	svc, gl, _ := newService(t)
+	other := testutil.IssuePayload(8)
+	other["references"] = map[string]any{"full": "group/tracker/eu#8"}
+	other["web_url"] = "https://gitlab.example.com/group/tracker/eu/-/issues/8"
+	gl.Issues[8] = other
+	res, err := svc.SyncIssues()
+	if err != nil || res.Synced != 2 || res.Project != "*" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if len(gl.Calls) == 0 || gl.Calls[len(gl.Calls)-1] != "issues project=" {
+		t.Fatalf("issues must be listed across projects: %v", gl.Calls)
+	}
+	issues, _ := svc.DB.ListIssues()
+	projects := map[string]bool{}
+	for _, i := range issues {
+		projects[i.ProjectPath] = true
+	}
+	if !projects["group/tracker/eu"] || !projects["group/sub/project"] {
+		t.Fatalf("%v", projects)
+	}
+
+	settings, _ := testutil.Settings(t)
+	settings.GitLabIssueProjects = []string{"group/tracker/eu"}
+	svc2, gl2, _ := newServiceWith(t, settings)
+	gl2.Issues[8] = other
+	res, _ = svc2.SyncIssues()
+	if res.Synced != 1 || res.Project != "group/tracker/eu" {
+		t.Fatalf("single project goes into the API filter: %+v", res)
+	}
+	settings.GitLabIssueProjects = []string{"group/tracker/eu", "group/sub/project"}
+	svc3, gl3, _ := newServiceWith(t, settings)
+	gl3.Issues[8] = other
+	gl3.Issues[9] = map[string]any{"iid": 9.0, "title": "elsewhere", "web_url": "https://gitlab.example.com/x/y/-/issues/9", "references": map[string]any{"full": "x/y#9"}, "author": map[string]any{"username": "bob"}, "state": "opened", "labels": []any{}}
+	res, _ = svc3.SyncIssues()
+	if res.Synced != 2 {
+		t.Fatalf("several projects are filtered client-side: %+v", res)
+	}
+}

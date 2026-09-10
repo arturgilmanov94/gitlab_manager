@@ -287,6 +287,7 @@ func showConfig(settings *config.Settings) int {
 	fmt.Printf("plans_dir:       %s\n", firstOf(settings.PlansDir, "(auto: <project>/.claude/plans)"))
 	fmt.Printf("default_runner:  %s\n", settings.DefaultRunner)
 	fmt.Printf("gitlab_host:     %s\n", firstOf(settings.GitLabHost, "(from git remote)"))
+	fmt.Printf("issue_projects:  %s\n", firstOf(strings.Join(settings.GitLabIssueProjects, ","), "(all projects where I am the assignee)"))
 	var labels []string
 	for _, l := range settings.HighlightLabels {
 		labels = append(labels, l.Name+":"+l.Color)

@@ -133,6 +133,9 @@ func (f *FakeGitLab) GetIssue(ref gitlab.Ref) (map[string]any, error) {
 	return nil, errors.New("404 Not Found")
 }
 func (f *FakeGitLab) ListOpenIssues(host, username, projectPath string) ([]map[string]any, error) {
+	f.mu.Lock()
+	f.Calls = append(f.Calls, "issues project="+projectPath)
+	f.mu.Unlock()
 	var out []map[string]any
 	for _, issue := range f.Issues {
 		out = append(out, issue)

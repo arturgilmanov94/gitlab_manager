@@ -464,9 +464,16 @@ func (s *Service) SyncIssues() (SyncResult, error) {
 	if username == "" {
 		return SyncResult{}, userErr("glab is not authenticated for %s", host)
 	}
+	// Tasks live wherever the team tracks them (often not in the code repository): by default every project where
+	// I am the assignee; GITLAB_ISSUE_PROJECTS narrows it. A single project goes into the API call, several are
+	// filtered client-side.
+	wanted := map[string]bool{}
+	for _, p := range s.Settings.GitLabIssueProjects {
+		wanted[strings.ToLower(strings.Trim(p, "/"))] = true
+	}
 	filter := ""
-	if s.Settings.GitLabSyncOnlyProject {
-		filter = project
+	if len(wanted) == 1 {
+		filter = s.Settings.GitLabIssueProjects[0]
 	}
 	items, err := s.GitLab.ListOpenIssues(host, username, filter)
 	if err != nil {
@@ -477,6 +484,9 @@ func (s *Service) SyncIssues() (SyncResult, error) {
 		itemHost, itemProject, ok := gitlab.ProjectPathOf(item, "#")
 		if !ok {
 			itemHost, itemProject = host, project
+		}
+		if len(wanted) > 0 && !wanted[strings.ToLower(itemProject)] {
+			continue
 		}
 		ref := gitlab.Ref{Host: itemHost, ProjectPath: itemProject, IID: gitlab.Int(item, "iid")}
 		if _, err := s.DB.UpsertIssue(issueFromPayload(item, ref)); err == nil {
