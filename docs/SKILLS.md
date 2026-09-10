@@ -89,7 +89,7 @@ git-состояние не трогать, в GitLab не писать.
 на стенде, правки кода MR (только скрипт и фикстуры).
 
 **Результат:** `summary`, `deployed[]`, `tests`, `script_path`, `script_output`, `problems[]` (`severity`, `title`, `description`),
-`changes[]`, `todo[]`, `commit_message`. Скрипт остаётся в workspace: Commit / Push / удалить — по кнопкам на странице сессии.
+`changes[]`, `todo[]`, `self_review` (обзор собственного диффа), `commit_message`. Скрипт остаётся в workspace: Commit / Push / удалить — по кнопкам на странице сессии.
 
 ### `fix_comments` — исправление замечаний ревьюеров
 
@@ -111,6 +111,12 @@ dashboard переводит сессию в «Нужен ваш ответ», �
 **Вход:** ссылка на задачу, project path, IID, заголовок, описание, указания разработчика. Режим read-only, `cwd` = корень проекта.
 
 **Результат:** `summary`, `steps[]`, `files[]` (`path`, `change`), `risks[]`, `questions[]`, `estimate`.
+
+### `plan` в режиме бага
+
+Тот же вход, промпт «Mode: BUG ANALYSIS». Результат: `summary`, `expected`, `actual`, `reproduction[]`, `path[]`, `root_cause`,
+`evidence[]`, `fix`, `risks[]`, `questions[]`, `estimate`, `ask[]`. При «Исправить» root cause, fix и evidence передаются в
+указания реализации текстом.
 
 ### `implement` — решение задачи
 

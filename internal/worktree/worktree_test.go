@@ -103,3 +103,43 @@ func TestPrepareConcurrentBranches(t *testing.T) {
 		}
 	}
 }
+
+// Instruction files linked from the main checkout never show up as changes or get committed; a fresh branch does
+// not count as pushed just because it tracks origin/<base>.
+func TestLinkedConfigExcludedAndUnpushed(t *testing.T) {
+	m, root := newManager(t)
+	_ = os.MkdirAll(filepath.Join(root, ".claude"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, ".claude", "note.md"), []byte("x"), 0o644)
+	ctx := context.Background()
+	path, err := m.Prepare(ctx, "feature/x", func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(filepath.Join(path, ".claude")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected a linked .claude in the worktree: %v", err)
+	}
+	if status, _ := m.Status(ctx, path); strings.TrimSpace(status) != "" {
+		t.Fatalf("linked files must be excluded from git status: %q", status)
+	}
+	if n, has := m.Unpushed(ctx, path); has || n != 0 {
+		t.Fatalf("fresh branch is not on origin: %d %v", n, has)
+	}
+	_ = os.WriteFile(filepath.Join(path, "a.txt"), []byte("a"), 0o644)
+	if _, err := m.Commit(ctx, path, "add a"); err != nil {
+		t.Fatal(err)
+	}
+	if tree := git(t, path, "ls-tree", "--name-only", "HEAD"); strings.Contains(tree, ".claude") || !strings.Contains(tree, "a.txt") {
+		t.Fatalf("commit must contain a.txt and not the symlink: %s", tree)
+	}
+	if _, err := m.Push(ctx, path, "feature/x"); err != nil {
+		t.Fatal(err)
+	}
+	if n, has := m.Unpushed(ctx, path); !has || n != 0 {
+		t.Fatalf("after push: %d %v", n, has)
+	}
+	_ = os.WriteFile(filepath.Join(path, "b.txt"), []byte("b"), 0o644)
+	_, _ = m.Commit(ctx, path, "add b")
+	if n, has := m.Unpushed(ctx, path); !has || n != 1 {
+		t.Fatalf("one commit ahead: %d %v", n, has)
+	}
+}

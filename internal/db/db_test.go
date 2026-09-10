@@ -21,7 +21,7 @@ func open(t *testing.T) *DB {
 func TestMigrateIdempotent(t *testing.T) {
 	d := open(t)
 	applied, err := d.Migrate()
-	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 12 {
+	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 13 {
 		t.Fatalf("%v %v %v", applied, err, d.SchemaVersion())
 	}
 }
@@ -158,5 +158,16 @@ func TestPhasesAndTimeline(t *testing.T) {
 	}
 	if d.CurrentPhase(id) != "Реализация" || d.CurrentPhase(999) != "" {
 		t.Fatal(d.CurrentPhase(id))
+	}
+}
+
+func TestLooksLikeBug(t *testing.T) {
+	for _, c := range []struct {
+		title, labels string
+		want          bool
+	}{{"Add export", "backend", false}, {"Fix crash on login", "", true}, {"Report", "Bug, PHP", true}, {"Ошибка при сохранении", "", true}, {"Исправить расчёт", "", true}, {"Product feature", "Product", false}} {
+		if got := (Issue{Title: c.title, Labels: c.labels}).LooksLikeBug(); got != c.want {
+			t.Fatalf("%q / %q: %v", c.title, c.labels, got)
+		}
 	}
 }

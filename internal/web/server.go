@@ -715,7 +715,7 @@ func (s *Server) issuePage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, "issue", map[string]any{
 		"Base": s.base("issues", fmt.Sprintf("#%d %s", issue.IID, issue.Title)), "Issue": issue, "Runs": runs, "Active": active,
-		"Plan": plan, "Impl": impl, "Failed": failed, "State": state,
+		"Plan": plan, "Impl": impl, "Failed": failed, "State": state, "LooksLikeBug": issue.LooksLikeBug(), "PlanIsBug": plan != nil && plan.Mode == "bug",
 		"PlanSessions": s.svc.Resumable(runs, s.svc.Settings.ProjectRoot), "ImplSessions": s.svc.Resumable(runs, s.svc.Worktrees.Path(issue.Ref())),
 		"DefaultBranch": issue.Ref(), "BaseBranch": s.svc.Settings.BaseBranch,
 	})
@@ -786,7 +786,11 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 	if run.Kind == db.KindPlan && run.ResultJSON != "" {
 		var plan map[string]any
 		_ = json.Unmarshal([]byte(run.ResultJSON), &plan)
-		data["Plan"] = plan
+		if run.Mode == "bug" {
+			data["Bug"] = plan
+		} else {
+			data["Plan"] = plan
+		}
 	}
 	if run.IsEdit() {
 		if run.ResultJSON != "" {
@@ -796,6 +800,10 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		}
 		if !run.Active() {
 			data["Worktree"] = s.svc.Worktree(run)
+			if run.Kind == db.KindImplement && run.IssueID != nil {
+				issue, _ := s.svc.DB.GetIssue(*run.IssueID)
+				data["MRDraft"] = s.svc.MRDraftFor(run, issue)
+			}
 		}
 	}
 	data["Timeline"] = s.svc.DB.TimelineFor(run.ID)
@@ -919,7 +927,7 @@ func (s *Server) apiStartIssueRun(w http.ResponseWriter, r *http.Request) {
 	cont, _ := strconv.ParseInt(body["continue_run"], 10, 64) // agent session to continue; 0 = new chat
 	switch body["kind"] {
 	case "plan", "":
-		runID, err = s.svc.StartPlan(id, body["runner"], body["notes"], cont)
+		runID, err = s.svc.StartPlan(id, body["runner"], body["notes"], cont, body["mode"])
 	case "implement":
 		notes := body["notes"]
 		if planID, perr := strconv.ParseInt(body["plan_run"], 10, 64); perr == nil && planID > 0 {
@@ -1115,6 +1123,10 @@ func kindTip(kind string) string {
 		return "Подтянуть открытые задачи, где вы assignee. Ничего не запускается."
 	case "add":
 		return "Загрузить из GitLab по ссылке и добавить в dashboard. Ничего не запускается."
+	case "bug":
+		return "Режим разбора бага: ожидаемое и фактическое поведение, путь выполнения, воспроизведение, root cause с доказательствами и предложение исправления. Без изменений кода."
+	case "create-mr":
+		return "Создать MR из ветки workspace в базовую через GitLab с этим заголовком и описанием. Нужен Push; чек-лист выше подсказывает, что ещё стоит сделать."
 	case "answer":
 		return "Ответы уйдут в ту же сессию агента, и он продолжит задачу с учётом ваших решений. Каждый вопрос нужно закрыть: вариантом или своим текстом."
 	case "terminal":
@@ -1396,6 +1408,28 @@ func planAsText(raw string) string {
 	}
 	if json.Unmarshal([]byte(raw), &plan) != nil {
 		return raw
+	}
+	var bug struct {
+		RootCause string   `json:"root_cause"`
+		Fix       string   `json:"fix"`
+		Evidence  []string `json:"evidence"`
+	}
+	if json.Unmarshal([]byte(raw), &bug) == nil && bug.RootCause != "" {
+		var b strings.Builder
+		b.WriteString(plan.Summary + "\n\nRoot cause:\n" + bug.RootCause + "\n\nProposed fix:\n" + bug.Fix + "\n")
+		if len(bug.Evidence) > 0 {
+			b.WriteString("\nEvidence:\n")
+			for _, e := range bug.Evidence {
+				b.WriteString("- " + e + "\n")
+			}
+		}
+		if len(plan.Risks) > 0 {
+			b.WriteString("\nRisks:\n")
+			for _, r := range plan.Risks {
+				b.WriteString("- " + r + "\n")
+			}
+		}
+		return b.String()
 	}
 	var b strings.Builder
 	b.WriteString(plan.Summary + "\n\nSteps:\n")

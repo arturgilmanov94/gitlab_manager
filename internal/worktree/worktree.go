@@ -104,21 +104,61 @@ func (m *Manager) Prepare(ctx context.Context, branch string, log func(string)) 
 	return path, nil
 }
 
-// linkClaudeConfig symlinks untracked Claude instruction files from the main checkout.
+// linkClaudeConfig symlinks untracked Claude instruction files from the main checkout and excludes the links
+// from git in this worktree (info/exclude), so `git status` stays clean and Commit never adds a local symlink.
 func (m *Manager) linkClaudeConfig(path string, log func(string)) {
+	var linked []string
 	for _, name := range []string{".claude", "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md"} {
 		src := filepath.Join(m.Root, name)
 		dst := filepath.Join(path, name)
 		if _, err := os.Lstat(src); err != nil {
 			continue
 		}
-		if _, err := os.Lstat(dst); err == nil {
+		if info, err := os.Lstat(dst); err == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				linked = append(linked, name)
+			}
 			continue // tracked in git or already linked
 		}
 		if err := os.Symlink(src, dst); err == nil {
 			log("linked " + name + " from the main checkout")
+			linked = append(linked, name)
 		}
 	}
+	if len(linked) > 0 {
+		m.exclude(path, linked)
+	}
+}
+
+// exclude appends names to the worktree's private ignore list (.git/info/exclude of this worktree).
+func (m *Manager) exclude(path string, names []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	out, err := m.git(ctx, path, "rev-parse", "--git-path", "info/exclude")
+	if err != nil {
+		return
+	}
+	file := strings.TrimSpace(out)
+	if !filepath.IsAbs(file) {
+		file = filepath.Join(path, file)
+	}
+	_ = os.MkdirAll(filepath.Dir(file), 0o755)
+	existing, _ := os.ReadFile(file)
+	var add []string
+	for _, name := range names {
+		if !strings.Contains(string(existing), "\n/"+name+"\n") && !strings.HasPrefix(string(existing), "/"+name+"\n") {
+			add = append(add, "/"+name)
+		}
+	}
+	if len(add) == 0 {
+		return
+	}
+	f, err := os.OpenFile(file, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString("# mr-review: instruction files linked from the main checkout\n" + strings.Join(add, "\n") + "\n")
 }
 
 // Status returns `git status --short` of the worktree.
@@ -209,13 +249,18 @@ func (m *Manager) List(ctx context.Context) ([]Entry, error) {
 	return mine, nil
 }
 
-// Unpushed reports how many commits of the worktree branch are not on its upstream; hasUpstream is false when
-// the branch was never pushed.
+// Unpushed reports how many commits of the worktree branch are not on origin/<branch>; hasUpstream is false when
+// the branch itself was never pushed (a fresh branch tracks origin/<base>, which does not count).
 func (m *Manager) Unpushed(ctx context.Context, path string) (count int, hasUpstream bool) {
-	if _, err := m.git(ctx, path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); err != nil {
+	branch, err := m.git(ctx, path, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
 		return 0, false
 	}
-	out, err := m.git(ctx, path, "rev-list", "--count", "@{u}..HEAD")
+	remote := "refs/remotes/origin/" + strings.TrimSpace(branch)
+	if _, err := m.git(ctx, path, "rev-parse", "--verify", "--quiet", remote); err != nil {
+		return 0, false
+	}
+	out, err := m.git(ctx, path, "rev-list", "--count", remote+"..HEAD")
 	if err != nil {
 		return 0, true
 	}

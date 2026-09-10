@@ -147,6 +147,35 @@ var PlanSchema = []byte(`{
   "additionalProperties": false
 }`)
 
+// BugSchema is the structured result of a bug analysis (the «Разбор бага» mode of «Исследовать»).
+var BugSchema = []byte(`{
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string", "description": "markdown, 3-8 sentences: what is broken, where the defect lives, how to fix it"},
+    "expected": {"type": "string", "description": "expected behaviour, one paragraph"},
+    "actual": {"type": "string", "description": "actual behaviour as reported/observed"},
+    "reproduction": {"type": "array", "items": {"type": "string"}, "description": "steps or a script to reproduce; empty if it cannot be reproduced from the code alone"},
+    "path": {"type": "array", "items": {"type": "string"}, "description": "execution path: entry point → ... → the failing place, as path/file.php:line or Class::method"},
+    "root_cause": {"type": "string", "description": "markdown: the defect itself, with the exact place in inline code"},
+    "evidence": {"type": "array", "items": {"type": "string"}, "description": "what proves the root cause: code lines, logs, tests"},
+    "fix": {"type": "string", "description": "markdown: the proposed change, files and what changes; a fenced code block where it helps"},
+    "risks": {"type": "array", "items": {"type": "string"}},
+    "questions": {"type": "array", "items": {"type": "string"}, "description": "open questions for the reporter"},
+    "estimate": {"type": "string", "description": "rough size of the fix: XS/S/M/L with one sentence"},
+    ` + questionsSchema + `
+  },
+  "required": ["summary", "expected", "actual", "reproduction", "path", "root_cause", "evidence", "fix", "risks", "questions", "estimate", "ask"],
+  "additionalProperties": false
+}`)
+
+// PlanBug builds the read-only bug analysis prompt («Разобрать баг»).
+func PlanBug(issue Issue, notes string, s *skill.Skill) string {
+	return SlashPrefix(s, issue.WebURL) + "Mode: BUG ANALYSIS (read-only: find the root cause, do not change code)\n\n" + issueBlock(issue, notes) + "\n" + skillLine(s) + "\n\n" +
+		"Treat the task as a bug report. Establish expected vs actual behaviour, follow the execution path through the code (you are in the project root), " +
+		"find the root cause with evidence (exact files and lines, logs, existing tests), describe how to reproduce it, and propose the fix. " +
+		"Do not stop at the first plausible spot: confirm the cause against the code. You may fetch more context with read-only `glab api` calls.\n" + questionsRule + "\n" + readOnlyRules()
+}
+
 // ImplementSchema is the structured report after editing in a worktree.
 var ImplementSchema = []byte(`{
   "type": "object",
@@ -157,10 +186,11 @@ var ImplementSchema = []byte(`{
     }, "required": ["path", "description"], "additionalProperties": false}},
     "tests": {"type": "string", "description": "which tests/checks were run and their result; 'none' if nothing"},
     "todo": {"type": "array", "items": {"type": "string"}, "description": "what is left or needs a human decision"},
+    "self_review": {"type": "string", "description": "markdown: your own review of the final diff as a strict reviewer — what you checked, what you found and fixed, what remains a concern; never empty"},
     "commit_message": {"type": "string", "description": "suggested commit message following the project convention"},
     ` + questionsSchema + `
   },
-  "required": ["summary", "changes", "tests", "todo", "commit_message", "ask"],
+  "required": ["summary", "changes", "tests", "todo", "self_review", "commit_message", "ask"],
   "additionalProperties": false
 }`)
 
@@ -314,8 +344,10 @@ func Implement(issue Issue, notes, branch, baseBranch string, s *skill.Skill) st
 	return SlashPrefix(s, issue.WebURL) + "Mode: IMPLEMENT (edit files in a dedicated worktree)\n\n" + issueBlock(issue, notes) +
 		fmt.Sprintf("\nYou are in a git worktree on branch `%s` created from `origin/%s`. Implement the task here.\n", branch, baseBranch) +
 		skillLine(s) + "\n\n" +
-		"Follow the project's rules and conventions, keep the change focused on the task, add or update tests where the project covers the area, " +
-		"and run the project's style/test checks that apply to the touched files. Report what you changed, what you ran, and what is left.\n" + questionsRule + "\n" + editRules()
+		"Work in phases, in this order: (1) PLAN — understand the task and the code, decide the change (briefly); (2) IMPLEMENT — follow the project's rules " +
+		"and conventions, keep the change focused on the task; (3) TESTS — add or update tests where the project covers the area and run the project's " +
+		"style/test checks that apply to the touched files; (4) SELF-REVIEW — read the whole diff as a strict reviewer (regressions, error handling, edge " +
+		"cases, naming, leftovers), fix what you find, and describe it in `self_review`; (5) REPORT — what you changed, what you ran, what is left.\n" + questionsRule + "\n" + editRules()
 }
 
 // readOnlyRules / editRules are the dashboard constraints plus the report-language rule.

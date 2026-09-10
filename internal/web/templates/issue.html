@@ -17,17 +17,17 @@
       <a class="btn btn-primary" href="{{runPath .Impl.Kind .Impl.ID}}">Подготовить MR</a>
       <a class="btn" href="{{runPath .Impl.Kind .Impl.ID}}#workspace">Показать diff</a>
     {{else if eq .State "planned"}}
-      <button class="btn btn-primary tip" data-tip="{{kindTip "implement_plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {plan_run: '{{.Plan.ID}}', notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Реализовать этот план</button>
-      <a class="btn" href="{{runPath .Plan.Kind .Plan.ID}}">Открыть план</a>
+      <button class="btn btn-primary tip" data-tip="{{kindTip "implement_plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {plan_run: '{{.Plan.ID}}', notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">{{if .PlanIsBug}}Исправить{{else}}Реализовать этот план{{end}}</button>
+      <a class="btn" href="{{runPath .Plan.Kind .Plan.ID}}">{{if .PlanIsBug}}Открыть разбор{{else}}Открыть план{{end}}</a>
     {{else}}
       <button class="btn btn-primary tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Решить задачу</button>
-      <button class="btn tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'plan', this, {notes: document.getElementById('notes').value})">Исследовать</button>
+      <button class="btn tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'plan', this, {notes: document.getElementById('notes').value, mode: planMode()})">Исследовать</button>
     {{end}}
     <details class="menu">
       <summary title="Ещё действия">⋯</summary>
       <div class="menu-items">
         {{if not .Active}}
-          <button class="item tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'plan', this, {notes: document.getElementById('notes').value})">Исследовать{{if .Plan}} заново{{end}}<span class="sub">без изменений кода</span></button>
+          <button class="item tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'plan', this, {notes: document.getElementById('notes').value, mode: planMode()})">Исследовать{{if .Plan}} заново{{end}}<span class="sub">без изменений кода</span></button>
           <button class="item tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Решить без плана<span class="sub">агент сам спланирует и реализует</span></button>
           <div class="divider"></div>
         {{end}}
@@ -57,7 +57,7 @@
       {{if .Active}}{{.Active.Runner}} · <span data-started="{{.Active.StartedAt}}"><span class="elapsed">—</span></span>
       {{else if eq .State "failed"}}{{firstLine .Failed.Error}}
       {{else if eq .State "ready"}}реализация в workspace на ветке <span class="mono">{{.Impl.Branch}}</span>; дальше diff, commit, push и MR
-      {{else if eq .State "planned"}}исследование #{{.Plan.ID}} от {{when .Plan.FinishedAt}}; план будет передан агенту при реализации
+      {{else if eq .State "planned"}}{{if .PlanIsBug}}разбор бага{{else}}исследование{{end}} #{{.Plan.ID}} от {{when .Plan.FinishedAt}}; {{if .PlanIsBug}}root cause и предложение исправления будут переданы агенту{{else}}план будет передан агенту при реализации{{end}}
       {{else}}агент ещё не работал над задачей{{end}}
     </div>
   </div>
@@ -84,6 +84,11 @@
 <section class="card" id="solve">
   <div class="card-head"><h2>Указания агенту</h2><span class="small muted">необязательно</span></div>
   <div class="field"><label for="notes">Что учесть</label><div style="flex:1"><textarea id="notes" rows="3" placeholder="Как решать, что учесть, чего не трогать. Пусто — задача решается как есть."></textarea></div></div>
+  <div class="field"><label>Исследовать как</label><div class="segmented" id="plan-mode">
+    <label class="seg{{if not .LooksLikeBug}} checked{{end}} tip" data-tip="{{kindTip "plan"}}"><input type="radio" name="plan_mode" value=""{{if not .LooksLikeBug}} checked{{end}}> Задачу · план реализации</label>
+    <label class="seg{{if .LooksLikeBug}} checked{{end}} tip" data-tip="{{kindTip "bug"}}"><input type="radio" name="plan_mode" value="bug"{{if .LooksLikeBug}} checked{{end}}> Баг · root cause и исправление</label>
+    <span class="hint">{{if .LooksLikeBug}}по меткам и названию похоже на баг{{else}}переключите, если это дефект{{end}}</span>
+  </div></div>
   <details class="section"><summary>Дополнительно: ветка</summary>
     <div class="field" style="margin-top:8px"><label for="branch">Ветка</label><div><input id="branch" type="text" size="44" value="{{.DefaultBranch}}" class="mono"><div class="hint">создаётся от origin/{{.BaseBranch}} в отдельном workspace; по умолчанию имя = ссылка на задачу, как принято в проекте</div></div></div>
   </details>

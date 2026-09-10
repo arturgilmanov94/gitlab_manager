@@ -626,3 +626,52 @@ func TestTimelineOnRunPage(t *testing.T) {
 		t.Fatalf("api must carry the timeline: %s", body)
 	}
 }
+
+// Task page preselects the bug mode for bug-like issues; the run page renders the bug analysis and the MR checklist.
+func TestBugModeAndToMRPages(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	gl := svc.GitLab.(*testutil.FakeGitLab)
+	bug := testutil.IssuePayload(9)
+	bug["title"] = "Bug: export crashes"
+	gl.Issues[9] = bug
+	postJSON(t, ts.URL+"/api/issues", map[string]any{"url": "#9"})
+	if _, body := get(t, ts.URL+"/-/issue/1"); !strings.Contains(body, `name="plan_mode" value="bug" checked`) || !strings.Contains(body, "похоже на баг") || !strings.Contains(body, "mode: planMode()") {
+		t.Fatal("bug-like issue must preselect the bug mode")
+	}
+	fr.Outputs = []map[string]any{{"summary": "Export crashes on empty rows.", "expected": "file", "actual": "500", "reproduction": []any{"export with no rows"}, "path": []any{"Export::run"},
+		"root_cause": "division by zero in `Export::avg()`", "evidence": []any{"src/Export.php:10"}, "fix": "guard zero", "risks": []any{}, "questions": []any{}, "estimate": "XS", "ask": []any{}}}
+	code, out := postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "plan", "mode": "bug"})
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/task-plan/1"); !strings.Contains(body, "Разбор бага") || !strings.Contains(body, "Root cause") || !strings.Contains(body, "division by zero") || !strings.Contains(body, ">Исправить<") {
+		t.Fatal("run page must render the bug analysis with the fix action")
+	}
+	if _, body := get(t, ts.URL+"/-/issue/1"); !strings.Contains(body, ">Исправить<") || !strings.Contains(body, "Открыть разбор") {
+		t.Fatal("task page must offer the fix")
+	}
+	// Implementation with the fix handed over; the run page offers «Довести до MR» with the checklist and the prefilled form.
+	fr.Outputs = []map[string]any{{"summary": "Guarded.", "changes": []any{map[string]any{"path": "src/Export.php", "description": "guard"}}, "tests": "none",
+		"todo": []any{}, "self_review": "ok", "commit_message": "fix", "ask": []any{}}}
+	code, out = postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "implement", "plan_run": "1"})
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(2); return r != nil && r.Status == db.StatusDone })
+	if r, _ := svc.DB.GetRun(2); !strings.Contains(r.Prompt, "Root cause:") || !strings.Contains(r.Prompt, "division by zero") {
+		t.Fatalf("bug analysis must be handed to the implementation: %s", r.Prompt)
+	}
+	_, body := get(t, ts.URL+"/-/task-implement/2")
+	for _, want := range []string{`id="to-mr"`, "Тесты · не запускались", "Self-review · сделан агентом", "Чистый diff · есть незакоммиченные", "ветки ещё нет на origin", `createMRForm(event, '2')`, "## Что сделано", "Guarded."} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("to-mr block missing %q", want)
+		}
+	}
+	if strings.Contains(body, `<button type="submit" class="btn btn-primary tip"`) {
+		t.Fatal("MR creation must be disabled until the branch is pushed")
+	}
+	if code, out := postJSON(t, ts.URL+"/api/runs/2/mr", map[string]any{"title": "T", "description": "D"}); code != 200 || out["url"] == "" {
+		t.Fatalf("%d %v", code, out)
+	}
+}

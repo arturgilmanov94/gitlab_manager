@@ -208,6 +208,16 @@
     return false;
   };
 
+  // «Довести до MR»: create the merge request from the prefilled form on the run page.
+  window.createMRForm = async function (event, runId) {
+    event.preventDefault();
+    const form = event.target;
+    if (!confirm('Создать MR в GitLab из ветки workspace?')) return false;
+    const data = await call('POST', `/api/runs/${runId}/mr`, { title: form.title.value, description: form.description.value }, event.submitter);
+    if (data && data.url) { flash('MR создан: ' + data.url, true); window.open(data.url, '_blank'); }
+    return false;
+  };
+
   window.createMR = async function (runId, button) {
     const title = prompt('Заголовок MR (пусто = по задаче):', '');
     if (title === null) return;
@@ -226,6 +236,12 @@
       flash(decision === 'deny' ? 'Отклонено, агент продолжает' : 'Разрешено, агент продолжает', true);
       setTimeout(reload, 600);
     }
+  };
+
+  // Selected investigation mode on the task page ("" = task plan, "bug" = bug analysis).
+  window.planMode = function () {
+    const checked = document.querySelector('input[name="plan_mode"]:checked');
+    return checked ? checked.value : '';
   };
 
   // Save the skill override of one action (doctor page): project skill name and/or custom instructions.

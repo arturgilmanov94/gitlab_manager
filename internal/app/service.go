@@ -933,7 +933,10 @@ func (s *Service) Resumable(runs []db.RunSummary, dir string) []db.RunSummary {
 
 // StartPlan queues a read-only task analysis. continueRunID > 0 continues the agent session of an earlier
 // project-root run of the same issue (0 = new chat).
-func (s *Service) StartPlan(issueID int64, runnerName, notes string, continueRunID int64) (int64, error) {
+func (s *Service) StartPlan(issueID int64, runnerName, notes string, continueRunID int64, mode string) (int64, error) {
+	if mode != "" && mode != "bug" {
+		return 0, userErr("unknown plan mode %q (task or bug)", mode)
+	}
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
@@ -955,7 +958,7 @@ func (s *Service) StartPlan(issueID int64, runnerName, notes string, continueRun
 	if err != nil {
 		return 0, err
 	}
-	return s.enqueue(db.Run{Kind: db.KindPlan, IssueID: &issue.ID, Runner: r.Name(), Notes: notes, SkillIdentifier: skillID(s.SkillFor(db.KindPlan)), ContinueRunID: runIDPtr(prev)})
+	return s.enqueue(db.Run{Kind: db.KindPlan, IssueID: &issue.ID, Runner: r.Name(), Notes: notes, Mode: mode, SkillIdentifier: skillID(s.SkillFor(db.KindPlan)), ContinueRunID: runIDPtr(prev)})
 }
 
 // StartImplement queues an edit run in a worktree on `branch` (default: the issue reference). continueRunID > 0
@@ -1090,7 +1093,7 @@ func (s *Service) Retry(runID int64) (int64, error) {
 		if run.IssueID == nil {
 			return 0, userErr("run has no issue")
 		}
-		return s.StartPlan(*run.IssueID, run.Runner, run.Notes, derefID(run.ContinueRunID))
+		return s.StartPlan(*run.IssueID, run.Runner, run.Notes, derefID(run.ContinueRunID), run.Mode)
 	case db.KindImplement:
 		if run.IssueID == nil {
 			return 0, userErr("run has no issue")
@@ -1290,7 +1293,11 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		}
 		pi := prompts.Issue{WebURL: issue.WebURL, ProjectPath: issue.ProjectPath, Host: issue.GitLabHost, IID: issue.IID, Title: issue.Title, Description: issue.Description}
 		if run.Kind == db.KindPlan {
-			req.Prompt, req.Schema = prompts.Plan(pi, run.Notes, sk), prompts.PlanSchema
+			if run.Mode == "bug" {
+				req.Prompt, req.Schema = prompts.PlanBug(pi, run.Notes, sk), prompts.BugSchema
+			} else {
+				req.Prompt, req.Schema = prompts.Plan(pi, run.Notes, sk), prompts.PlanSchema
+			}
 			req.SessionName = fmt.Sprintf("plan #%d run %d", issue.IID, runID)
 		} else {
 			_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
@@ -1834,12 +1841,63 @@ func (s *Service) Workspaces() ([]Workspace, error) {
 
 // WorktreeState summarises a worktree for the run page.
 type WorktreeState struct {
-	Exists bool
-	Path   string
-	Branch string
-	Status string
-	Diff   string
-	Log    string
+	Exists      bool
+	Path        string
+	Branch      string
+	Status      string
+	Diff        string
+	Log         string
+	Unpushed    int  // commits not yet on origin
+	HasUpstream bool // the branch exists on origin
+}
+
+// Clean reports whether everything in the worktree is committed.
+func (w WorktreeState) Clean() bool { return w.Exists && strings.TrimSpace(w.Status) == "" }
+
+// Pushed reports whether the branch is on origin with no local commits ahead.
+func (w WorktreeState) Pushed() bool { return w.Exists && w.HasUpstream && w.Unpushed == 0 }
+
+// MRDraft is the prefilled «Довести до MR» form: title and a description built from the agent's report.
+type MRDraft struct {
+	Title       string
+	Description string
+}
+
+// MRDraftFor builds the MR title and description of an implementation run from the issue and the agent's report.
+func (s *Service) MRDraftFor(run *db.Run, issue *db.Issue) MRDraft {
+	draft := MRDraft{}
+	if issue != nil {
+		draft.Title = fmt.Sprintf("%s %s", issue.Ref(), issue.Title)
+	}
+	var report struct {
+		Summary    string   `json:"summary"`
+		Tests      string   `json:"tests"`
+		Todo       []string `json:"todo"`
+		SelfReview string   `json:"self_review"`
+	}
+	_ = json.Unmarshal([]byte(run.ResultJSON), &report)
+	var b strings.Builder
+	if issue != nil {
+		fmt.Fprintf(&b, "Closes %s\n\n", issue.WebURL)
+	}
+	if report.Summary != "" {
+		b.WriteString("## Что сделано\n\n" + strings.TrimSpace(report.Summary) + "\n\n")
+	}
+	if report.Tests != "" {
+		b.WriteString("## Проверки\n\n" + strings.TrimSpace(report.Tests) + "\n\n")
+	}
+	if len(report.Todo) > 0 {
+		b.WriteString("## Известные ограничения\n\n")
+		for _, t := range report.Todo {
+			b.WriteString("- " + strings.TrimSpace(t) + "\n")
+		}
+		b.WriteString("\n")
+	}
+	if report.SelfReview != "" {
+		b.WriteString("## Self-review\n\n" + strings.TrimSpace(report.SelfReview) + "\n")
+	}
+	draft.Description = strings.TrimSpace(b.String())
+	return draft
 }
 
 // Worktree returns the current state of a run's worktree.
@@ -1854,6 +1912,7 @@ func (s *Service) Worktree(run *db.Run) WorktreeState {
 	state.Status, _ = s.Worktrees.Status(ctx, run.WorkDir)
 	state.Diff, _ = s.Worktrees.Diff(ctx, run.WorkDir)
 	state.Log, _ = s.Worktrees.Log(ctx, run.WorkDir)
+	state.Unpushed, state.HasUpstream = s.Worktrees.Unpushed(ctx, run.WorkDir)
 	return state
 }
 

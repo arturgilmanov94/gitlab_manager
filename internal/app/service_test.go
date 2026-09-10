@@ -286,7 +286,7 @@ func TestExportPlanWritesMarkdown(t *testing.T) {
 	svc.Settings.PlansDir = filepath.Join(t.TempDir(), "plans")
 	issue, _ := svc.AddIssue("#7")
 	fr.Outputs = []map[string]any{testutil.PlanOutput()}
-	planID, _ := svc.StartPlan(issue.ID, "", "be careful", 0)
+	planID, _ := svc.StartPlan(issue.ID, "", "be careful", 0, "")
 	testutil.WaitFor(t, func() bool { return status(svc, planID) == db.StatusDone })
 	path, err := svc.ExportPlan(planID)
 	if err != nil {
@@ -471,7 +471,7 @@ func TestPlanImplementAndWorktreeActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	fr.Outputs = []map[string]any{testutil.PlanOutput()}
-	planID, err := svc.StartPlan(issue.ID, "", "be careful", 0)
+	planID, err := svc.StartPlan(issue.ID, "", "be careful", 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -794,7 +794,7 @@ func TestSkillSettingsFromUI(t *testing.T) {
 	}
 	issue, _ := svc.AddIssue("#7")
 	fr.Outputs = []map[string]any{testutil.PlanOutput()}
-	runID, err := svc.StartPlan(issue.ID, "", "", 0)
+	runID, err := svc.StartPlan(issue.ID, "", "", 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -877,7 +877,7 @@ func TestAgentQuestionsAndAnswers(t *testing.T) {
 	fr.Outputs = []map[string]any{{"summary": "", "steps": []any{}, "files": []any{}, "risks": []any{}, "questions": []any{}, "estimate": "",
 		"ask": []any{map[string]any{"question": "Which currency for the fee?", "options": []any{"USD", "EUR"}, "why": "The ticket does not say"},
 			map[string]any{"question": "Keep the old endpoint?", "options": []any{}, "why": "Clients may still call it"}}}}
-	runID, err := svc.StartPlan(issue.ID, "", "", 0)
+	runID, err := svc.StartPlan(issue.ID, "", "", 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +926,7 @@ func TestAgentQuestionsAndAnswers(t *testing.T) {
 	// Cancelling a run that waits for answers works without a process to stop.
 	fr.Outputs = []map[string]any{{"summary": "", "steps": []any{}, "files": []any{}, "risks": []any{}, "questions": []any{}, "estimate": "",
 		"ask": []any{map[string]any{"question": "Q?", "options": []any{}, "why": ""}}}}
-	second, _ := svc.StartPlan(issue.ID, "", "", 0)
+	second, _ := svc.StartPlan(issue.ID, "", "", 0, "")
 	testutil.WaitFor(t, func() bool { return status(svc, second) == db.StatusWaiting })
 	if !svc.Cancel(second) || status(svc, second) != db.StatusCancelled {
 		t.Fatalf("%s", status(svc, second))
@@ -935,7 +935,7 @@ func TestAgentQuestionsAndAnswers(t *testing.T) {
 	fr.Session = "-"
 	fr.Outputs = []map[string]any{{"summary": "", "steps": []any{}, "files": []any{}, "risks": []any{}, "questions": []any{}, "estimate": "",
 		"ask": []any{map[string]any{"question": "Q?", "options": []any{}, "why": ""}}}}
-	third, _ := svc.StartPlan(issue.ID, "", "", 0)
+	third, _ := svc.StartPlan(issue.ID, "", "", 0, "")
 	testutil.WaitFor(t, func() bool { return status(svc, third) == db.StatusFailed })
 	if r, _ := svc.DB.GetRun(third); !strings.Contains(r.Error, "no session id") {
 		t.Fatalf("%+v", r)
@@ -959,5 +959,69 @@ func TestRunTimeline(t *testing.T) {
 	}
 	if strings.Join(labels, ",") != "workspace,analysis,commands,implement,tests" || !tl[4].Current {
 		t.Fatalf("%v", labels)
+	}
+}
+
+// Phase 5: «Исследовать» has a bug mode (root cause instead of a plan); the MR draft is built from the report.
+func TestBugModeAndMRDraft(t *testing.T) {
+	svc, gl, fr := newService(t)
+	bug := testutil.IssuePayload(9)
+	bug["title"] = "Fix crash when saving a profile"
+	bug["labels"] = []any{"Bug"}
+	gl.Issues[9] = bug
+	issue, _ := svc.AddIssue("#9")
+	if !issue.LooksLikeBug() {
+		t.Fatal("bug heuristics")
+	}
+	if _, err := svc.StartPlan(issue.ID, "", "", 0, "weird"); err == nil {
+		t.Fatal("unknown mode must be refused")
+	}
+	fr.Outputs = []map[string]any{{"summary": "Null profile id.", "expected": "saves", "actual": "500", "reproduction": []any{"open profile", "save"}, "path": []any{"ProfileController::save"},
+		"root_cause": "`Profile::save()` dereferences `$this->id` before it is set", "evidence": []any{"src/Profile.php:42"}, "fix": "guard the id", "risks": []any{}, "questions": []any{}, "estimate": "S", "ask": []any{}}}
+	runID, err := svc.StartPlan(issue.ID, "", "check the migration too", 0, "bug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
+	run, _ := svc.DB.GetRun(runID)
+	req := fr.Requests[len(fr.Requests)-1]
+	if run.Mode != "bug" || !strings.Contains(req.Prompt, "Mode: BUG ANALYSIS") || !strings.Contains(string(req.Schema), "root_cause") || !strings.Contains(req.Prompt, "check the migration too") {
+		t.Fatalf("%+v", run)
+	}
+	fr.Outputs = []map[string]any{{"summary": "Null profile id.", "expected": "saves", "actual": "500", "reproduction": []any{}, "path": []any{},
+		"root_cause": "x", "evidence": []any{}, "fix": "y", "risks": []any{}, "questions": []any{}, "estimate": "S", "ask": []any{}}}
+	retry, _ := svc.Retry(runID)
+	testutil.WaitFor(t, func() bool { return status(svc, retry) == db.StatusDone })
+	if r, _ := svc.DB.GetRun(retry); r.Mode != "bug" {
+		t.Fatal("retry keeps the mode")
+	}
+
+	// Implementation report → MR draft with the sections the team expects.
+	fr.Outputs = []map[string]any{{"summary": "Guarded the id.", "changes": []any{map[string]any{"path": "src/Profile.php", "description": "guard"}}, "tests": "phpunit: 3 passed",
+		"todo": []any{"backfill old rows"}, "self_review": "Checked null paths; nothing else.", "commit_message": "group/sub/project#9 guard id", "ask": []any{}}}
+	implID, err := svc.StartImplement(issue.ID, "", "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, implID) == db.StatusDone })
+	impl, _ := svc.DB.GetRun(implID)
+	if !strings.Contains(fr.Requests[len(fr.Requests)-1].Prompt, "(4) SELF-REVIEW") {
+		t.Fatal("implement prompt must describe the phases")
+	}
+	draft := svc.MRDraftFor(impl, issue)
+	for _, want := range []string{"group/sub/project#9 Fix crash when saving a profile", "Closes https://gitlab.example.com/group/sub/project/-/issues/9", "## Что сделано", "Guarded the id.", "## Проверки", "phpunit: 3 passed", "## Известные ограничения", "- backfill old rows", "## Self-review", "Checked null paths"} {
+		if !strings.Contains(draft.Title+"\n"+draft.Description, want) {
+			t.Fatalf("draft missing %q:\n%s", want, draft.Description)
+		}
+	}
+	state := svc.Worktree(impl)
+	if !state.Exists || state.Clean() || state.Pushed() {
+		t.Fatalf("fresh workspace has uncommitted changes and no upstream: %+v", state)
+	}
+	if _, err := svc.Commit(implID, "guard id"); err != nil {
+		t.Fatal(err)
+	}
+	if state := svc.Worktree(impl); !state.Clean() || state.Pushed() {
+		t.Fatalf("%+v", state)
 	}
 }

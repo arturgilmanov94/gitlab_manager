@@ -158,6 +158,28 @@
 {{end}}
 {{end}}
 
+{{if and (eq .Run.Status "done") .Bug}}
+<section class="card">
+  <div class="card-head"><h2>Разбор бага</h2><span class="badge">оценка исправления: {{index .Bug "estimate"}}</span></div>
+  <div class="summary">{{md (index .Bug "summary") .Blob .SHA}}</div>
+  <div class="grid-2">
+    <div><h3>Ожидалось</h3>{{md (index .Bug "expected") .Blob .SHA}}</div>
+    <div><h3>Фактически</h3>{{md (index .Bug "actual") .Blob .SHA}}</div>
+  </div>
+  {{with index .Bug "reproduction"}}<h3>Воспроизведение</h3><ol>{{range .}}<li>{{md . $.Blob $.SHA}}</li>{{end}}</ol>{{end}}
+  {{with index .Bug "path"}}<h3>Путь выполнения</h3><ol class="mono small">{{range .}}<li>{{.}}</li>{{end}}</ol>{{end}}
+  <h3>Root cause</h3><div class="alert alert-danger">{{md (index .Bug "root_cause") .Blob .SHA}}</div>
+  {{with index .Bug "evidence"}}<h3>Доказательства</h3><ul>{{range .}}<li>{{md . $.Blob $.SHA}}</li>{{end}}</ul>{{end}}
+  <h3>Предлагаемое исправление</h3>{{md (index .Bug "fix") .Blob .SHA}}
+  {{with index .Bug "risks"}}<h3>Риски</h3><ul>{{range .}}<li>{{md . $.Blob $.SHA}}</li>{{end}}</ul>{{end}}
+  {{with index .Bug "questions"}}<h3>Открытые вопросы</h3><ul>{{range .}}<li>{{md . $.Blob $.SHA}}</li>{{end}}</ul>{{end}}
+  {{if .Issue}}<div class="actions left" style="margin-top:12px">
+    <button class="btn btn-primary tip" data-tip="Агент реализует предложенное исправление в отдельном workspace на новой ветке; root cause и предложение передаются ему как указания." onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {plan_run: '{{.Run.ID}}'})">Исправить</button>
+    <a class="btn" href="{{issuePath .Issue.ID}}#solve">Изменить указания…</a>
+  </div>{{end}}
+</section>
+{{end}}
+
 {{if and (eq .Run.Status "done") .Plan}}
 <section class="card">
   <div class="card-head"><h2>План решения</h2><span class="badge">оценка: {{index .Plan "estimate"}}</span></div>
@@ -193,6 +215,7 @@
     {{end}}
     {{with index .Report "changes"}}<h3>Изменения</h3><table class="table compact"><tbody>{{range .}}<tr><td class="mono small nowrap">{{index . "path"}}</td><td>{{md (index . "description") $.Blob $.SHA}}</td></tr>{{end}}</tbody></table>{{end}}
     <h3>Проверки</h3>{{md (index .Report "tests") .Blob .SHA}}
+    {{with index .Report "self_review"}}<h3>Self-review агента</h3>{{md . $.Blob $.SHA}}{{end}}
     {{with index .Report "todo"}}<h3>Требует вашего решения</h3><ul>{{range .}}<li>{{md . $.Blob $.SHA}}</li>{{end}}</ul>{{end}}
   {{else if not .Run.Active}}<p class="muted">Отчёта нет.</p>{{end}}
 </section>
@@ -206,7 +229,7 @@
   <div class="actions left">
     <button class="btn tip" data-tip="git add -A и git commit в workspace с этим сообщением. Ветка остаётся локальной, пока не нажат Push." onclick="post('/api/runs/{{.Run.ID}}/commit', {message: document.getElementById('commit-msg').value}, this).then(r => r && reload())">Commit</button>
     <button class="btn btn-primary tip" data-tip="git push --set-upstream origin {{.Run.Branch}}. {{if .MR}}Обновит MR !{{.MR.IID}}: ревьюеры увидят новые коммиты.{{else}}Ветка появится на GitLab, после этого можно создать MR.{{end}}" onclick="confirm('Запушить ветку {{.Run.Branch}} в origin?') && post('/api/runs/{{.Run.ID}}/push', {}, this).then(r => r && (flash('Ветка отправлена в origin', true), reload()))">Push</button>
-    {{if .Issue}}<button class="btn btn-primary tip" data-tip="Создать MR из ветки {{.Run.Branch}} в develop через GitLab. Заголовок по умолчанию: «{{.Issue.Ref}} {{.Issue.Title}}». Сначала нужен Push." onclick="createMR({{.Run.ID}}, this)">Создать MR</button>{{end}}
+    {{if .MRDraft}}<a class="btn btn-primary" href="#to-mr">Довести до MR</a>{{end}}
     <details class="menu">
       <summary title="Ещё действия">⋯</summary>
       <div class="menu-items">
@@ -217,6 +240,29 @@
       </div>
     </details>
   </div>
+  {{if .MRDraft}}
+  <section id="to-mr" class="to-mr">
+    <h3>Довести до MR</h3>
+    <ul class="checklist">
+      {{$r := .Report}}
+      <li class="{{if and $r (index $r "changes")}}ok{{else}}warn{{end}}"><span class="glyph">{{if and $r (index $r "changes")}}✓{{else}}⚠{{end}}</span> Реализация {{if and $r (index $r "changes")}}· {{len (index $r "changes")}} файлов в отчёте{{else}}· агент не перечислил изменений{{end}}</li>
+      {{$tests := ""}}{{if $r}}{{$tests = index $r "tests"}}{{end}}
+      <li class="{{if and $tests (ne $tests "none")}}ok{{else}}warn{{end}}"><span class="glyph">{{if and $tests (ne $tests "none")}}✓{{else}}⚠{{end}}</span> Тесты {{if and $tests (ne $tests "none")}}· выполнены{{else}}· не запускались{{end}}</li>
+      <li class="{{if and $r (index $r "self_review")}}ok{{else}}warn{{end}}"><span class="glyph">{{if and $r (index $r "self_review")}}✓{{else}}⚠{{end}}</span> Self-review {{if and $r (index $r "self_review")}}· сделан агентом{{else}}· отсутствует в отчёте{{end}}</li>
+      <li class="{{if .Worktree.Clean}}ok{{else}}warn{{end}}"><span class="glyph">{{if .Worktree.Clean}}✓{{else}}⚠{{end}}</span> Чистый diff {{if .Worktree.Clean}}· всё закоммичено{{else}}· есть незакоммиченные изменения, нажмите Commit{{end}}</li>
+      <li class="{{if .Worktree.Pushed}}ok{{else}}warn{{end}}"><span class="glyph">{{if .Worktree.Pushed}}✓{{else}}⚠{{end}}</span> Push {{if .Worktree.Pushed}}· ветка на origin{{else if .Worktree.HasUpstream}}· {{.Worktree.Unpushed}} коммитов не отправлено{{else}}· ветки ещё нет на origin{{end}}</li>
+    </ul>
+    <form class="mr-form" onsubmit="return createMRForm(event, '{{.Run.ID}}')">
+      <div class="field"><label for="mr-title">Заголовок</label><div style="flex:1"><input id="mr-title" name="title" type="text" style="width:100%" value="{{.MRDraft.Title}}"></div></div>
+      <div class="field"><label for="mr-desc">Описание</label><div style="flex:1"><textarea id="mr-desc" name="description" rows="10" style="width:100%" class="mono">{{.MRDraft.Description}}</textarea><div class="hint">markdown; собрано из отчёта агента: что сделано, проверки, известные ограничения, self-review</div></div></div>
+      <div class="actions left">
+        {{if .Worktree.Pushed}}<button type="submit" class="btn btn-primary tip" data-tip="{{kindTip "create-mr"}}">Создать MR в GitLab</button>
+        {{else}}<span class="disabled-wrap tip" data-tip="Сначала закоммитьте изменения и нажмите Push: MR создаётся из ветки на origin."><button type="submit" class="btn btn-primary" disabled>Создать MR в GitLab</button></span>{{end}}
+        <span class="small muted">Создание MR — единственная запись в GitLab; подтверждение спрашивается.</span>
+      </div>
+    </form>
+  </section>
+  {{end}}
   {{if .Worktree.Log}}<h3>Коммиты в ветке</h3><pre>{{.Worktree.Log}}</pre>{{end}}
   <h3>git status</h3><pre>{{if .Worktree.Status}}{{.Worktree.Status}}{{else}}(чисто — всё закоммичено){{end}}</pre>
   {{if .Worktree.Diff}}<details open class="section"><summary>Diff незакоммиченных изменений</summary><pre class="diff">{{.Worktree.Diff}}</pre></details>{{end}}
