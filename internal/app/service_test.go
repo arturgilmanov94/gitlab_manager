@@ -1,7 +1,9 @@
 package app
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1143,5 +1145,75 @@ func TestFixSelectedFindings(t *testing.T) {
 	fr.Outputs = []map[string]any{{"summary": "Again.", "results": []any{}, "addressed": []any{}, "changes": []any{}, "tests": "none", "todo": []any{}, "self_review": "ok", "commit_message": "", "ask": []any{}}}
 	if _, err := svc.Retry(runID); err == nil || !strings.Contains(err.Error(), "not open") {
 		t.Fatalf("retry re-validates the selection: %v", err)
+	}
+}
+
+// Reviews run in a read-only worktree at the MR head with the diff and discussions prefetched into the prompt;
+// when the head cannot be checked out the run falls back to the project root and says so.
+func TestReviewWorktreeAndPrefetch(t *testing.T) {
+	svc, gl, fr := newService(t)
+	out, err := exec.Command("git", "-C", svc.Settings.ProjectRoot, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha := strings.TrimSpace(string(out))
+	gl.MRs[42] = testutil.MRPayload(42, sha)
+	mr, _ := svc.AddMR("!42")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput(sha)}
+	runID, err := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
+	req := fr.Requests[len(fr.Requests)-1]
+	want := svc.Worktrees.ReviewPath("group/sub/project!42")
+	if req.Dir != want || req.Mode != runner.ModeReadOnly || len(req.ProtectDirs) != 2 || req.ProtectDirs[1] != want {
+		t.Fatalf("review must run in the protected review worktree: %+v", req)
+	}
+	for _, s := range []string{"READ-ONLY git worktree checked out at exactly the head SHA (" + want + ")", "Changed files (1):", "M src/A.php", "@bob at src/A.php:12: why?", "```diff", "+new line", "--- end prefetched ---"} {
+		if !strings.Contains(req.Prompt, s) {
+			t.Fatalf("prompt missing %q", s)
+		}
+	}
+	if run, _ := svc.DB.GetRun(runID); run.WorkDir != want {
+		t.Fatalf("%+v", run)
+	}
+	if got := svc.ReviewDir(mr); got != want {
+		t.Fatal(got)
+	}
+	if sessions := svc.Resumable(mustRuns(t, svc, mr.ID), svc.ReviewDirs(mr)...); len(sessions) != 1 {
+		t.Fatalf("review sessions are offered from the review worktree: %+v", sessions)
+	}
+	// The diff is fetched once per head SHA.
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput(sha)}
+	second, _ := svc.StartReview(mr.ID, db.KindReviewQuick, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, second) == db.StatusDone })
+	if n := strings.Count(strings.Join(gl.Calls, "|"), "diffs 42"); n != 1 {
+		t.Fatalf("prefetch must be cached per head: %d", n)
+	}
+	// Unknown head (the fixture's fake SHA): fall back to the project root, still with the prefetched context.
+	gl.MRs[43] = testutil.MRPayload(43, "sha-unknown")
+	other, _ := svc.AddMR("!43")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-unknown")}
+	third, _ := svc.StartReview(other.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, third) == db.StatusDone })
+	req = fr.Requests[len(fr.Requests)-1]
+	if req.Dir != svc.Settings.ProjectRoot || len(req.ProtectDirs) != 1 || strings.Contains(req.Prompt, "READ-ONLY git worktree") || !strings.Contains(req.Prompt, "Changed files (1):") {
+		t.Fatalf("%+v", req)
+	}
+	logText, _ := os.ReadFile(filepath.Join(svc.Settings.RunLogDir(), fmt.Sprintf("run-%d.log", third)))
+	if !strings.Contains(string(logText), "falling back to the project root") {
+		t.Fatalf("log must explain the fallback: %s", logText)
+	}
+	// Large diffs are not inlined: the file list stays.
+	svc.Settings.PrefetchMaxDiffChars = 10
+	gl.MRs[44] = testutil.MRPayload(44, "sha-big")
+	big, _ := svc.AddMR("!44")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-big")}
+	fourth, _ := svc.StartReview(big.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, fourth) == db.StatusDone })
+	req = fr.Requests[len(fr.Requests)-1]
+	if strings.Contains(req.Prompt, "```diff") || !strings.Contains(req.Prompt, "too large to inline") {
+		t.Fatal("large diff must be replaced by the file list")
 	}
 }

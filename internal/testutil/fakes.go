@@ -143,6 +143,19 @@ func (f *FakeGitLab) ListOpenIssues(host, username, projectPath string) ([]map[s
 	return out, nil
 }
 
+// MRDiffs returns a canned one-file diff.
+func (f *FakeGitLab) MRDiffs(ref gitlab.Ref) ([]gitlab.FileDiff, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, fmt.Sprintf("diffs %d", ref.IID))
+	return []gitlab.FileDiff{{OldPath: "src/A.php", NewPath: "src/A.php", Diff: "@@ -1,3 +1,4 @@\n-old\n+new line\n+another\n context\n"}}, nil
+}
+
+// UnresolvedThreads returns one canned reviewer thread.
+func (f *FakeGitLab) UnresolvedThreads(ref gitlab.Ref) ([]gitlab.Thread, error) {
+	return []gitlab.Thread{{ID: "d1", Author: "bob", File: "src/A.php", Line: 12, Body: "why?", Notes: 2}}, nil
+}
+
 // FailedJobs returns the canned failed jobs of any pipeline (two jobs, one allowed to fail).
 func (f *FakeGitLab) FailedJobs(ref gitlab.Ref, pipelineID int64) ([]gitlab.Job, error) {
 	f.mu.Lock()

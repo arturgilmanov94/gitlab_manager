@@ -46,6 +46,7 @@ type Service struct {
 	cancels   map[int64]context.CancelFunc
 	changes   map[string]gitlab.Changes       // compare results per "ref from..to" (Changes)
 	jobs      map[string][]prompts.FailedJob  // failed jobs with log tails per "ref pipeline" (FailedJobsFor)
+	contexts  map[string]*prompts.MRContext   // prefetched diff/discussions per "ref sha" (reviewContext)
 	decisions map[int64]chan approvalDecision // pending approval id → channel the run goroutine waits on
 	username  string
 	userOnce  sync.Once
@@ -623,7 +624,11 @@ func (s *Service) StartReview(mrID int64, kind, runnerName string, continueRunID
 	default:
 		return 0, userErr("unknown review kind %q", kind)
 	}
-	prev, err := s.continuation(continueRunID, &mrID, nil, s.Settings.ProjectRoot)
+	mr, err := s.RefreshMR(mrID)
+	if err != nil {
+		return 0, err
+	}
+	prev, err := s.continuation(continueRunID, &mrID, nil, s.reviewDirs(mr)...)
 	if err != nil {
 		return 0, err
 	}
@@ -636,10 +641,6 @@ func (s *Service) StartReview(mrID int64, kind, runnerName string, continueRunID
 	}
 	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil {
 		return 0, userErr("a run for this merge request is already queued or running (#%d)", active.ID)
-	}
-	mr, err := s.RefreshMR(mrID)
-	if err != nil {
-		return 0, err
 	}
 	run := db.Run{Kind: kind, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), SkillIdentifier: skillID(s.SkillFor(kind)), ContinueRunID: runIDPtr(prev)}
 	if kind == db.KindReviewVerify {
@@ -669,7 +670,8 @@ func (s *Service) StartVerifyFinding(mrID, findingID int64, runnerName string, c
 	if finding.Status != "open" {
 		return 0, userErr("finding #%d is not open (%s); reopen it first", findingID, finding.Status)
 	}
-	prev, err := s.continuation(continueRunID, &mrID, nil, s.Settings.ProjectRoot)
+	current, _ := s.DB.GetMR(mrID)
+	prev, err := s.continuation(continueRunID, &mrID, nil, s.reviewDirs(current)...)
 	if err != nil {
 		return 0, err
 	}
@@ -798,6 +800,96 @@ func (s *Service) Changes(mr *db.MergeRequest, fromSHA string) *gitlab.Changes {
 	return &changes
 }
 
+// ReviewDir is the directory review-like runs of an MR work in: the read-only worktree at the head SHA when
+// REVIEW_WORKTREE is on, else the project root. It does not create anything (see prepareReviewDir).
+func (s *Service) ReviewDir(mr *db.MergeRequest) string {
+	if mr == nil || !s.Settings.ReviewWorktree || s.Worktrees == nil || mr.HeadSHA == "" {
+		return s.Settings.ProjectRoot
+	}
+	return s.Worktrees.ReviewPath(mr.Ref())
+}
+
+// prepareReviewDir materialises the review worktree at the MR head; on any failure the run falls back to the
+// project root (logged), so a review never fails because of the checkout.
+func (s *Service) prepareReviewDir(ctx context.Context, mr *db.MergeRequest, logln func(string)) string {
+	dir := s.ReviewDir(mr)
+	if dir == s.Settings.ProjectRoot {
+		return dir
+	}
+	path, err := s.Worktrees.PrepareDetached(ctx, mr.Ref(), mr.SourceBranch, mr.HeadSHA, logln)
+	if err != nil {
+		logln("review worktree unavailable (" + err.Error() + "); falling back to the project root — the code there may differ from the MR head")
+		return s.Settings.ProjectRoot
+	}
+	return path
+}
+
+// reviewContext prefetches what a review needs from GitLab (changed files, diff, unresolved discussions),
+// cached per head SHA. worktree names the read-only checkout the run uses ("" when the project root).
+func (s *Service) reviewContext(mr *db.MergeRequest, worktree string) *prompts.MRContext {
+	key := fmt.Sprintf("%s/%s!%d %s", mr.GitLabHost, mr.ProjectPath, mr.IID, mr.HeadSHA)
+	s.mu.Lock()
+	cached, ok := s.contexts[key]
+	s.mu.Unlock()
+	if !ok {
+		ref := gitlab.Ref{Host: mr.GitLabHost, ProjectPath: mr.ProjectPath, IID: mr.IID}
+		ctx := &prompts.MRContext{}
+		diffs, err := s.GitLab.MRDiffs(ref)
+		if err != nil {
+			return &prompts.MRContext{Worktree: worktreeOrEmpty(worktree, s.Settings.ProjectRoot)}
+		}
+		var full strings.Builder
+		for _, d := range diffs {
+			change := "M"
+			switch {
+			case d.New:
+				change = "A"
+			case d.Deleted:
+				change = "D"
+			case d.Renamed:
+				change = "R " + d.OldPath + " ->"
+			}
+			ctx.Files = append(ctx.Files, prompts.FileChange{Path: d.NewPath, Change: change})
+			fmt.Fprintf(&full, "--- a/%s\n+++ b/%s\n%s\n", d.OldPath, d.NewPath, strings.TrimRight(d.Diff, "\n"))
+		}
+		if max := s.Settings.PrefetchMaxDiffChars; max > 0 && full.Len() <= max {
+			ctx.Diff = strings.TrimSpace(full.String())
+		} else {
+			ctx.DiffTruncated = true
+		}
+		if threads, err := s.GitLab.UnresolvedThreads(ref); err == nil {
+			for _, t := range threads {
+				ctx.Threads = append(ctx.Threads, prompts.ThreadNote{Author: t.Author, File: t.File, Line: t.Line, Body: t.Body})
+			}
+		}
+		s.mu.Lock()
+		if s.contexts == nil {
+			s.contexts = map[string]*prompts.MRContext{}
+		}
+		s.contexts[key] = ctx
+		s.mu.Unlock()
+		cached = ctx
+	}
+	copy := *cached
+	copy.Worktree = worktreeOrEmpty(worktree, s.Settings.ProjectRoot)
+	return &copy
+}
+
+// protectDirs lists the directories a read-only run must not write to (project root and the review worktree).
+func protectDirs(root, dir string) []string {
+	if dir == "" || dir == root {
+		return []string{root}
+	}
+	return []string{root, dir}
+}
+
+func worktreeOrEmpty(dir, root string) string {
+	if dir == "" || dir == root {
+		return ""
+	}
+	return dir
+}
+
 // FailedJobsFor returns the failed jobs of the MR's head pipeline with the tail of each log (cached per pipeline).
 // nil when the pipeline is not failed or unknown.
 func (s *Service) FailedJobsFor(mr *db.MergeRequest) []prompts.FailedJob {
@@ -835,7 +927,8 @@ func (s *Service) StartCIAnalyze(mrID int64, runnerName string, continueRunID in
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
-	prev, err := s.continuation(continueRunID, &mrID, nil, s.Settings.ProjectRoot)
+	current, _ := s.DB.GetMR(mrID)
+	prev, err := s.continuation(continueRunID, &mrID, nil, s.reviewDirs(current)...)
 	if err != nil {
 		return 0, err
 	}
@@ -1040,7 +1133,7 @@ func (s *Service) StartFixComments(mrID int64, runnerName, notes string, continu
 // belong to the same MR/issue, be finished, have reported a session id and have worked in the same directory:
 // Claude Code keeps sessions per working directory, so a review session (project root) cannot continue in a worktree.
 // The new run inherits the runner of that session. continueRunID <= 0 means "new chat" and returns nil.
-func (s *Service) continuation(continueRunID int64, mrID, issueID *int64, dir string) (*db.Run, error) {
+func (s *Service) continuation(continueRunID int64, mrID, issueID *int64, dirs ...string) (*db.Run, error) {
 	if continueRunID <= 0 {
 		return nil, nil
 	}
@@ -1057,10 +1150,32 @@ func (s *Service) continuation(continueRunID int64, mrID, issueID *int64, dir st
 	if prev.SessionID == "" {
 		return nil, userErr("session #%d cannot be continued: the %s agent did not report a session id", continueRunID, prev.Runner)
 	}
-	if prev.WorkDir != "" && prev.WorkDir != dir {
+	if prev.WorkDir != "" && !containsStr(dirs, prev.WorkDir) {
 		return nil, userErr("session #%d worked in another directory (%s); an agent session can only be continued from the same workspace", continueRunID, prev.WorkDir)
 	}
 	return prev, nil
+}
+
+func containsStr(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// ReviewDirs is the exported form of reviewDirs (for the UI's context picker).
+func (s *Service) ReviewDirs(mr *db.MergeRequest) []string { return s.reviewDirs(mr) }
+
+// reviewDirs are the directories a review-like session of an MR may live in: the review worktree and the
+// project root (older sessions, or the fallback when the head could not be checked out).
+func (s *Service) reviewDirs(mr *db.MergeRequest) []string {
+	dir := s.ReviewDir(mr)
+	if dir == s.Settings.ProjectRoot {
+		return []string{s.Settings.ProjectRoot}
+	}
+	return []string{dir, s.Settings.ProjectRoot}
 }
 
 // derefID is the value of a nullable run id (0 when nil).
@@ -1082,14 +1197,14 @@ func runIDPtr(run *db.Run) *int64 {
 
 // Resumable filters the runs of an object down to those whose agent session can be continued from dir: finished,
 // with a session id, same working directory (runs older than work_dir tracking count as project-root runs).
-func (s *Service) Resumable(runs []db.RunSummary, dir string) []db.RunSummary {
+func (s *Service) Resumable(runs []db.RunSummary, dirs ...string) []db.RunSummary {
 	var out []db.RunSummary
 	for _, run := range runs {
 		workDir := run.WorkDir
 		if workDir == "" {
 			workDir = s.Settings.ProjectRoot
 		}
-		if !run.Active() && run.SessionID != "" && workDir == dir {
+		if !run.Active() && run.SessionID != "" && containsStr(dirs, workDir) {
 			out = append(out, run)
 		}
 	}
@@ -1388,7 +1503,10 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "merge request disappeared")
 			return
 		}
+		req.Dir = s.prepareReviewDir(ctx, mr, logln)
+		req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
 		pm := promptMR(mr)
+		pm.Context = s.reviewContext(mr, req.Dir)
 		req.SessionName = fmt.Sprintf("mr-review !%d #%d", mr.IID, runID)
 		switch run.Kind {
 		case db.KindReviewQuick:
@@ -1413,7 +1531,11 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 				if base.SessionID != "" && base.Runner == run.Runner {
 					req.ResumeSessionID = base.SessionID
 					req.Agent = ""
-					logln(fmt.Sprintf("continuing agent session of run #%d", base.ID))
+					if base.WorkDir != "" && base.WorkDir != req.Dir && dirExists(base.WorkDir) {
+						req.Dir = base.WorkDir
+						req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
+					}
+					logln(fmt.Sprintf("continuing agent session of run #%d in %s", base.ID, req.Dir))
 				}
 			}
 			req.Prompt, req.Schema = prompts.Verify(pm, sk, baseSHA, toPrev(previous)), prompts.VerifySchema
@@ -1429,7 +1551,11 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "finding disappeared")
 			return
 		}
-		req.Prompt, req.Schema = prompts.VerifyFinding(promptMR(mr), sk, prompts.CheckedFinding{ID: finding.ID, Severity: finding.Severity, Category: finding.Category,
+		req.Dir = s.prepareReviewDir(ctx, mr, logln)
+		req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
+		pm := promptMR(mr)
+		pm.Context = s.reviewContext(mr, req.Dir)
+		req.Prompt, req.Schema = prompts.VerifyFinding(pm, sk, prompts.CheckedFinding{ID: finding.ID, Severity: finding.Severity, Category: finding.Category,
 			File: finding.File, Line: finding.Line, Title: finding.Title, Description: finding.Description, Suggestion: finding.Suggestion}), prompts.VerifyFindingSchema
 		req.SessionName = fmt.Sprintf("verify-finding !%d #%d", mr.IID, runID)
 	case db.KindCIAnalyze:
@@ -1443,7 +1569,11 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "no failed jobs found for the head pipeline (GitLab API unavailable or the pipeline is no longer failed)")
 			return
 		}
-		req.Prompt, req.Schema = prompts.CIAnalyze(promptMR(mr), jobs, sk), prompts.CIAnalyzeSchema
+		req.Dir = s.prepareReviewDir(ctx, mr, logln)
+		req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
+		pm := promptMR(mr)
+		pm.Context = s.reviewContext(mr, req.Dir)
+		req.Prompt, req.Schema = prompts.CIAnalyze(pm, jobs, sk), prompts.CIAnalyzeSchema
 		req.SessionName = fmt.Sprintf("ci-analyze !%d #%d", mr.IID, runID)
 	case db.KindFixFindings:
 		mr, _ := s.DB.GetMR(*run.MRID)
@@ -1580,6 +1710,12 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		if prev, _ := s.DB.GetRun(*run.ContinueRunID); prev != nil && prev.SessionID != "" {
 			req.ResumeSessionID, req.Agent = prev.SessionID, ""
 			req.Prompt = prompts.Continued(prev.Kind) + req.Prompt
+			// Claude Code keeps sessions per working directory: continue where the session was started.
+			if prev.WorkDir != "" && prev.WorkDir != req.Dir && dirExists(prev.WorkDir) {
+				req.Dir = prev.WorkDir
+				req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
+				logln("running in " + prev.WorkDir + " where session #" + fmt.Sprint(prev.ID) + " lives")
+			}
 			logln(fmt.Sprintf("continuing agent session of run #%d (chosen by the developer)", prev.ID))
 		}
 	}

@@ -238,6 +238,66 @@ type MR struct {
 	IID                       int64
 	Title, SourceBranch       string
 	TargetBranch, HeadSHA     string
+	Context                   *MRContext // prefetched by the dashboard (nil = the agent fetches everything itself)
+}
+
+// MRContext is what the dashboard prefetched for a review so the agent skips the first round of tool calls.
+type MRContext struct {
+	Worktree      string       // read-only worktree at exactly HeadSHA ("" = the run works in the project root, code may differ from the MR)
+	Files         []FileChange // changed files
+	Diff          string       // unified diff of the MR ("" when omitted)
+	DiffTruncated bool         // the diff was too large: only the file list is given
+	Threads       []ThreadNote // unresolved reviewer discussions
+}
+
+// FileChange is one changed file with its change type.
+type FileChange struct {
+	Path   string
+	Change string // A added | D deleted | R renamed (from old path) | M modified
+}
+
+// ThreadNote is an unresolved reviewer discussion for the prompt.
+type ThreadNote struct {
+	Author string
+	File   string
+	Line   int64
+	Body   string
+}
+
+// contextBlock renders the prefetched context (Phase «ускорение ревью»: worktree at head + diff + discussions).
+func contextBlock(c *MRContext, head string) string {
+	if c == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n--- prefetched by the dashboard (GitLab, at the head SHA above) ---\n")
+	if c.Worktree != "" {
+		b.WriteString("You are in a READ-ONLY git worktree checked out at exactly the head SHA (" + c.Worktree + "): read the MR's files directly with Read/Grep instead of fetching them from GitLab. Do not change anything here.\n")
+	}
+	fmt.Fprintf(&b, "Changed files (%d):\n", len(c.Files))
+	for _, f := range c.Files {
+		fmt.Fprintf(&b, "  %s %s\n", f.Change, f.Path)
+	}
+	if len(c.Threads) > 0 {
+		fmt.Fprintf(&b, "Unresolved reviewer discussions (%d):\n", len(c.Threads))
+		for _, t := range c.Threads {
+			where := t.File
+			if t.Line > 0 {
+				where = fmt.Sprintf("%s:%d", t.File, t.Line)
+			}
+			fmt.Fprintf(&b, "  - @%s at %s: %s\n", t.Author, firstNonEmpty(where, "(general)"), strings.ReplaceAll(strings.TrimSpace(t.Body), "\n", " "))
+		}
+	} else {
+		b.WriteString("Unresolved reviewer discussions: none.\n")
+	}
+	switch {
+	case c.Diff != "":
+		b.WriteString("MR diff:\n```diff\n" + c.Diff + "\n```\n")
+	case c.DiffTruncated:
+		b.WriteString("The diff is too large to inline; fetch it per file with `glab api` only where needed.\n")
+	}
+	b.WriteString("Use this instead of re-fetching the MR metadata, file list, diff or discussions; fetch more only when something is missing.\n--- end prefetched ---\n")
+	return b.String()
 }
 
 // Issue is the subset of issue data the prompts need.
@@ -287,7 +347,7 @@ func mrBlock(mr MR) string {
 		head = "(unknown, use current head)"
 	}
 	return fmt.Sprintf("Merge request: %s\nProject path: %s (GitLab host: %s)\nMR IID: %d\nTitle: %s\nSource branch: %s -> target branch: %s\nHead SHA to review: %s\n",
-		mr.WebURL, mr.ProjectPath, mr.Host, mr.IID, mr.Title, mr.SourceBranch, mr.TargetBranch, head)
+		mr.WebURL, mr.ProjectPath, mr.Host, mr.IID, mr.Title, mr.SourceBranch, mr.TargetBranch, head) + contextBlock(mr.Context, head)
 }
 
 // FullReview builds the full review prompt.
@@ -643,4 +703,13 @@ func FixComments(mr MR, notes string, s *skill.Skill) string {
 		"read each reviewer's request in the context of the current code, and change the code to address it, following the project's rules. " +
 		"If a comment is a question or needs a business decision, do not guess: leave it in `todo` with your recommendation. " +
 		"Run the project's style/test checks that apply to the touched files. Do NOT reply to or resolve the discussions in GitLab — the developer does that after reviewing the diff.\n" + questionsRule + "\n" + editRules()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

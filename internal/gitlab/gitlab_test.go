@@ -107,3 +107,18 @@ func TestJobsAndTrace(t *testing.T) {
 		t.Fatal(id, u)
 	}
 }
+
+func TestParseDiffsAndThreads(t *testing.T) {
+	diffs := ParseDiffs([]map[string]any{{"old_path": "a.php", "new_path": "b.php", "renamed_file": true, "diff": "@@"}, {"old_path": "c.php", "new_path": "c.php", "new_file": true, "diff": "+x"}})
+	if len(diffs) != 2 || !diffs[0].Renamed || diffs[0].NewPath != "b.php" || !diffs[1].New {
+		t.Fatalf("%+v", diffs)
+	}
+	threads := ParseThreads([]map[string]any{
+		{"id": "d1", "notes": []any{map[string]any{"resolvable": true, "resolved": false, "body": "why?", "author": map[string]any{"username": "bob"}, "position": map[string]any{"new_path": "src/A.php", "new_line": 12.0}}, map[string]any{"body": "reply"}}},
+		{"id": "d2", "notes": []any{map[string]any{"resolvable": true, "resolved": true, "body": "done"}}},
+		{"id": "d3", "notes": []any{map[string]any{"resolvable": false, "body": "general note"}}},
+	})
+	if len(threads) != 1 || threads[0].Author != "bob" || threads[0].File != "src/A.php" || threads[0].Line != 12 || threads[0].Notes != 2 {
+		t.Fatalf("%+v", threads)
+	}
+}

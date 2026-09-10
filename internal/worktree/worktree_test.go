@@ -149,3 +149,45 @@ func TestLinkedConfigExcludedAndUnpushed(t *testing.T) {
 		t.Fatalf("one commit ahead: %d %v", n, has)
 	}
 }
+
+// Reviews run in a detached worktree at exactly the MR head: created once, reused for the same SHA, moved for a new one.
+func TestPrepareDetached(t *testing.T) {
+	m, root := newManager(t)
+	ctx := context.Background()
+	sha := git(t, root, "rev-parse", "HEAD")
+	var logs []string
+	log := func(s string) { logs = append(logs, s) }
+	path, err := m.PrepareDetached(ctx, "group/sub/project!42", "feature", sha, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != m.ReviewPath("group/sub/project!42") || !strings.Contains(path, filepath.Join("review", "group__sub__project-42")) {
+		t.Fatal(path)
+	}
+	if head := git(t, path, "rev-parse", "HEAD"); head != sha {
+		t.Fatalf("%s != %s", head, sha)
+	}
+	if branch := git(t, path, "rev-parse", "--abbrev-ref", "HEAD"); branch != "HEAD" {
+		t.Fatalf("must be detached: %s", branch)
+	}
+	if again, _ := m.PrepareDetached(ctx, "group/sub/project!42", "feature", sha, log); again != path || !strings.Contains(strings.Join(logs, "\n"), "reusing review worktree") {
+		t.Fatalf("%v", logs)
+	}
+	// New commit on develop (pushed to origin) = new MR head: the worktree moves there.
+	_ = os.WriteFile(filepath.Join(root, "next.txt"), []byte("x"), 0o644)
+	git(t, root, "add", "next.txt")
+	git(t, root, "commit", "-q", "-m", "next")
+	next := git(t, root, "rev-parse", "HEAD")
+	if _, err := m.PrepareDetached(ctx, "group/sub/project!42", "develop", next, log); err != nil {
+		t.Fatal(err)
+	}
+	if head := git(t, path, "rev-parse", "HEAD"); head != next {
+		t.Fatalf("worktree must move to the new head: %s", head)
+	}
+	if _, err := m.PrepareDetached(ctx, "group/sub/project!43", "nope", "0000000000000000000000000000000000000000", log); err == nil {
+		t.Fatal("unknown sha must fail (the caller falls back to the project root)")
+	}
+	if status := git(t, root, "status", "--short"); strings.TrimSpace(status) != "" {
+		t.Fatalf("main checkout untouched: %q", status)
+	}
+}

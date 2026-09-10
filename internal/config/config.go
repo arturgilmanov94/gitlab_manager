@@ -58,6 +58,11 @@ type Settings struct {
 	BaseBranch     string
 	RunConcurrency int
 
+	// ReviewWorktree runs reviews in a read-only worktree at the MR head SHA (REVIEW_WORKTREE, default on).
+	ReviewWorktree bool
+	// PrefetchMaxDiffChars caps the MR diff inlined into review prompts (PREFETCH_MAX_DIFF_CHARS; 0 = never inline).
+	PrefetchMaxDiffChars int
+
 	// StandSkill names the project skill that explains how to reach the developer's stand ("" = detect by
 	// "стенд/stand" in a skill's name or description). Used by «Проверить на стенде».
 	StandSkill string
@@ -233,6 +238,8 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		HighlightLabels:       ParseHighlightLabels(str("HIGHLIGHT_LABELS", DefaultHighlightLabels)),
 		TerminalCmd:           strings.TrimSpace(get("TERMINAL_CMD")),
 		StandSkill:            strings.TrimSpace(get("STAND_SKILL")),
+		ReviewWorktree:        boolean("REVIEW_WORKTREE", true),
+		PrefetchMaxDiffChars:  num("PREFETCH_MAX_DIFF_CHARS", 60000),
 	}
 	if s.RunConcurrency < 1 {
 		s.RunConcurrency = 1

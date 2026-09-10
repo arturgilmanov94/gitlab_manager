@@ -750,7 +750,7 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, "mr", map[string]any{
 		"Base": s.base("mrs", fmt.Sprintf("!%d %s", mr.IID, mr.Title)), "MR": mr, "Runs": runs, "Latest": latest,
-		"Sessions":   s.svc.Resumable(runs, s.svc.Settings.ProjectRoot),
+		"Sessions":   s.svc.Resumable(runs, s.svc.ReviewDirs(mr)...),
 		"Changes":    changesIf(stale, s.svc, mr, latest),
 		"StandSkill": s.svc.StandSkill(), "StandTestSkill": s.svc.SkillFor(db.KindStandTest),
 		"FailedJobs": s.svc.FailedJobsFor(mr), "CIAnalysis": latestCIAnalysis(runs, mr.HeadSHA),

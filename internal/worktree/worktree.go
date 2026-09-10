@@ -38,6 +38,62 @@ func Slug(branch string) string {
 // Path returns the worktree directory for a branch.
 func (m *Manager) Path(branch string) string { return filepath.Join(m.Dir, Slug(branch)) }
 
+// ReviewPath returns the read-only review worktree directory for an object name (e.g. "project!123").
+func (m *Manager) ReviewPath(name string) string { return filepath.Join(m.Dir, "review", Slug(name)) }
+
+// PrepareDetached creates (or moves) a detached worktree at exactly `sha` for read-only work on an MR head.
+// branch is fetched first so a commit never seen by this checkout is available; the main checkout is untouched.
+func (m *Manager) PrepareDetached(ctx context.Context, name, branch, sha string, log func(string)) (string, error) {
+	if strings.TrimSpace(sha) == "" {
+		return "", errors.New("head SHA is empty")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	path := m.ReviewPath(name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+		if head, err := m.git(ctx, path, "rev-parse", "HEAD"); err == nil && strings.TrimSpace(head) == sha {
+			log("reusing review worktree " + path + " at " + sha[:min(10, len(sha))])
+			m.linkClaudeConfig(path, log)
+			return path, nil
+		}
+		m.fetchHead(ctx, branch, sha, log)
+		if _, err := m.git(ctx, path, "checkout", "--quiet", "--detach", sha); err != nil {
+			return "", err
+		}
+		log("review worktree " + path + " moved to " + sha[:min(10, len(sha))])
+		m.linkClaudeConfig(path, log)
+		return path, nil
+	}
+	_, _ = m.git(ctx, m.Root, "worktree", "prune")
+	m.fetchHead(ctx, branch, sha, log)
+	if _, err := m.git(ctx, m.Root, "worktree", "add", "--quiet", "--detach", path, sha); err != nil {
+		return "", err
+	}
+	log("review worktree " + path + " at " + sha[:min(10, len(sha))])
+	m.linkClaudeConfig(path, log)
+	return path, nil
+}
+
+// fetchHead makes sha available locally: fetch the branch, then the commit itself (servers may refuse the latter).
+func (m *Manager) fetchHead(ctx context.Context, branch, sha string, log func(string)) {
+	if _, err := m.git(ctx, m.Root, "cat-file", "-e", sha+"^{commit}"); err == nil {
+		return
+	}
+	if branch != "" {
+		if _, err := m.git(ctx, m.Root, "fetch", "--quiet", "origin", branch); err != nil {
+			log("git fetch origin " + branch + ": " + err.Error())
+		}
+	}
+	if _, err := m.git(ctx, m.Root, "cat-file", "-e", sha+"^{commit}"); err != nil {
+		if _, err := m.git(ctx, m.Root, "fetch", "--quiet", "origin", sha); err != nil {
+			log("git fetch origin " + sha + ": " + err.Error())
+		}
+	}
+}
+
 func (m *Manager) git(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
