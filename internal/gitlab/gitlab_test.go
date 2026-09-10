@@ -1,6 +1,9 @@
 package gitlab
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseMRRef(t *testing.T) {
 	ref, err := ParseMRRef("https://gitlab.example.com/tn/core/tradernet/-/merge_requests/102531/diffs?x=1", "", "")
@@ -85,5 +88,22 @@ func TestParseCompare(t *testing.T) {
 	got := ParseCompare(obj)
 	if got != (Changes{Commits: 2, Files: 2, Additions: 3, Deletions: 1}) {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestJobsAndTrace(t *testing.T) {
+	jobs := ParseJobs([]map[string]any{{"id": 5.0, "name": "phpunit", "stage": "test", "status": "failed", "web_url": "u", "failure_reason": "script_failure", "allow_failure": true}})
+	if len(jobs) != 1 || jobs[0].ID != 5 || jobs[0].Name != "phpunit" || !jobs[0].AllowFailure || jobs[0].FailureReason != "script_failure" {
+		t.Fatalf("%+v", jobs)
+	}
+	raw := "\x1b[0Ksection_start:1700000000:step_script\r\n\x1b[32mRunning\x1b[0m\nline2\nline3\nFAILED\n"
+	if got := TailLines(raw, 2); got != "line3\nFAILED" {
+		t.Fatalf("%q", got)
+	}
+	if got := TailLines(raw, 0); strings.Contains(got, "\x1b") || strings.Contains(got, "section_start") || !strings.Contains(got, "Running") {
+		t.Fatalf("%q", got)
+	}
+	if id, u := PipelineID(map[string]any{"head_pipeline": map[string]any{"id": 9.0, "web_url": "p"}}), PipelineURL(map[string]any{"head_pipeline": map[string]any{"web_url": "p"}}); id != 9 || u != "p" {
+		t.Fatal(id, u)
 	}
 }

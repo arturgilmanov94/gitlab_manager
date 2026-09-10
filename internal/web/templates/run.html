@@ -158,6 +158,20 @@
 {{end}}
 {{end}}
 
+{{if and (eq .Run.Status "done") .CIAnalysis}}
+<section class="card">
+  <div class="card-head"><h2>Почему упал pipeline</h2>{{if index .CIAnalysis "fixable_in_mr"}}<span class="badge badge-warning">можно исправить в MR</span>{{else}}<span class="badge">в MR не исправить</span>{{end}}</div>
+  <div class="summary">{{md (index .CIAnalysis "summary") .Blob .SHA}}</div>
+  <table class="table compact"><thead><tr><th>Job</th><th>Тип</th><th>Причина</th><th>Исправление</th></tr></thead><tbody>
+  {{range index .CIAnalysis "jobs"}}<tr><td class="mono small nowrap">{{index . "name"}}</td><td class="small"><span class="badge {{if eq (index . "kind") "code"}}badge-danger{{else if eq (index . "kind") "test"}}badge-warning{{else}}{{end}}">{{index . "kind"}}</span></td><td>{{md (index . "cause") $.Blob $.SHA}}</td><td>{{if index . "fixable_in_mr"}}{{md (index . "fix") $.Blob $.SHA}}{{else}}<span class="muted small">в MR не исправить</span>{{end}}</td></tr>{{end}}
+  </tbody></table>
+  {{if and .MR (index .CIAnalysis "fixable_in_mr")}}<div class="actions left" style="margin-top:12px">
+    <button class="btn btn-primary tip" data-tip="{{kindTip "ci_fix"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'ci_fix', this, {analysis_run: '{{.Run.ID}}'})">Исправить CI</button>
+    <span class="small muted">только для своих MR; commit и push — по кнопкам на странице сессии</span>
+  </div>{{end}}
+</section>
+{{end}}
+
 {{if and (eq .Run.Status "done") .Bug}}
 <section class="card">
   <div class="card-head"><h2>Разбор бага</h2><span class="badge">оценка исправления: {{index .Bug "estimate"}}</span></div>
@@ -216,6 +230,7 @@
     {{with index .Report "changes"}}<h3>Изменения</h3><table class="table compact"><tbody>{{range .}}<tr><td class="mono small nowrap">{{index . "path"}}</td><td>{{md (index . "description") $.Blob $.SHA}}</td></tr>{{end}}</tbody></table>{{end}}
     <h3>Проверки</h3>{{md (index .Report "tests") .Blob .SHA}}
     {{with index .Report "self_review"}}<h3>Self-review агента</h3>{{md . $.Blob $.SHA}}{{end}}
+    {{with index .Report "unfixable"}}<h3>Нельзя исправить в MR</h3><table class="table compact"><tbody>{{range .}}<tr><td class="mono small nowrap">{{index . "job"}}</td><td>{{md (index . "reason") $.Blob $.SHA}}</td></tr>{{end}}</tbody></table>{{end}}
     {{with index .Report "todo"}}<h3>Требует вашего решения</h3><ul>{{range .}}<li>{{md . $.Blob $.SHA}}</li>{{end}}</ul>{{end}}
   {{else if not .Run.Active}}<p class="muted">Отчёта нет.</p>{{end}}
 </section>

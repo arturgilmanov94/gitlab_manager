@@ -1,0 +1,58 @@
+{{define "content"}}
+<section class="toolbar">
+  <span class="small secondary">MR с упавшим head pipeline из основного списка. Данные о jobs берутся из GitLab при открытии страницы.</span>
+  <span class="spacer"></span>
+  <span class="small secondary">Агент для запусков:</span> {{template "runner-picker" .Base.Runners}}
+</section>
+
+{{if not .Rows}}
+<div class="empty"><b>Нет известных упавших pipeline.</b><br>Когда head pipeline одного из ваших MR упадёт, он появится здесь с упавшими jobs и действиями «Разобрать ошибки» и «Исправить CI».</div>
+{{else}}
+<div class="card table-card">
+<table class="table list" id="ci-table">
+  <thead><tr><th>MR</th><th>Название</th><th>Упавшие jobs</th><th>Разбор</th><th class="right"></th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+  {{$busy := and .Last (or (eq .Last.Status "running") (eq .Last.Status "queued") (eq .Last.Status "waiting"))}}
+  <tr data-mine="{{if .IsMine}}1{{else}}0{{end}}">
+    <td class="nowrap ref-cell"><a class="ref" href="{{mrPath .ID}}">!{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
+    <td class="title-cell"><a class="title" href="{{mrPath .ID}}">{{.Title}}</a><div class="sub">{{.Author}}{{if .IsMine}}<span class="badge badge-info">мой</span>{{end}} · <a class="ext" href="{{if .PipelineURL}}{{.PipelineURL}}{{else}}{{.WebURL}}{{end}}" target="_blank" rel="noopener">pipeline</a> · HEAD <span class="mono">{{shortSHA .HeadSHA}}</span></div></td>
+    <td data-label="Упавшие jobs">
+      {{if not .JobsKnown}}<span class="muted small">не удалось получить список jobs</span>
+      {{else if not .Jobs}}<span class="muted small">jobs не найдены</span>
+      {{else}}<div class="state-stack">{{range .Jobs}}<span class="small"><span class="state state-danger"><span class="glyph">✕</span> <a href="{{.WebURL}}" target="_blank" rel="noopener">{{.Name}}</a></span> <span class="muted">{{.Stage}}{{if .AllowFailure}} · allowed to fail{{end}}</span></span>{{end}}</div>{{end}}
+    </td>
+    <td data-label="Разбор" class="small">
+      {{if .Analysis}}<a href="{{runPath .Analysis.Kind .Analysis.ID}}"><span class="state state-success"><span class="glyph">✓</span> есть</span></a><div class="muted">{{firstLine .Analysis.Summary}}</div>
+      {{else if $busy}}<a href="{{runPath .Last.Kind .Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}">{{template "status" .Last.Status}}</a> <span class="muted">{{kindLabel .Last.Kind}}</span>
+      {{else}}<span class="state state-neutral"><span class="glyph">○</span> не разбирался</span>{{end}}
+    </td>
+    <td class="actions-cell">
+      <div class="actions">
+        {{if $busy}}<a class="btn btn-sm btn-primary" href="{{runPath .Last.Kind .Last.ID}}">Открыть прогресс</a>
+        {{else if .Analysis}}
+          {{if .IsMine}}<button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "ci_fix"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'ci_fix', this, {analysis_run: '{{.Analysis.ID}}'})">Исправить CI</button>{{end}}
+          <a class="btn btn-sm{{if not .IsMine}} btn-primary{{end}}" href="{{runPath .Analysis.Kind .Analysis.ID}}">Открыть разбор</a>
+        {{else}}<button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "ci_analyze"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'ci_analyze', this)">Разобрать ошибки</button>{{end}}
+        <details class="menu">
+          <summary title="Ещё действия">⋯</summary>
+          <div class="menu-items">
+            {{if not $busy}}
+              <button class="item tip" data-tip="{{kindTip "ci_analyze"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'ci_analyze', this)">Разобрать ошибки{{if .Analysis}} заново{{end}}</button>
+              {{if .IsMine}}<button class="item tip" data-tip="{{kindTip "ci_fix"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'ci_fix', this, {analysis_run: '{{if .Analysis}}{{.Analysis.ID}}{{end}}'})">Исправить CI{{if not .Analysis}} без разбора{{end}}</button>
+              {{else}}<span class="item tip" aria-disabled="true" data-tip="Исправлять CI можно только в своих MR: push в чужую ветку недопустим">Исправить CI</span>{{end}}
+              <div class="divider"></div>
+            {{end}}
+            <a class="item ext" href="{{if .PipelineURL}}{{.PipelineURL}}{{else}}{{.WebURL}}{{end}}" target="_blank" rel="noopener">Pipeline в GitLab</a>
+            <button class="item tip" data-tip="{{kindTip "refresh"}}" onclick="post('/api/mrs/{{.ID}}/refresh', {}, this).then(r => r && reload())">Обновить из GitLab</button>
+          </div>
+        </details>
+      </div>
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}
+{{end}}

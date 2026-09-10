@@ -32,6 +32,8 @@ const (
 	ActionImplement     = "implement"
 	ActionVerifyFinding = "verify_finding"
 	ActionStandTest     = "stand_test"
+	ActionCIAnalyze     = "ci_analyze"
+	ActionCIFix         = "ci_fix"
 )
 
 // Action is one dashboard action and the project skill it looks for.
@@ -84,6 +86,18 @@ var Actions = []Action{
 			"прогоняет там относящиеся к правке тесты, пишет и запускает скрипт, эмулирующий функциональность MR с моками внешних систем, " +
 			"и отчитывается: что залито, результаты тестов, путь и вывод скрипта, найденные проблемы. Не коммитит, не пушит, на стенде не трогает git и БД. " +
 			"Без своего skill dashboard ведёт сценарий сам, опираясь на skill доступа к стенду.",
+	},
+	{
+		Kind: ActionCIAnalyze, SkillName: "mr-ci-analyze", EnvKey: "SKILL_CI_ANALYZE",
+		Title: "Разбор упавшего pipeline",
+		Contract: "Получает MR, head SHA, список упавших jobs и хвосты их логов. Только чтение: по логам, diff MR и коду проекта находит причину каждого падения " +
+			"(код MR, тест, флак, окружение CI), предлагает исправление и говорит, можно ли исправить в MR. Без своего skill dashboard ведёт разбор сам.",
+	},
+	{
+		Kind: ActionCIFix, SkillName: "mr-ci-fix", EnvKey: "SKILL_CI_FIX",
+		Title: "Исправление CI",
+		Contract: "Работает в worktree на ветке MR. Получает упавшие jobs и хвосты логов (и разбор, если был). Исправляет причину в коде MR, прогоняет " +
+			"относящиеся тесты, делает self-review; если исправить в MR нельзя (инфраструктура, флаки) — объясняет причину и ничего не меняет. Не коммитит, не пушит.",
 	},
 	{
 		Kind: ActionPlan, SkillName: "task-plan", EnvKey: "SKILL_PLAN",

@@ -17,6 +17,8 @@ Dashboard — это интерфейс поверх агентов **вашег
 | Быстрое ревью | `review_quick` | `mr-review-quick` | `SKILL_REVIEW_QUICK` | skill `review_full` с пометкой «быстрый проход: только diff» |
 | Проверить изменения | `review_verify` | `mr-review-verify` | `SKILL_REVIEW_VERIFY` | skill `review_full` с прежними findings в промпте |
 | Проверить замечание | `verify_finding` | `mr-verify-finding` | `SKILL_VERIFY_FINDING` | skill `review_full` с одним замечанием в промпте |
+| Разобрать ошибки CI | `ci_analyze` | `mr-ci-analyze` | `SKILL_CI_ANALYZE` | CLAUDE.md + промпт dashboard с логами jobs |
+| Исправить CI | `ci_fix` | `mr-ci-fix` | `SKILL_CI_FIX` | CLAUDE.md + промпт dashboard |
 | Проверить на стенде | `stand_test` | `mr-stand-test` | `SKILL_STAND_TEST` | сценарий dashboard поверх skill доступа к стенду (`STAND_SKILL`, ищется по слову «стенд») |
 | Исправить замечания ревьюеров | `fix_comments` | `mr-fix-comments` | `SKILL_FIX_COMMENTS` | CLAUDE.md + промпт dashboard |
 | Исследовать | `plan` | `task-plan` | `SKILL_PLAN` | CLAUDE.md + промпт dashboard |
@@ -79,6 +81,19 @@ git-состояние не трогать, в GitLab не писать.
 **Результат:** `status` (`confirmed` | `false_positive` | `obsolete` | `unclear`), `evidence` (markdown с путями и строками),
 `severity` (уточнённая или пустая), `suggestion` (уточнённый фикс или пусто). Dashboard переносит итог на замечание:
 ложное и неактуальное закрывают его, подтверждённое остаётся открытым с пометкой.
+
+### `ci_analyze` — разбор упавшего pipeline
+
+**Вход:** как у полного ревью, плюс блок упавших jobs: имя, стадия, `failure_reason`, allowed to fail, ссылка и хвост лога
+(200 строк, ANSI-коды и маркеры секций убраны). Только чтение.
+
+**Результат:** `summary`, `jobs[]` (`name`, `kind` code|test|flaky|infrastructure|config|unknown, `cause`, `fix`, `fixable_in_mr`), `fixable_in_mr`.
+
+### `ci_fix` — исправление CI
+
+**Вход:** worktree на ветке MR (режим правок), тот же блок упавших jobs, при наличии — `summary` разбора («earlier analysis»).
+
+**Результат:** `summary`, `changes[]`, `tests`, `todo[]`, `self_review`, `unfixable[]` (`job`, `reason`), `commit_message`, `ask[]`.
 
 ### `stand_test` — проверка MR на стенде
 

@@ -45,6 +45,7 @@ type Service struct {
 	mu        sync.Mutex
 	cancels   map[int64]context.CancelFunc
 	changes   map[string]gitlab.Changes       // compare results per "ref from..to" (Changes)
+	jobs      map[string][]prompts.FailedJob  // failed jobs with log tails per "ref pipeline" (FailedJobsFor)
 	decisions map[int64]chan approvalDecision // pending approval id → channel the run goroutine waits on
 	username  string
 	userOnce  sync.Once
@@ -340,6 +341,8 @@ func (s *Service) mrFromPayload(payload map[string]any, ref gitlab.Ref) db.Merge
 		Draft:           gitlab.Bool(payload, "draft") || gitlab.Bool(payload, "work_in_progress"),
 		ChangesCount:    gitlab.Str(payload, "changes_count"),
 		Labels:          gitlab.Labels(payload),
+		PipelineID:      gitlab.PipelineID(payload),
+		PipelineURL:     gitlab.PipelineURL(payload),
 	}
 }
 
@@ -795,6 +798,108 @@ func (s *Service) Changes(mr *db.MergeRequest, fromSHA string) *gitlab.Changes {
 	return &changes
 }
 
+// FailedJobsFor returns the failed jobs of the MR's head pipeline with the tail of each log (cached per pipeline).
+// nil when the pipeline is not failed or unknown.
+func (s *Service) FailedJobsFor(mr *db.MergeRequest) []prompts.FailedJob {
+	if mr == nil || mr.PipelineStatus != "failed" || mr.PipelineID == 0 {
+		return nil
+	}
+	key := fmt.Sprintf("%s/%s!%d pipeline %d", mr.GitLabHost, mr.ProjectPath, mr.IID, mr.PipelineID)
+	s.mu.Lock()
+	cached, ok := s.jobs[key]
+	s.mu.Unlock()
+	if ok {
+		return cached
+	}
+	ref := gitlab.Ref{Host: mr.GitLabHost, ProjectPath: mr.ProjectPath, IID: mr.IID}
+	list, err := s.GitLab.FailedJobs(ref, mr.PipelineID)
+	if err != nil {
+		return nil
+	}
+	var out []prompts.FailedJob
+	for _, j := range list {
+		trace, _ := s.GitLab.JobTrace(ref, j.ID, 200)
+		out = append(out, prompts.FailedJob{Name: j.Name, Stage: j.Stage, FailureReason: j.FailureReason, AllowFailure: j.AllowFailure, WebURL: j.WebURL, Trace: trace})
+	}
+	s.mu.Lock()
+	if s.jobs == nil {
+		s.jobs = map[string][]prompts.FailedJob{}
+	}
+	s.jobs[key] = out
+	s.mu.Unlock()
+	return out
+}
+
+// StartCIAnalyze queues a read-only run that explains why the MR's head pipeline failed («Разобрать ошибки CI»).
+func (s *Service) StartCIAnalyze(mrID int64, runnerName string, continueRunID int64) (int64, error) {
+	if _, err := s.requireRoot(); err != nil {
+		return 0, err
+	}
+	prev, err := s.continuation(continueRunID, &mrID, nil, s.Settings.ProjectRoot)
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		runnerName = prev.Runner
+	}
+	r, err := s.pickRunner(runnerName)
+	if err != nil {
+		return 0, err
+	}
+	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil {
+		return 0, userErr("a run for this merge request is already queued or running (#%d)", active.ID)
+	}
+	mr, err := s.RefreshMR(mrID)
+	if err != nil {
+		return 0, err
+	}
+	if mr.PipelineStatus != "failed" || mr.PipelineID == 0 {
+		return 0, userErr("the head pipeline of !%d is not failed (%s)", mr.IID, firstOf(mr.PipelineStatus, "unknown"))
+	}
+	return s.enqueue(db.Run{Kind: db.KindCIAnalyze, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), SkillIdentifier: skillID(s.SkillFor(db.KindCIAnalyze)), ContinueRunID: runIDPtr(prev)})
+}
+
+// StartCIFix queues an edit run in the MR worktree that fixes what makes the head pipeline fail («Исправить CI»).
+// analysisRunID (0 = none) hands the summary of an earlier CI analysis to the agent.
+func (s *Service) StartCIFix(mrID int64, runnerName string, analysisRunID, continueRunID int64) (int64, error) {
+	if _, err := s.requireRoot(); err != nil {
+		return 0, err
+	}
+	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil {
+		return 0, userErr("a run for this merge request is already queued or running (#%d)", active.ID)
+	}
+	mr, err := s.RefreshMR(mrID)
+	if err != nil {
+		return 0, err
+	}
+	if mr.SourceBranch == "" {
+		return 0, userErr("the merge request has no source branch")
+	}
+	if mr.PipelineStatus != "failed" || mr.PipelineID == 0 {
+		return 0, userErr("the head pipeline of !%d is not failed (%s)", mr.IID, firstOf(mr.PipelineStatus, "unknown"))
+	}
+	prev, err := s.continuation(continueRunID, &mrID, nil, s.Worktrees.Path(mr.SourceBranch))
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		runnerName = prev.Runner
+	}
+	r, err := s.pickRunner(runnerName)
+	if err != nil {
+		return 0, err
+	}
+	var base *int64
+	if analysisRunID > 0 {
+		if analysis, _ := s.DB.GetRun(analysisRunID); analysis != nil && analysis.Kind == db.KindCIAnalyze && analysis.MRID != nil && *analysis.MRID == mrID {
+			base = &analysis.ID
+		}
+	}
+	run := db.Run{Kind: db.KindCIFix, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), BaseRunID: base, ContinueRunID: runIDPtr(prev),
+		Branch: mr.SourceBranch, WorkDir: s.Worktrees.Path(mr.SourceBranch), SkillIdentifier: skillID(s.SkillFor(db.KindCIFix))}
+	return s.enqueue(run)
+}
+
 // StandSkill is the project skill that explains how to reach the developer's stand (nil when the project has none).
 func (s *Service) StandSkill() *skill.Skill {
 	if s.Settings.ProjectRoot == "" {
@@ -1028,7 +1133,7 @@ func (s *Service) launch(id int64) {
 
 // asksQuestions reports whether a run kind may stop with questions for the developer.
 func asksQuestions(kind string) bool {
-	return kind == db.KindPlan || kind == db.KindImplement || kind == db.KindFixComments || kind == db.KindStandTest
+	return kind == db.KindPlan || kind == db.KindImplement || kind == db.KindFixComments || kind == db.KindStandTest || kind == db.KindCIFix
 }
 
 // Answer stores the developer's answers to the agent's pending questions and continues the run in the same
@@ -1089,6 +1194,16 @@ func (s *Service) Retry(runID int64) (int64, error) {
 			return 0, userErr("run has no merge request")
 		}
 		return s.StartStandTest(*run.MRID, run.Runner, run.Notes, derefID(run.ContinueRunID))
+	case db.KindCIAnalyze:
+		if run.MRID == nil {
+			return 0, userErr("run has no merge request")
+		}
+		return s.StartCIAnalyze(*run.MRID, run.Runner, derefID(run.ContinueRunID))
+	case db.KindCIFix:
+		if run.MRID == nil {
+			return 0, userErr("run has no merge request")
+		}
+		return s.StartCIFix(*run.MRID, run.Runner, derefID(run.BaseRunID), derefID(run.ContinueRunID))
 	case db.KindPlan:
 		if run.IssueID == nil {
 			return 0, userErr("run has no issue")
@@ -1251,6 +1366,45 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		req.Prompt, req.Schema = prompts.VerifyFinding(promptMR(mr), sk, prompts.CheckedFinding{ID: finding.ID, Severity: finding.Severity, Category: finding.Category,
 			File: finding.File, Line: finding.Line, Title: finding.Title, Description: finding.Description, Suggestion: finding.Suggestion}), prompts.VerifyFindingSchema
 		req.SessionName = fmt.Sprintf("verify-finding !%d #%d", mr.IID, runID)
+	case db.KindCIAnalyze:
+		mr, _ := s.DB.GetMR(*run.MRID)
+		if mr == nil {
+			s.fail(runID, "merge request disappeared")
+			return
+		}
+		jobs := s.FailedJobsFor(mr)
+		if len(jobs) == 0 {
+			s.fail(runID, "no failed jobs found for the head pipeline (GitLab API unavailable or the pipeline is no longer failed)")
+			return
+		}
+		req.Prompt, req.Schema = prompts.CIAnalyze(promptMR(mr), jobs, sk), prompts.CIAnalyzeSchema
+		req.SessionName = fmt.Sprintf("ci-analyze !%d #%d", mr.IID, runID)
+	case db.KindCIFix:
+		mr, _ := s.DB.GetMR(*run.MRID)
+		if mr == nil {
+			s.fail(runID, "merge request disappeared")
+			return
+		}
+		jobs := s.FailedJobsFor(mr)
+		if len(jobs) == 0 {
+			s.fail(runID, "no failed jobs found for the head pipeline (GitLab API unavailable or the pipeline is no longer failed)")
+			return
+		}
+		analysis := ""
+		if run.BaseRunID != nil {
+			if base, _ := s.DB.GetRun(*run.BaseRunID); base != nil {
+				analysis = base.Summary
+			}
+		}
+		_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
+		path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
+		if err != nil {
+			s.fail(runID, "worktree: "+err.Error())
+			return
+		}
+		req.Dir, req.Mode, req.ProtectDirs = path, runner.ModeEdit, nil
+		req.Prompt, req.Schema = prompts.CIFix(promptMR(mr), jobs, analysis, sk), prompts.CIFixSchema
+		req.SessionName = fmt.Sprintf("ci-fix !%d #%d", mr.IID, runID)
 	case db.KindStandTest:
 		mr, _ := s.DB.GetMR(*run.MRID)
 		if mr == nil {

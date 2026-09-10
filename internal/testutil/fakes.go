@@ -28,7 +28,7 @@ func MRPayload(iid int64, sha string) map[string]any {
 		"reviewers":     []any{map[string]any{"username": "bob"}},
 		"source_branch": "feature", "target_branch": "develop", "state": "opened", "sha": sha,
 		"diff_refs":     map[string]any{"head_sha": sha},
-		"head_pipeline": map[string]any{"status": "failed"}, "diverged_commits_count": 3.0, "draft": false, "changes_count": "7",
+		"head_pipeline": map[string]any{"status": "failed", "id": 9001.0, "web_url": "https://gitlab.example.com/group/sub/project/-/pipelines/9001"}, "diverged_commits_count": 3.0, "draft": false, "changes_count": "7",
 		"labels":     []any{"High", "backend"},
 		"references": map[string]any{"full": fmt.Sprintf("group/sub/project!%d", iid)},
 		"updated_at": "2026-09-01T10:00:00+03:00",
@@ -141,6 +141,22 @@ func (f *FakeGitLab) ListOpenIssues(host, username, projectPath string) ([]map[s
 		out = append(out, issue)
 	}
 	return out, nil
+}
+
+// FailedJobs returns the canned failed jobs of any pipeline (two jobs, one allowed to fail).
+func (f *FakeGitLab) FailedJobs(ref gitlab.Ref, pipelineID int64) ([]gitlab.Job, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, fmt.Sprintf("jobs %d", pipelineID))
+	return []gitlab.Job{
+		{ID: 501, Name: "phpunit", Stage: "test", Status: "failed", WebURL: "https://gitlab.example.com/group/sub/project/-/jobs/501", FailureReason: "script_failure"},
+		{ID: 502, Name: "lint", Stage: "test", Status: "failed", WebURL: "https://gitlab.example.com/group/sub/project/-/jobs/502", FailureReason: "script_failure", AllowFailure: true},
+	}, nil
+}
+
+// JobTrace returns a canned log tail.
+func (f *FakeGitLab) JobTrace(ref gitlab.Ref, jobID int64, tailLines int) (string, error) {
+	return fmt.Sprintf("$ vendor/bin/phpunit\n1) Tests\\AccountTest::testSave\nFailed asserting that null is identical to 42.\nFAILURES! (job %d)", jobID), nil
 }
 
 // Compare returns a fixed summary of "what changed" between two SHAs.

@@ -20,6 +20,7 @@ import (
 	"mr-review/internal/db"
 	"mr-review/internal/doctor"
 	"mr-review/internal/gitlab"
+	"mr-review/internal/prompts"
 	"mr-review/internal/runner"
 	"mr-review/internal/skill"
 )
@@ -153,7 +154,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 	if err != nil {
 		return nil, err
 	}
-	for _, page := range []string{"overview", "index", "history", "issues", "mr", "issue", "run", "runs", "workspaces", "doctor"} {
+	for _, page := range []string{"overview", "index", "history", "issues", "mr", "issue", "run", "runs", "workspaces", "ci", "doctor"} {
 		files := append([]string{"templates/layout.html", "templates/" + page + ".html"}, partials...)
 		t, err := template.New("layout").Funcs(funcs).ParseFS(assets, files...)
 		if err != nil {
@@ -181,6 +182,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /issues", s.issues)
 	s.mux.HandleFunc("GET /runs", s.runs)
 	s.mux.HandleFunc("GET /workspaces", s.workspaces)
+	s.mux.HandleFunc("GET /ci", s.ci)
 	s.mux.HandleFunc("GET /doctor", s.doctorPage)
 	// Readable object URLs: /-/mr/1, /-/issue/2, /-/review/3, /-/task-implement/4 (+ /log).
 	s.mux.HandleFunc("GET /-/mr/{id}", s.mrPage)
@@ -414,11 +416,15 @@ func runSlug(kind string) string {
 		return "verify-finding"
 	case db.KindStandTest:
 		return "stand-test"
+	case db.KindCIAnalyze:
+		return "ci-analyze"
+	case db.KindCIFix:
+		return "ci-fix"
 	}
 	return "run"
 }
 
-var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "verify-finding": true, "stand-test": true, "fix-comments": true, "task-plan": true, "task-implement": true, "run": true}
+var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "verify-finding": true, "stand-test": true, "ci-analyze": true, "ci-fix": true, "fix-comments": true, "task-plan": true, "task-implement": true, "run": true}
 
 func runPath(kind string, id any) string { return fmt.Sprintf("/-/%s/%v", runSlug(kind), id) }
 func mrPath(id any) string               { return fmt.Sprintf("/-/mr/%v", id) }
@@ -472,7 +478,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 			if mr.PipelineStatus == "failed" {
 				mine.PipelineFailed++
 				inbox = append(inbox, inboxItem{Tone: "danger", Glyph: "✕", Title: fmt.Sprintf("!%d · Pipeline failed", mr.IID), Detail: mr.Title,
-					Href: mr.WebURL, Action: "Открыть pipeline ↗"})
+					Href: "/ci", Action: "Разобрать ошибки"})
 			}
 			if mr.Unresolved > 0 {
 				mine.Unresolved++
@@ -568,6 +574,55 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, "runs", map[string]any{"Base": s.base("runs", "Сессии"), "Active": active, "Finished": finished})
+}
+
+// latestCIAnalysis is the newest finished CI analysis of the given head ("" = any head), or nil.
+func latestCIAnalysis(runs []db.RunSummary, head string) *db.RunSummary {
+	for i := range runs {
+		if runs[i].Kind == db.KindCIAnalyze && runs[i].Status == db.StatusDone && (head == "" || runs[i].HeadSHA == head) {
+			return &runs[i]
+		}
+	}
+	return nil
+}
+
+// ciRow is one MR with a failed head pipeline on the CI screen.
+type ciRow struct {
+	db.MRListItem
+	Jobs      []prompts.FailedJob
+	Analysis  *db.RunSummary // latest finished CI analysis of this head pipeline
+	IsMine    bool
+	JobsKnown bool
+}
+
+// ci lists the MRs whose head pipeline failed, with their failed jobs and the latest analysis.
+func (s *Server) ci(w http.ResponseWriter, r *http.Request) {
+	mrs, err := s.svc.DB.ListMRs()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	username := s.svc.CurrentUser()
+	var rows []ciRow
+	for _, item := range mrs {
+		if !item.Relevant() || item.PipelineStatus != "failed" {
+			continue
+		}
+		mr := item.MergeRequest
+		row := ciRow{MRListItem: item, IsMine: username != "" && item.Author == username}
+		row.Jobs = s.svc.FailedJobsFor(&mr)
+		row.JobsKnown = row.Jobs != nil
+		if runs, _ := s.svc.DB.ListRunsForMR(item.ID); len(runs) > 0 {
+			for i := range runs {
+				if runs[i].Kind == db.KindCIAnalyze && runs[i].Status == db.StatusDone && runs[i].HeadSHA == item.HeadSHA {
+					row.Analysis = &runs[i]
+					break
+				}
+			}
+		}
+		rows = append(rows, row)
+	}
+	s.render(w, "ci", map[string]any{"Base": s.base("ci", "CI"), "Rows": rows})
 }
 
 // changesIf returns what changed since the reviewed SHA when the review is stale (nil otherwise).
@@ -672,6 +727,7 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 		"Sessions":   s.svc.Resumable(runs, s.svc.Settings.ProjectRoot),
 		"Changes":    changesIf(stale, s.svc, mr, latest),
 		"StandSkill": s.svc.StandSkill(), "StandTestSkill": s.svc.SkillFor(db.KindStandTest),
+		"FailedJobs": s.svc.FailedJobsFor(mr), "CIAnalysis": latestCIAnalysis(runs, mr.HeadSHA),
 		"Findings": findings, "Discussions": discussions, "Active": active, "LastRun": lastRun,
 		"Stale": stale, "State": state, "OpenMajor": major, "OpenMinor": minor, "OpenInfo": info,
 		"IsMine": username != "" && mr.Author == username,
@@ -769,6 +825,11 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 	if run.IsReview() {
 		data["Findings"], _ = s.svc.DB.ListFindings(run.ID)
 		data["Discussions"], _ = s.svc.DB.ListDiscussions(run.ID)
+	}
+	if run.Kind == db.KindCIAnalyze && run.ResultJSON != "" {
+		var analysis map[string]any
+		_ = json.Unmarshal([]byte(run.ResultJSON), &analysis)
+		data["CIAnalysis"] = analysis
 	}
 	if run.Kind == db.KindVerifyFinding && run.FindingID != nil {
 		if finding, _ := s.svc.DB.GetFinding(*run.FindingID); finding != nil {
@@ -908,8 +969,13 @@ func (s *Server) apiStartMRRun(w http.ResponseWriter, r *http.Request) {
 		runID, err = s.svc.StartVerifyFinding(id, findingID, body["runner"], cont)
 	case "stand":
 		runID, err = s.svc.StartStandTest(id, body["runner"], body["notes"], cont)
+	case "ci_analyze":
+		runID, err = s.svc.StartCIAnalyze(id, body["runner"], cont)
+	case "ci_fix":
+		analysisID, _ := strconv.ParseInt(body["analysis_run"], 10, 64)
+		runID, err = s.svc.StartCIFix(id, body["runner"], analysisID, cont)
 	default:
-		writeJSON(w, 400, map[string]any{"error": "kind must be quick, full, verify, verify_finding, stand or fix"})
+		writeJSON(w, 400, map[string]any{"error": "kind must be quick, full, verify, verify_finding, stand, ci_analyze, ci_fix or fix"})
 		return
 	}
 	if err != nil {
@@ -1067,6 +1133,10 @@ func kindLabel(kind string) string {
 		return "Проверка замечания"
 	case db.KindStandTest:
 		return "Проверка на стенде"
+	case db.KindCIAnalyze:
+		return "Разбор CI"
+	case db.KindCIFix:
+		return "Исправление CI"
 	case db.KindFixComments:
 		return "Исправление замечаний"
 	case db.KindPlan:
@@ -1087,6 +1157,10 @@ func kindTip(kind string) string {
 		return "AI проверит только изменения после последнего ревью и обновит статусы прежних замечаний: исправлено / открыто / неактуально."
 	case "verify_finding":
 		return "AI перепроверит только это замечание, не считая его верным априори: подтверждено / ложное срабатывание / неактуально / недостаточно данных, с доказательством из кода. Только чтение, остальной MR не трогается."
+	case "ci_analyze":
+		return "AI прочитает логи упавших jobs, сопоставит с diff MR и кодом и объяснит причину каждого падения: код MR, тест, флак или окружение CI. Только чтение."
+	case "ci_fix":
+		return "Агент в отдельном workspace ветки MR исправит причину падения pipeline и прогонит относящиеся тесты. Что исправить нельзя (флаки, инфраструктура) — объяснит. Commit и push — по вашим кнопкам."
 	case "stand":
 		return "Агент в отдельном workspace ветки MR через skill доступа к стенду заливает изменённые файлы MR на стенд, прогоняет там тесты по затронутому коду, пишет скрипт-эмуляцию функциональности MR с моками внешних систем, запускает его на стенде и отчитывается. Код MR не меняет; git и БД на стенде не трогает."
 	case "fix":
@@ -1385,6 +1459,10 @@ func errorTitle(kind string) string {
 		return "Не удалось проверить замечание"
 	case db.KindStandTest:
 		return "Не удалось проверить MR на стенде"
+	case db.KindCIAnalyze:
+		return "Не удалось разобрать падение pipeline"
+	case db.KindCIFix:
+		return "Не удалось исправить CI"
 	case db.KindPlan:
 		return "Не удалось исследовать задачу"
 	case db.KindImplement:

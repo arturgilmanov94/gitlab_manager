@@ -102,7 +102,7 @@ func TestPagesAndFlow(t *testing.T) {
 		t.Fatal("issues list must carry label facets and chips and keep the other labels as text")
 	}
 	// The overview lists the own MR with a failed pipeline; the never-reviewed MR is not offered for review (own MR).
-	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "Pipeline failed") || !strings.Contains(body, "Открыть pipeline") {
+	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "Pipeline failed") || !strings.Contains(body, "Разобрать ошибки") {
 		t.Fatal("overview must surface the failed pipeline of my MR")
 	}
 
@@ -673,5 +673,47 @@ func TestBugModeAndToMRPages(t *testing.T) {
 	}
 	if code, out := postJSON(t, ts.URL+"/api/runs/2/mr", map[string]any{"title": "T", "description": "D"}); code != 200 || out["url"] == "" {
 		t.Fatalf("%d %v", code, out)
+	}
+}
+
+// CI screen: failed pipelines with their jobs, the analysis flow and the fix action for own MRs.
+func TestCIPage(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	if _, body := get(t, ts.URL+"/ci"); !strings.Contains(body, "Нет известных упавших pipeline") {
+		t.Fatal("empty state")
+	}
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	_, body := get(t, ts.URL+"/ci")
+	for _, want := range []string{`href="/ci" class="active"`, `<span class="pill hot">1</span>`, ">phpunit</a>", "allowed to fail", "не разбирался", `startRun('/api/mrs/1/runs', 'ci_analyze', this)`, `>Исправить CI без разбора<`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("ci page missing %q", want)
+		}
+	}
+	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "Pipeline failed") || !strings.Contains(body, ">Разобрать ошибки<") {
+		t.Fatal("overview must lead to the CI analysis")
+	}
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `id="ci"`) || !strings.Contains(body, "хвост лога") || !strings.Contains(body, "Failed asserting") {
+		t.Fatal("mr page must show the failed jobs with log tails")
+	}
+	fr.Outputs = []map[string]any{{"summary": "Fixture mismatch after the null-check change in AccountService.", "jobs": []any{map[string]any{"name": "phpunit", "kind": "code", "cause": "c", "fix": "f", "fixable_in_mr": true}}, "fixable_in_mr": true}}
+	code, out := postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "ci_analyze"})
+	if code != 200 || out["redirect"] != "/-/ci-analyze/1" {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/ci-analyze/1"); !strings.Contains(body, "Почему упал pipeline") || !strings.Contains(body, "можно исправить в MR") || !strings.Contains(body, `startRun('/api/mrs/1/runs', 'ci_fix', this, {analysis_run: '1'})`) {
+		t.Fatal("analysis page must render the table and offer the fix")
+	}
+	if _, body := get(t, ts.URL+"/ci"); !strings.Contains(body, "Fixture mismatch") || !strings.Contains(body, `>Исправить CI<`) {
+		t.Fatal("ci page must show the analysis and the fix for my MR")
+	}
+	fr.Outputs = []map[string]any{{"summary": "Fixed.", "changes": []any{}, "tests": "none", "todo": []any{}, "self_review": "ok", "unfixable": []any{map[string]any{"job": "lint", "reason": "flaky"}}, "commit_message": "", "ask": []any{}}}
+	code, out = postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "ci_fix", "analysis_run": "1"})
+	if code != 200 || out["redirect"] != "/-/ci-fix/2" {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(2); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/ci-fix/2"); !strings.Contains(body, "Нельзя исправить в MR") || !strings.Contains(body, "flaky") || !strings.Contains(body, `id="workspace"`) {
+		t.Fatal("fix page must list unfixable jobs and the workspace")
 	}
 }

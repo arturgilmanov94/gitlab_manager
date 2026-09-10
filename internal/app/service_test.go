@@ -1025,3 +1025,61 @@ func TestBugModeAndMRDraft(t *testing.T) {
 		t.Fatalf("%+v", state)
 	}
 }
+
+// Phase 6: failed pipeline → analysis run gets the job log tails; the fix run works in the MR worktree with the analysis.
+func TestCIAnalyzeAndFix(t *testing.T) {
+	svc, gl, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	if mr.PipelineID != 9001 || !strings.Contains(mr.PipelineURL, "/pipelines/9001") {
+		t.Fatalf("pipeline identity must be stored: %+v", mr)
+	}
+	jobs := svc.FailedJobsFor(mr)
+	if len(jobs) != 2 || jobs[0].Name != "phpunit" || !strings.Contains(jobs[0].Trace, "AccountTest::testSave") || !jobs[1].AllowFailure {
+		t.Fatalf("%+v", jobs)
+	}
+	svc.FailedJobsFor(mr)
+	if n := strings.Count(strings.Join(gl.Calls, "|"), "jobs 9001"); n != 1 {
+		t.Fatalf("jobs must be cached per pipeline: %d", n)
+	}
+	fr.Outputs = []map[string]any{{"summary": "The new null check breaks AccountTest::testSave: the fixture expects 42 but the service now returns null for unknown ids.",
+		"jobs": []any{map[string]any{"name": "phpunit", "kind": "code", "cause": "null returned", "fix": "return the default", "fixable_in_mr": true},
+			map[string]any{"name": "lint", "kind": "flaky", "cause": "timeout", "fix": "", "fixable_in_mr": false}}, "fixable_in_mr": true}}
+	analysisID, err := svc.StartCIAnalyze(mr.ID, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, analysisID) == db.StatusDone })
+	req := fr.Requests[len(fr.Requests)-1]
+	if req.Mode != runner.ModeReadOnly || !strings.Contains(req.Prompt, "Mode: CI ANALYSIS") || !strings.Contains(req.Prompt, `job "phpunit"`) || !strings.Contains(req.Prompt, "Failed asserting") || !strings.Contains(req.Prompt, "allowed to fail") {
+		t.Fatalf("%+v", req)
+	}
+	analysis, _ := svc.DB.GetRun(analysisID)
+	if analysis.Kind != db.KindCIAnalyze || !strings.Contains(analysis.Summary, "AccountTest") {
+		t.Fatalf("%+v", analysis)
+	}
+	fr.Outputs = []map[string]any{{"summary": "Restored the default.", "changes": []any{map[string]any{"path": "src/Account.php", "description": "default"}}, "tests": "phpunit ok",
+		"todo": []any{}, "self_review": "fine", "unfixable": []any{map[string]any{"job": "lint", "reason": "flaky timeout"}}, "commit_message": "fix ci", "ask": []any{}}}
+	fixID, err := svc.StartCIFix(mr.ID, "", analysisID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, fixID) != db.StatusQueued && status(svc, fixID) != db.StatusRunning })
+	fix, _ := svc.DB.GetRun(fixID)
+	if fix.Status != db.StatusDone {
+		t.Fatalf("%s: %s", fix.Status, fix.Error)
+	}
+	req = fr.Requests[len(fr.Requests)-1]
+	if req.Mode != runner.ModeEdit || req.Dir != svc.Worktrees.Path("feature") || !strings.Contains(req.Prompt, "Mode: CI FIX") || !strings.Contains(req.Prompt, "earlier analysis") || !strings.Contains(req.Prompt, "AccountTest::testSave: the fixture") {
+		t.Fatalf("%+v", req)
+	}
+	if fix.BaseRunID == nil || *fix.BaseRunID != analysisID || !fix.IsEdit() || fix.Branch != "feature" {
+		t.Fatalf("%+v", fix)
+	}
+	// A green pipeline has nothing to analyse.
+	gl.MRs[43] = testutil.MRPayload(43, "sha-x")
+	gl.MRs[43]["head_pipeline"] = map[string]any{"status": "success", "id": 9002.0}
+	green, _ := svc.AddMR("!43")
+	if _, err := svc.StartCIAnalyze(green.ID, "", 0); err == nil || !strings.Contains(err.Error(), "not failed") {
+		t.Fatalf("%v", err)
+	}
+}

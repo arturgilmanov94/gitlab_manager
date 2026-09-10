@@ -144,6 +144,19 @@ type Client interface {
 	ListOpenIssues(host, username, projectPath string) ([]map[string]any, error)
 	CreateMR(host, projectPath, sourceBranch, targetBranch, title, description string) (string, error)
 	Compare(ref Ref, from, to string) (Changes, error)
+	FailedJobs(ref Ref, pipelineID int64) ([]Job, error)
+	JobTrace(ref Ref, jobID int64, tailLines int) (string, error)
+}
+
+// Job is one CI job of a pipeline.
+type Job struct {
+	ID            int64
+	Name          string
+	Stage         string
+	Status        string
+	WebURL        string
+	FailureReason string
+	AllowFailure  bool
 }
 
 // Changes summarises what happened between two commits of an MR (the compare API): the "что изменилось" line.
@@ -295,6 +308,80 @@ func (g *Glab) GetMR(ref Ref) (map[string]any, error) {
 		return nil, fmt.Errorf("merge request %s!%d not found", ref.ProjectPath, ref.IID)
 	}
 	return obj, nil
+}
+
+// PipelineID / PipelineURL read the head pipeline identity from an MR payload.
+func PipelineID(obj map[string]any) int64 {
+	if id := Int(Nested(obj, "head_pipeline"), "id"); id != 0 {
+		return id
+	}
+	return Int(Nested(obj, "pipeline"), "id")
+}
+
+func PipelineURL(obj map[string]any) string {
+	if u := Str(Nested(obj, "head_pipeline"), "web_url"); u != "" {
+		return u
+	}
+	return Str(Nested(obj, "pipeline"), "web_url")
+}
+
+// FailedJobs lists the failed jobs of a pipeline (allow_failure jobs are included and flagged).
+func (g *Glab) FailedJobs(ref Ref, pipelineID int64) ([]Job, error) {
+	list, err := g.apiList(ref.Host, fmt.Sprintf("projects/%s/pipelines/%d/jobs?scope[]=failed&per_page=100", ref.EncodedProject(), pipelineID))
+	if err != nil {
+		return nil, err
+	}
+	return ParseJobs(list), nil
+}
+
+// ParseJobs converts a jobs payload.
+func ParseJobs(list []map[string]any) []Job {
+	var out []Job
+	for _, item := range list {
+		out = append(out, Job{ID: Int(item, "id"), Name: Str(item, "name"), Stage: Str(item, "stage"), Status: Str(item, "status"),
+			WebURL: Str(item, "web_url"), FailureReason: Str(item, "failure_reason"), AllowFailure: Bool(item, "allow_failure")})
+	}
+	return out
+}
+
+// JobTrace returns the last tailLines lines of a job log (the raw trace endpoint is plain text).
+func (g *Glab) JobTrace(ref Ref, jobID int64, tailLines int) (string, error) {
+	raw, err := g.APIRaw(ref.Host, fmt.Sprintf("projects/%s/jobs/%d/trace", ref.EncodedProject(), jobID))
+	if err != nil {
+		return "", err
+	}
+	return TailLines(raw, tailLines), nil
+}
+
+// TailLines keeps the last n lines of text (ANSI colour codes and CI section markers stripped).
+func TailLines(text string, n int) string {
+	text = ansiRe.ReplaceAllString(strings.ReplaceAll(text, "\r\n", "\n"), "")
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if n > 0 && len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]|section_(start|end):\d+:[a-z_]+`)
+
+// APIRaw performs a GET through `glab api` and returns the body as text (for non-JSON endpoints such as job traces).
+func (g *Glab) APIRaw(host, path string) (string, error) {
+	args := []string{"api"}
+	if host != "" {
+		args = append(args, "--hostname", host)
+	}
+	args = append(args, path)
+	ctx, cancel := context.WithTimeout(context.Background(), g.Timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, g.Bin, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		msg := firstNonEmpty(lastLine(stderr.String()), lastLine(stdout.String()), err.Error())
+		return "", fmt.Errorf("glab api %s failed: %s", path, msg)
+	}
+	return stdout.String(), nil
 }
 
 // Compare returns commits and line counts between two SHAs (what changed since the last review).

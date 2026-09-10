@@ -36,6 +36,7 @@
           <button class="item tip" data-tip="{{kindTip "full"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'full', this)">Полное ревью{{if .Latest}} заново{{end}}<span class="sub">заново весь MR на текущем HEAD</span></button>
           {{if .Latest}}{{if .Stale}}<button class="item tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'verify', this)">Проверить изменения</button>{{else}}<span class="item tip" aria-disabled="true" data-tip="Нет изменений после последнего ревью">Проверить изменения</span>{{end}}{{end}}
           {{if .IsMine}}{{if .MR.Unresolved}}<a class="item tip" data-tip="{{kindTip "fix"}}" href="#fix">Исправить замечания ревьюеров ({{.MR.Unresolved}})</a>{{else}}<span class="item tip" aria-disabled="true" data-tip="Нет нерешённых обсуждений ревьюеров">Исправить замечания ревьюеров</span>{{end}}{{end}}
+          {{if eq .MR.PipelineStatus "failed"}}<a class="item tip" data-tip="{{kindTip "ci_analyze"}}" href="#ci">Разобрать ошибки CI<span class="sub">почему упал head pipeline</span></a>{{end}}
           {{if or .StandSkill .StandTestSkill}}<a class="item tip" data-tip="{{kindTip "stand"}}" href="#stand">Проверить на стенде<span class="sub">залить MR, прогнать тесты и скрипт-эмуляцию</span></a>{{else}}<span class="item tip" aria-disabled="true" data-tip="В проекте не найден skill доступа к стенду (.claude/skills/*, упоминающий стенд) — задайте STAND_SKILL или добавьте skill">Проверить на стенде</span>{{end}}
           <div class="divider"></div>
         {{end}}
@@ -96,6 +97,21 @@
     <input id="fix-notes" type="text" placeholder="Необязательно: что учесть или чего не трогать">
     <button class="btn btn-primary tip" data-tip="{{kindTip "fix"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'fix', this, {notes: document.getElementById('fix-notes').value})">Исправить замечания</button>
   </div>
+</section>
+{{end}}
+
+{{if and (eq .MR.PipelineStatus "failed") (not .Closed)}}
+<section class="card" id="ci">
+  <div class="card-head"><h2>Pipeline failed</h2><a class="small ext" href="{{if .MR.PipelineURL}}{{.MR.PipelineURL}}{{else}}{{.MR.WebURL}}{{end}}" target="_blank" rel="noopener">pipeline в GitLab</a></div>
+  {{if .FailedJobs}}<ul class="jobs">{{range .FailedJobs}}<li><span class="state state-danger"><span class="glyph">✕</span> <a href="{{.WebURL}}" target="_blank" rel="noopener">{{.Name}}</a></span> <span class="small muted">{{.Stage}}{{if .FailureReason}} · {{.FailureReason}}{{end}}{{if .AllowFailure}} · allowed to fail{{end}}</span>
+    <details class="section"><summary class="small">хвост лога</summary><pre class="log">{{.Trace}}</pre></details></li>{{end}}</ul>
+  {{else}}<p class="muted small">Список упавших jobs получить не удалось (или pipeline уже не упавший): обновите MR из GitLab.</p>{{end}}
+  {{if .CIAnalysis}}<p class="small">Разбор: <a href="{{runPath .CIAnalysis.Kind .CIAnalysis.ID}}">сессия #{{.CIAnalysis.ID}}</a> · {{firstLine .CIAnalysis.Summary}}</p>{{end}}
+  {{if not .Active}}<div class="actions left">
+    <button class="btn {{if not .CIAnalysis}}btn-primary {{end}}tip" data-tip="{{kindTip "ci_analyze"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'ci_analyze', this)">Разобрать ошибки{{if .CIAnalysis}} заново{{end}}</button>
+    {{if .IsMine}}<button class="btn {{if .CIAnalysis}}btn-primary {{end}}tip" data-tip="{{kindTip "ci_fix"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'ci_fix', this, {analysis_run: '{{if .CIAnalysis}}{{.CIAnalysis.ID}}{{end}}'})">Исправить CI</button>
+    {{else}}<span class="disabled-wrap tip" data-tip="Исправлять CI можно только в своих MR: push в чужую ветку недопустим"><button class="btn" disabled>Исправить CI</button></span>{{end}}
+  </div>{{end}}
 </section>
 {{end}}
 

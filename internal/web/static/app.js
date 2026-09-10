@@ -79,6 +79,7 @@
     quick: 'Быстрое ревью поставлено в очередь', full: 'Полное ревью поставлено в очередь', verify: 'Проверка изменений поставлена в очередь',
     fix: 'Исправление замечаний запущено, создаю workspace', plan: 'Исследование поставлено в очередь', implement: 'Решение задачи запущено, создаю workspace',
     verify_finding: 'Проверка замечания поставлена в очередь', stand: 'Проверка на стенде запущена, создаю workspace',
+    ci_analyze: 'Разбор CI поставлен в очередь', ci_fix: 'Исправление CI запущено, создаю workspace',
   };
   // Start a run and stay on the current page: the row/page shows the new state, several runs can be
   // started from a list one after another. The run page is one click away («Открыть прогресс»).

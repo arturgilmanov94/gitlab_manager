@@ -429,6 +429,96 @@ var FixSchema = []byte(`{
   "additionalProperties": false
 }`)
 
+// FailedJob is a CI job handed to the CI prompts.
+type FailedJob struct {
+	Name          string
+	Stage         string
+	FailureReason string
+	AllowFailure  bool
+	WebURL        string
+	Trace         string // tail of the log
+}
+
+func jobsBlock(jobs []FailedJob) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Failed jobs of the head pipeline (%d):\n", len(jobs))
+	for _, j := range jobs {
+		allow := ""
+		if j.AllowFailure {
+			allow = ", allowed to fail"
+		}
+		reason := j.FailureReason
+		if reason == "" {
+			reason = "unknown"
+		}
+		fmt.Fprintf(&b, "\n=== job %q (stage %s, reason %s%s) %s ===\n%s\n=== end of log tail ===\n", j.Name, j.Stage, reason, allow, j.WebURL, strings.TrimSpace(j.Trace))
+	}
+	return b.String()
+}
+
+// CIAnalyzeSchema is the structured result of «Разобрать ошибки CI».
+var CIAnalyzeSchema = []byte(`{
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string", "minLength": 40, "description": "markdown, 3-6 sentences: why the pipeline failed and what to do"},
+    "jobs": {"type": "array", "items": {"type": "object", "properties": {
+      "name": {"type": "string"},
+      "kind": {"type": "string", "enum": ["code", "test", "flaky", "infrastructure", "config", "unknown"], "description": "code = the MR's change is wrong; test = a test needs updating; flaky = unrelated/intermittent; infrastructure/config = CI environment"},
+      "cause": {"type": "string", "description": "markdown: the concrete cause with evidence from the log and the code (path:line)"},
+      "fix": {"type": "string", "description": "markdown: what to change to make the job pass; empty if nothing in the MR can fix it"},
+      "fixable_in_mr": {"type": "boolean"}
+    }, "required": ["name", "kind", "cause", "fix", "fixable_in_mr"], "additionalProperties": false}},
+    "fixable_in_mr": {"type": "boolean", "description": "true when at least one failure can be fixed by changing the MR branch"}
+  },
+  "required": ["summary", "jobs", "fixable_in_mr"],
+  "additionalProperties": false
+}`)
+
+// CIAnalyze builds the read-only prompt that explains a failed pipeline.
+func CIAnalyze(mr MR, jobs []FailedJob, s *skill.Skill) string {
+	return SlashPrefix(s, mr.WebURL) + "Mode: CI ANALYSIS (read-only: explain why the head pipeline failed)\n\n" + mrBlock(mr) + "\n" + skillLine(s) + "\n\n" + jobsBlock(jobs) + "\n" +
+		"For every failed job find the concrete cause: relate the log to the MR diff (`glab api` for the diff, read the code in this repository at the head SHA). " +
+		"Classify it (code / test / flaky / infrastructure / config), give evidence, and say whether a change in the MR branch would fix it and what that change is. " +
+		"Do not guess when the log is inconclusive: say so.\n" + summaryRuleShort + readOnlyRules()
+}
+
+const summaryRuleShort = "FORMAT: markdown fields are rendered in a dashboard; short paragraphs, bullets, inline code for identifiers and paths.\n\n"
+
+// CIFixSchema is the report of «Исправить CI» (an edit run).
+var CIFixSchema = []byte(`{
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string", "description": "markdown, 3-8 sentences: what made the pipeline fail and what was changed"},
+    "changes": {"type": "array", "items": {"type": "object", "properties": {
+      "path": {"type": "string"}, "description": {"type": "string"}
+    }, "required": ["path", "description"], "additionalProperties": false}},
+    "tests": {"type": "string", "description": "which tests/checks were run locally and their result; 'none' with the reason if nothing"},
+    "todo": {"type": "array", "items": {"type": "string"}, "description": "what is left or needs a human decision"},
+    "self_review": {"type": "string", "description": "markdown: review of the final diff as a strict reviewer"},
+    "unfixable": {"type": "array", "items": {"type": "object", "properties": {
+      "job": {"type": "string"}, "reason": {"type": "string", "description": "why this failure cannot be fixed in the MR (flaky, infrastructure, needs another team)"}
+    }, "required": ["job", "reason"], "additionalProperties": false}},
+    "commit_message": {"type": "string", "description": "suggested commit message following the project convention; empty when nothing changed"},
+    ` + questionsSchema + `
+  },
+  "required": ["summary", "changes", "tests", "todo", "self_review", "unfixable", "commit_message", "ask"],
+  "additionalProperties": false
+}`)
+
+// CIFix builds the editing prompt that fixes a failed pipeline in the MR worktree. analysis is the summary of an
+// earlier CI analysis run ("" when none).
+func CIFix(mr MR, jobs []FailedJob, analysis string, s *skill.Skill) string {
+	prior := ""
+	if strings.TrimSpace(analysis) != "" {
+		prior = "\n--- earlier analysis (verify it against the code before acting on it) ---\n" + strings.TrimSpace(analysis) + "\n--- end analysis ---\n"
+	}
+	return SlashPrefix(s, mr.WebURL) + "Mode: CI FIX (edit files in a dedicated worktree of the MR branch)\n\n" + mrBlock(mr) + prior + "\n" + skillLine(s) + "\n\n" + jobsBlock(jobs) + "\n" +
+		fmt.Sprintf("You are in a git worktree checked out on the MR source branch `%s`. ", mr.SourceBranch) +
+		"For each failed job: find the cause in the code (relate the log to the diff), fix it following the project's rules, and run the tests/checks that the job runs " +
+		"as far as they can run locally. Fix only what the failures require: no unrelated refactoring. If a failure cannot be fixed in this MR (flaky test, " +
+		"infrastructure, another team's code), change nothing for it and explain why in `unfixable`. Finish with a strict self-review of the diff.\n" + questionsRule + "\n" + editRules()
+}
+
 // StandSchema is the structured report after deploying and exercising the MR on the developer's stand.
 var StandSchema = []byte(`{
   "type": "object",

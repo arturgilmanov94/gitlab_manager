@@ -29,6 +29,8 @@ const (
 	KindImplement     = "implement"
 	KindVerifyFinding = "verify_finding" // re-examine one finding of a review (read-only mini run)
 	KindStandTest     = "stand_test"     // deploy the MR to the developer's stand, run tests and an emulation script there
+	KindCIAnalyze     = "ci_analyze"     // read-only: why the head pipeline failed (job traces + diff)
+	KindCIFix         = "ci_fix"         // edit in the MR worktree: fix what makes the pipeline fail
 
 	StatusQueued    = "queued"
 	StatusRunning   = "running"
@@ -151,6 +153,9 @@ type MergeRequest struct {
 	Hidden       bool // hidden by the developer ("Убрать из dashboard"): lives in the history until brought back
 	// Labels is the comma separated GitLab label list (same form as Issue.Labels).
 	Labels string
+	// Head pipeline identity (Phase 6): the id for the jobs API and the web link.
+	PipelineID  int64
+	PipelineURL string
 }
 
 // Ref is "project!iid".
@@ -168,12 +173,12 @@ func (m MergeRequest) Relevant() bool {
 // relevantWhere is the SQL form of Relevant().
 const relevantWhere = "state NOT IN ('merged', 'closed') AND hidden = 0 AND approved_by_me = 0 AND (my_roles != '' OR manual = 1)"
 
-const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, hidden, labels"
+const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, hidden, labels, pipeline_id, pipeline_url"
 
 func scanMRInto(m *MergeRequest, s scanner) error {
 	var draft, approved, manual, hidden int
 	if err := s.Scan(&m.ID, &m.GitLabHost, &m.ProjectPath, &m.IID, &m.WebURL, &m.Title, &m.Author, &m.SourceBranch, &m.TargetBranch, &m.State, &m.HeadSHA, &m.Unresolved, &m.GitLabUpdatedAt, &m.SyncedAt, &m.AddedAt,
-		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount, &m.MyRoles, &approved, &manual, &hidden, &m.Labels); err != nil {
+		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount, &m.MyRoles, &approved, &manual, &hidden, &m.Labels, &m.PipelineID, &m.PipelineURL); err != nil {
 		return err
 	}
 	m.Draft, m.ApprovedByMe, m.Manual, m.Hidden = draft == 1, approved == 1, manual == 1, hidden == 1
@@ -212,8 +217,8 @@ func (d *DB) UpsertMR(m MergeRequest) (*MergeRequest, error) {
 	// `manual` is sticky: once added by hand the MR stays until removed by hand.
 	_, err := d.sql.Exec(`
 		INSERT INTO merge_requests (gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at,
-			pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, labels)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, labels, pipeline_id, pipeline_url)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (gitlab_host, project_path, iid) DO UPDATE SET
 			web_url = excluded.web_url, title = excluded.title, author = excluded.author,
 			source_branch = excluded.source_branch, target_branch = excluded.target_branch,
@@ -222,9 +227,9 @@ func (d *DB) UpsertMR(m MergeRequest) (*MergeRequest, error) {
 			pipeline_status = excluded.pipeline_status, approvals_given = excluded.approvals_given, approvals_required = excluded.approvals_required,
 			diverged = excluded.diverged, draft = excluded.draft, changes_count = excluded.changes_count,
 			my_roles = excluded.my_roles, approved_by_me = excluded.approved_by_me, manual = MAX(merge_requests.manual, excluded.manual),
-			labels = excluded.labels`,
+			labels = excluded.labels, pipeline_id = excluded.pipeline_id, pipeline_url = excluded.pipeline_url`,
 		m.GitLabHost, m.ProjectPath, m.IID, m.WebURL, m.Title, m.Author, m.SourceBranch, m.TargetBranch, m.State, m.HeadSHA, m.Unresolved, m.GitLabUpdatedAt, now, now,
-		m.PipelineStatus, m.ApprovalsGiven, m.ApprovalsRequired, m.Diverged, flag(m.Draft), m.ChangesCount, m.MyRoles, flag(m.ApprovedByMe), flag(m.Manual), m.Labels)
+		m.PipelineStatus, m.ApprovalsGiven, m.ApprovalsRequired, m.Diverged, flag(m.Draft), m.ChangesCount, m.MyRoles, flag(m.ApprovedByMe), flag(m.Manual), m.Labels, m.PipelineID, m.PipelineURL)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +329,7 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 		var kind, status, verdict, sha, runner, model, finished, created, session, dKind, dVerdict, dSHA, dFinished sql.NullString
 		var draft, approved, manual, hidden int
 		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Author, &item.SourceBranch, &item.TargetBranch, &item.State, &item.HeadSHA, &item.Unresolved, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
-			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual, &hidden, &item.Labels,
+			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual, &hidden, &item.Labels, &item.PipelineID, &item.PipelineURL,
 			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &session, &open, &tokens,
 			&dID, &dKind, &dVerdict, &dSHA, &dFinished, &dMajor, &dMinor, &dInfo, &item.ContextRunID); err != nil {
 			return nil, err
@@ -506,7 +511,7 @@ func (r Run) IsReview() bool {
 
 // IsEdit reports whether the run edits files in a worktree.
 func (r Run) IsEdit() bool {
-	return r.Kind == KindImplement || r.Kind == KindFixComments || r.Kind == KindStandTest
+	return r.Kind == KindImplement || r.Kind == KindFixComments || r.Kind == KindStandTest || r.Kind == KindCIFix
 }
 
 const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path, continue_run_id, finding_id, mode"
@@ -1151,6 +1156,9 @@ func (d *DB) Counts() map[string]int64 {
 	_ = d.sql.QueryRow("SELECT COUNT(*) FROM merge_requests WHERE " + relevantWhere).Scan(&relevant)
 	out["history"] = out["merge_requests"] - relevant
 	out["merge_requests"] = relevant
+	var ci int64
+	_ = d.sql.QueryRow("SELECT COUNT(*) FROM merge_requests WHERE " + relevantWhere + " AND pipeline_status = 'failed'").Scan(&ci)
+	out["ci"] = ci
 	var cost float64
 	_ = d.sql.QueryRow("SELECT COALESCE(SUM(cost_usd), 0) FROM runs").Scan(&cost)
 	out["cost_cents"] = int64(cost * 100)
