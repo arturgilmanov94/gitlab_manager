@@ -104,72 +104,47 @@ func (m *Manager) Prepare(ctx context.Context, branch string, log func(string)) 
 	return path, nil
 }
 
-// linkClaudeConfig symlinks untracked Claude instruction files from the main checkout and excludes the links
-// from git in this worktree (info/exclude), so `git status` stays clean and Commit never adds a local symlink.
+// linkedNames are the instruction files that may be linked into a worktree from the main checkout.
+var linkedNames = []string{".claude", "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md"}
+
+// linkClaudeConfig symlinks untracked Claude instruction files from the main checkout. The links are left out
+// of status/diff/commit through pathspecs (see linkedPathspec): nothing is written into the repository's config.
 func (m *Manager) linkClaudeConfig(path string, log func(string)) {
-	var linked []string
-	for _, name := range []string{".claude", "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md"} {
+	for _, name := range linkedNames {
 		src := filepath.Join(m.Root, name)
 		dst := filepath.Join(path, name)
 		if _, err := os.Lstat(src); err != nil {
 			continue
 		}
-		if info, err := os.Lstat(dst); err == nil {
-			if info.Mode()&os.ModeSymlink != 0 {
-				linked = append(linked, name)
-			}
+		if _, err := os.Lstat(dst); err == nil {
 			continue // tracked in git or already linked
 		}
 		if err := os.Symlink(src, dst); err == nil {
 			log("linked " + name + " from the main checkout")
-			linked = append(linked, name)
 		}
-	}
-	if len(linked) > 0 {
-		m.exclude(path, linked)
 	}
 }
 
-// exclude appends names to the worktree's private ignore list (.git/info/exclude of this worktree).
-func (m *Manager) exclude(path string, names []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
-	defer cancel()
-	out, err := m.git(ctx, path, "rev-parse", "--git-path", "info/exclude")
-	if err != nil {
-		return
-	}
-	file := strings.TrimSpace(out)
-	if !filepath.IsAbs(file) {
-		file = filepath.Join(path, file)
-	}
-	_ = os.MkdirAll(filepath.Dir(file), 0o755)
-	existing, _ := os.ReadFile(file)
-	var add []string
-	for _, name := range names {
-		if !strings.Contains(string(existing), "\n/"+name+"\n") && !strings.HasPrefix(string(existing), "/"+name+"\n") {
-			add = append(add, "/"+name)
+// linkedPathspec is the pathspec that covers the worktree except the symlinked instruction files.
+func (m *Manager) linkedPathspec(path string) []string {
+	spec := []string{"--", "."}
+	for _, name := range linkedNames {
+		if info, err := os.Lstat(filepath.Join(path, name)); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			spec = append(spec, ":(exclude)"+name)
 		}
 	}
-	if len(add) == 0 {
-		return
-	}
-	f, err := os.OpenFile(file, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, _ = f.WriteString("# mr-review: instruction files linked from the main checkout\n" + strings.Join(add, "\n") + "\n")
+	return spec
 }
 
 // Status returns `git status --short` of the worktree.
 func (m *Manager) Status(ctx context.Context, path string) (string, error) {
-	return m.git(ctx, path, "status", "--short")
+	return m.git(ctx, path, append([]string{"status", "--short"}, m.linkedPathspec(path)...)...)
 }
 
 // Diff returns the working tree diff (staged + unstaged + untracked as intent-to-add).
 func (m *Manager) Diff(ctx context.Context, path string) (string, error) {
-	_, _ = m.git(ctx, path, "add", "--intent-to-add", "--all")
-	out, err := m.git(ctx, path, "diff", "--no-color")
+	_, _ = m.git(ctx, path, append([]string{"add", "--intent-to-add", "--all"}, m.linkedPathspec(path)...)...)
+	out, err := m.git(ctx, path, append([]string{"diff", "--no-color"}, m.linkedPathspec(path)...)...)
 	if err != nil {
 		return "", err
 	}
@@ -190,7 +165,7 @@ func (m *Manager) Commit(ctx context.Context, path, message string) (string, err
 	if strings.TrimSpace(message) == "" {
 		return "", errors.New("commit message is empty")
 	}
-	if _, err := m.git(ctx, path, "add", "--all"); err != nil {
+	if _, err := m.git(ctx, path, append([]string{"add", "--all"}, m.linkedPathspec(path)...)...); err != nil {
 		return "", err
 	}
 	return m.git(ctx, path, "commit", "--quiet", "-m", message)

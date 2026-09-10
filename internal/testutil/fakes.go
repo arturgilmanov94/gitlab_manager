@@ -314,6 +314,10 @@ func ImplementOutput() map[string]any {
 // GitRepo creates a git repo with an initial commit on `develop` and an `origin` remote pointing at a bare clone.
 func GitRepo(t *testing.T, dir string) string {
 	t.Helper()
+	// Commits made by the code under test (worktree.Commit) need an identity; CI runners have none configured.
+	for k, v := range map[string]string{"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"} {
+		t.Setenv(k, v)
+	}
 	run := func(args ...string) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir

@@ -121,6 +121,12 @@ func TestLinkedConfigExcludedAndUnpushed(t *testing.T) {
 	if status, _ := m.Status(ctx, path); strings.TrimSpace(status) != "" {
 		t.Fatalf("linked files must be excluded from git status: %q", status)
 	}
+	if raw := git(t, path, "status", "--short"); !strings.Contains(raw, ".claude") {
+		t.Fatalf("git itself still sees the link (nothing written into the repo config): %q", raw)
+	}
+	if exclude, err := os.ReadFile(filepath.Join(root, ".git", "info", "exclude")); err == nil && strings.Contains(string(exclude), ".claude") {
+		t.Fatal("the main repository's info/exclude must not be touched")
+	}
 	if n, has := m.Unpushed(ctx, path); has || n != 0 {
 		t.Fatalf("fresh branch is not on origin: %d %v", n, has)
 	}
