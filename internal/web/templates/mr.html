@@ -36,6 +36,7 @@
           <button class="item tip" data-tip="{{kindTip "full"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'full', this)">Полное ревью{{if .Latest}} заново{{end}}<span class="sub">заново весь MR на текущем HEAD</span></button>
           {{if .Latest}}{{if .Stale}}<button class="item tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'verify', this)">Проверить изменения</button>{{else}}<span class="item tip" aria-disabled="true" data-tip="Нет изменений после последнего ревью">Проверить изменения</span>{{end}}{{end}}
           {{if .IsMine}}{{if .MR.Unresolved}}<a class="item tip" data-tip="{{kindTip "fix"}}" href="#fix">Исправить замечания ревьюеров ({{.MR.Unresolved}})</a>{{else}}<span class="item tip" aria-disabled="true" data-tip="Нет нерешённых обсуждений ревьюеров">Исправить замечания ревьюеров</span>{{end}}{{end}}
+          {{if or .StandSkill .StandTestSkill}}<a class="item tip" data-tip="{{kindTip "stand"}}" href="#stand">Проверить на стенде<span class="sub">залить MR, прогнать тесты и скрипт-эмуляцию</span></a>{{else}}<span class="item tip" aria-disabled="true" data-tip="В проекте не найден skill доступа к стенду (.claude/skills/*, упоминающий стенд) — задайте STAND_SKILL или добавьте skill">Проверить на стенде</span>{{end}}
           <div class="divider"></div>
         {{end}}
         <button class="item tip" data-tip="{{kindTip "refresh"}}" onclick="post('/api/mrs/{{.MR.ID}}/refresh', {}, this).then(r => r && reload())">Обновить из GitLab</button>
@@ -94,6 +95,17 @@
   <div class="inline">
     <input id="fix-notes" type="text" placeholder="Необязательно: что учесть или чего не трогать">
     <button class="btn btn-primary tip" data-tip="{{kindTip "fix"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'fix', this, {notes: document.getElementById('fix-notes').value})">Исправить замечания</button>
+  </div>
+</section>
+{{end}}
+
+{{if and (or .StandSkill .StandTestSkill) (not .Active) (not .Closed)}}
+<section class="card" id="stand">
+  <div class="card-head"><h2>Проверить на стенде</h2><span class="small muted mono">{{if .StandTestSkill}}{{.StandTestSkill.Identifier}}{{else}}доступ: {{.StandSkill.Identifier}}{{end}}</span></div>
+  <p class="secondary small">Агент создаст workspace на ветке <span class="mono">{{.MR.SourceBranch}}</span>, через skill стенда зальёт туда изменённые файлы MR, прогонит тесты по затронутому коду, напишет скрипт-эмуляцию функциональности MR с моками внешних систем и запустит его на стенде. Код MR не меняется; на стенде не трогаются git и БД. Скрипт остаётся в workspace: его можно закоммитить или удалить.</p>
+  <div class="inline">
+    <input id="stand-notes" type="text" size="60" placeholder="Необязательно: что именно проверить, какие системы мокать, чего не трогать">
+    <button class="btn btn-primary tip" data-tip="{{kindTip "stand"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'stand', this, {notes: document.getElementById('stand-notes').value})">Запустить на стенде</button>
   </div>
 </section>
 {{end}}

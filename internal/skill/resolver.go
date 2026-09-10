@@ -31,6 +31,7 @@ const (
 	ActionPlan          = "plan"
 	ActionImplement     = "implement"
 	ActionVerifyFinding = "verify_finding"
+	ActionStandTest     = "stand_test"
 )
 
 // Action is one dashboard action and the project skill it looks for.
@@ -77,6 +78,14 @@ var Actions = []Action{
 			"прогоняет проверки; вопросы и бизнес-решения оставляет человеку. Не коммитит, не пушит, не пишет в GitLab.",
 	},
 	{
+		Kind: ActionStandTest, SkillName: "mr-stand-test", EnvKey: "SKILL_STAND_TEST",
+		Title: "Проверка MR на стенде",
+		Contract: "Работает в worktree на ветке MR. Через skill доступа к стенду проекта (STAND_SKILL) заливает изменённые файлы MR на стенд, " +
+			"прогоняет там относящиеся к правке тесты, пишет и запускает скрипт, эмулирующий функциональность MR с моками внешних систем, " +
+			"и отчитывается: что залито, результаты тестов, путь и вывод скрипта, найденные проблемы. Не коммитит, не пушит, на стенде не трогает git и БД. " +
+			"Без своего skill dashboard ведёт сценарий сам, опираясь на skill доступа к стенду.",
+	},
+	{
 		Kind: ActionPlan, SkillName: "task-plan", EnvKey: "SKILL_PLAN",
 		Title: "Исследование задачи",
 		Contract: "Получает задачу GitLab (ссылка, описание) и указания разработчика. Без изменений кода составляет план: шаги, файлы и что в них меняется, " +
@@ -88,6 +97,28 @@ var Actions = []Action{
 		Contract: "Работает в worktree на новой ветке от базовой. Реализует задачу по правилам проекта, добавляет/обновляет тесты, " +
 			"прогоняет проверки и отчитывается: изменения, что прогнал, что осталось, предложенное сообщение коммита. Не коммитит и не пушит.",
 	},
+}
+
+var standWords = regexp.MustCompile(`(?i)стенд|\bstand\b|staging|dev-server`)
+
+// StandSkill finds the project's skill for reaching the developer's stand: by name (STAND_SKILL) or the first
+// candidate whose name/description talks about a stand. nil when the project has none.
+func (r *Resolver) StandSkill(name string) *Skill {
+	candidates := r.Candidates()
+	if name = strings.TrimSpace(name); name != "" {
+		for i := range candidates {
+			if candidates[i].Name == name {
+				return &candidates[i]
+			}
+		}
+		return nil
+	}
+	for i := range candidates {
+		if standWords.MatchString(candidates[i].Name + " " + candidates[i].Description) {
+			return &candidates[i]
+		}
+	}
+	return nil
 }
 
 // ActionFor returns the action for a run kind (nil for unknown kinds).

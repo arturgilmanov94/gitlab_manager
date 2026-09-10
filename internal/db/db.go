@@ -26,6 +26,7 @@ const (
 	KindPlan          = "plan"
 	KindImplement     = "implement"
 	KindVerifyFinding = "verify_finding" // re-examine one finding of a review (read-only mini run)
+	KindStandTest     = "stand_test"     // deploy the MR to the developer's stand, run tests and an emulation script there
 
 	StatusQueued    = "queued"
 	StatusRunning   = "running"
@@ -501,7 +502,9 @@ func (r Run) IsReview() bool {
 }
 
 // IsEdit reports whether the run edits files in a worktree.
-func (r Run) IsEdit() bool { return r.Kind == KindImplement || r.Kind == KindFixComments }
+func (r Run) IsEdit() bool {
+	return r.Kind == KindImplement || r.Kind == KindFixComments || r.Kind == KindStandTest
+}
 
 const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path, continue_run_id, finding_id"
 

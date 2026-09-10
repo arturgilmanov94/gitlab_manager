@@ -58,6 +58,10 @@ type Settings struct {
 	BaseBranch     string
 	RunConcurrency int
 
+	// StandSkill names the project skill that explains how to reach the developer's stand ("" = detect by
+	// "стенд/stand" in a skill's name or description). Used by «Проверить на стенде».
+	StandSkill string
+
 	// TerminalCmd is the TERMINAL_CMD template for «Открыть в терминале» ("" = detect gnome-terminal, konsole, ...).
 	TerminalCmd string
 
@@ -228,6 +232,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		RunConcurrency:        num("RUN_CONCURRENCY", 4),
 		HighlightLabels:       ParseHighlightLabels(str("HIGHLIGHT_LABELS", DefaultHighlightLabels)),
 		TerminalCmd:           strings.TrimSpace(get("TERMINAL_CMD")),
+		StandSkill:            strings.TrimSpace(get("STAND_SKILL")),
 	}
 	if s.RunConcurrency < 1 {
 		s.RunConcurrency = 1

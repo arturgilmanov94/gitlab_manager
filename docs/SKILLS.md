@@ -17,6 +17,7 @@ Dashboard — это интерфейс поверх агентов **вашег
 | Быстрое ревью | `review_quick` | `mr-review-quick` | `SKILL_REVIEW_QUICK` | skill `review_full` с пометкой «быстрый проход: только diff» |
 | Проверить изменения | `review_verify` | `mr-review-verify` | `SKILL_REVIEW_VERIFY` | skill `review_full` с прежними findings в промпте |
 | Проверить замечание | `verify_finding` | `mr-verify-finding` | `SKILL_VERIFY_FINDING` | skill `review_full` с одним замечанием в промпте |
+| Проверить на стенде | `stand_test` | `mr-stand-test` | `SKILL_STAND_TEST` | сценарий dashboard поверх skill доступа к стенду (`STAND_SKILL`, ищется по слову «стенд») |
 | Исправить замечания ревьюеров | `fix_comments` | `mr-fix-comments` | `SKILL_FIX_COMMENTS` | CLAUDE.md + промпт dashboard |
 | Исследовать | `plan` | `task-plan` | `SKILL_PLAN` | CLAUDE.md + промпт dashboard |
 | Решить задачу / Реализовать этот план | `implement` | `task-implement` | `SKILL_IMPLEMENT` | CLAUDE.md + промпт dashboard |
@@ -78,6 +79,17 @@ git-состояние не трогать, в GitLab не писать.
 **Результат:** `status` (`confirmed` | `false_positive` | `obsolete` | `unclear`), `evidence` (markdown с путями и строками),
 `severity` (уточнённая или пустая), `suggestion` (уточнённый фикс или пусто). Dashboard переносит итог на замечание:
 ложное и неактуальное закрывают его, подтверждённое остаётся открытым с пометкой.
+
+### `stand_test` — проверка MR на стенде
+
+**Вход:** как у исправления замечаний (worktree на ветке MR, режим правок), плюс имя и путь skill доступа к стенду
+(`STAND_SKILL`; без него — из CLAUDE.md) и указания разработчика. Ожидаемый сценарий: `git diff --name-status origin/<target>...HEAD`
+→ залить эти файлы на стенд средствами skill стенда → прогнать там тесты по затронутому коду → написать в worktree скрипт-эмуляцию
+функциональности MR с моками внешних систем, залить и запустить на стенде. Запреты: `git push/pull/checkout/reset` и миграции
+на стенде, правки кода MR (только скрипт и фикстуры).
+
+**Результат:** `summary`, `deployed[]`, `tests`, `script_path`, `script_output`, `problems[]` (`severity`, `title`, `description`),
+`changes[]`, `todo[]`, `commit_message`. Скрипт остаётся в workspace: Commit / Push / удалить — по кнопкам на странице сессии.
 
 ### `fix_comments` — исправление замечаний ревьюеров
 

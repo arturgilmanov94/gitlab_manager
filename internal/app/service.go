@@ -795,6 +795,50 @@ func (s *Service) Changes(mr *db.MergeRequest, fromSHA string) *gitlab.Changes {
 	return &changes
 }
 
+// StandSkill is the project skill that explains how to reach the developer's stand (nil when the project has none).
+func (s *Service) StandSkill() *skill.Skill {
+	if s.Settings.ProjectRoot == "" {
+		return nil
+	}
+	return skill.NewWithNames(s.Settings.ProjectRoot, nil).StandSkill(s.Settings.StandSkill)
+}
+
+// StartStandTest queues an edit run in a worktree of the MR branch that deploys the MR to the developer's stand,
+// runs tests there and writes/runs an emulation script («Проверить на стенде»). Needs a stand-access skill in the
+// project (STAND_SKILL or detected) or a dedicated stand_test skill.
+func (s *Service) StartStandTest(mrID int64, runnerName, notes string, continueRunID int64) (int64, error) {
+	if _, err := s.requireRoot(); err != nil {
+		return 0, err
+	}
+	if s.StandSkill() == nil && s.SkillFor(db.KindStandTest) == nil {
+		return 0, userErr("the project has no stand skill: add .claude/skills/<name>/SKILL.md describing how to reach the stand (or set STAND_SKILL / SKILL_STAND_TEST)")
+	}
+	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil {
+		return 0, userErr("a run for this merge request is already queued or running (#%d)", active.ID)
+	}
+	mr, err := s.RefreshMR(mrID)
+	if err != nil {
+		return 0, err
+	}
+	if mr.SourceBranch == "" {
+		return 0, userErr("the merge request has no source branch")
+	}
+	prev, err := s.continuation(continueRunID, &mrID, nil, s.Worktrees.Path(mr.SourceBranch))
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		runnerName = prev.Runner
+	}
+	r, err := s.pickRunner(runnerName)
+	if err != nil {
+		return 0, err
+	}
+	run := db.Run{Kind: db.KindStandTest, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), Notes: notes, ContinueRunID: runIDPtr(prev),
+		Branch: mr.SourceBranch, WorkDir: s.Worktrees.Path(mr.SourceBranch), SkillIdentifier: skillID(s.SkillFor(db.KindStandTest))}
+	return s.enqueue(run)
+}
+
 // StartFixComments queues an edit run that addresses unresolved reviewer discussions in a worktree of the MR branch.
 // continueRunID > 0 continues the agent session of an earlier run in the same worktree (0 = new chat).
 func (s *Service) StartFixComments(mrID int64, runnerName, notes string, continueRunID int64) (int64, error) {
@@ -999,6 +1043,11 @@ func (s *Service) Retry(runID int64) (int64, error) {
 			return 0, userErr("run has no finding")
 		}
 		return s.StartVerifyFinding(*run.MRID, *run.FindingID, run.Runner, derefID(run.ContinueRunID))
+	case db.KindStandTest:
+		if run.MRID == nil {
+			return 0, userErr("run has no merge request")
+		}
+		return s.StartStandTest(*run.MRID, run.Runner, run.Notes, derefID(run.ContinueRunID))
 	case db.KindPlan:
 		if run.IssueID == nil {
 			return 0, userErr("run has no issue")
@@ -1156,6 +1205,24 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		req.Prompt, req.Schema = prompts.VerifyFinding(promptMR(mr), sk, prompts.CheckedFinding{ID: finding.ID, Severity: finding.Severity, Category: finding.Category,
 			File: finding.File, Line: finding.Line, Title: finding.Title, Description: finding.Description, Suggestion: finding.Suggestion}), prompts.VerifyFindingSchema
 		req.SessionName = fmt.Sprintf("verify-finding !%d #%d", mr.IID, runID)
+	case db.KindStandTest:
+		mr, _ := s.DB.GetMR(*run.MRID)
+		if mr == nil {
+			s.fail(runID, "merge request disappeared")
+			return
+		}
+		path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
+		if err != nil {
+			s.fail(runID, "worktree: "+err.Error())
+			return
+		}
+		stand := s.StandSkill()
+		if stand != nil {
+			logln("stand access skill: " + stand.Identifier() + " (" + stand.RelPath + ")")
+		}
+		req.Dir, req.Mode, req.ProtectDirs = path, runner.ModeEdit, nil
+		req.Prompt, req.Schema = prompts.StandTest(promptMR(mr), run.Notes, firstOf(mr.TargetBranch, s.Settings.BaseBranch), stand, sk), prompts.StandSchema
+		req.SessionName = fmt.Sprintf("stand-test !%d #%d", mr.IID, runID)
 	case db.KindFixComments:
 		mr, _ := s.DB.GetMR(*run.MRID)
 		if mr == nil {

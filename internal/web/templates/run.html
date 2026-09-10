@@ -148,6 +148,12 @@
     <table class="table compact"><thead><tr><th>Автор</th><th>Где</th><th>Комментарий</th><th>Что сделано</th></tr></thead><tbody>
     {{range .}}<tr><td>{{index . "author"}}</td><td class="mono small">{{index . "file"}}{{with index . "line"}}:{{.}}{{end}}</td><td>{{md (index . "comment") $.Blob $.SHA}}</td><td>{{if index . "done"}}<span class="fstatus fstatus-fixed">сделано</span>{{else}}<span class="fstatus fstatus-open">нужно решение</span>{{end}} <div class="small">{{md (index . "action") $.Blob $.SHA}}</div></td></tr>{{end}}
     </tbody></table>{{end}}
+    {{if eq .Run.Kind "stand_test"}}
+      {{with index .Report "deployed"}}<h3>Залито на стенд</h3><ul class="mono small">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+      {{with index .Report "problems"}}<h3>Проблемы на стенде</h3><table class="table compact"><tbody>{{range .}}<tr><td><span class="sev sev-{{index . "severity"}}">{{index . "severity"}}</span></td><td><b>{{index . "title"}}</b><div class="small">{{md (index . "description") $.Blob $.SHA}}</div></td></tr>{{end}}</tbody></table>{{end}}
+      {{with index .Report "script_path"}}<h3>Скрипт-эмуляция</h3><div class="mono small">{{.}}</div>{{end}}
+      {{with index .Report "script_output"}}<details class="section" open><summary>Вывод скрипта на стенде</summary><pre class="log">{{.}}</pre></details>{{end}}
+    {{end}}
     {{with index .Report "changes"}}<h3>Изменения</h3><table class="table compact"><tbody>{{range .}}<tr><td class="mono small nowrap">{{index . "path"}}</td><td>{{md (index . "description") $.Blob $.SHA}}</td></tr>{{end}}</tbody></table>{{end}}
     <h3>Проверки</h3>{{md (index .Report "tests") .Blob .SHA}}
     {{with index .Report "todo"}}<h3>Требует вашего решения</h3><ul>{{range .}}<li>{{md . $.Blob $.SHA}}</li>{{end}}</ul>{{end}}

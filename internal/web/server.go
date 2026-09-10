@@ -384,11 +384,13 @@ func runSlug(kind string) string {
 		return "task-implement"
 	case db.KindVerifyFinding:
 		return "verify-finding"
+	case db.KindStandTest:
+		return "stand-test"
 	}
 	return "run"
 }
 
-var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "verify-finding": true, "fix-comments": true, "task-plan": true, "task-implement": true, "run": true}
+var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "verify-finding": true, "stand-test": true, "fix-comments": true, "task-plan": true, "task-implement": true, "run": true}
 
 func runPath(kind string, id any) string { return fmt.Sprintf("/-/%s/%v", runSlug(kind), id) }
 func mrPath(id any) string               { return fmt.Sprintf("/-/mr/%v", id) }
@@ -639,8 +641,9 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, "mr", map[string]any{
 		"Base": s.base("mrs", fmt.Sprintf("!%d %s", mr.IID, mr.Title)), "MR": mr, "Runs": runs, "Latest": latest,
-		"Sessions": s.svc.Resumable(runs, s.svc.Settings.ProjectRoot),
-		"Changes":  changesIf(stale, s.svc, mr, latest),
+		"Sessions":   s.svc.Resumable(runs, s.svc.Settings.ProjectRoot),
+		"Changes":    changesIf(stale, s.svc, mr, latest),
+		"StandSkill": s.svc.StandSkill(), "StandTestSkill": s.svc.SkillFor(db.KindStandTest),
 		"Findings": findings, "Discussions": discussions, "Active": active, "LastRun": lastRun,
 		"Stale": stale, "State": state, "OpenMajor": major, "OpenMinor": minor, "OpenInfo": info,
 		"IsMine": username != "" && mr.Author == username,
@@ -856,8 +859,10 @@ func (s *Server) apiStartMRRun(w http.ResponseWriter, r *http.Request) {
 	case "verify_finding":
 		findingID, _ := strconv.ParseInt(body["finding"], 10, 64)
 		runID, err = s.svc.StartVerifyFinding(id, findingID, body["runner"], cont)
+	case "stand":
+		runID, err = s.svc.StartStandTest(id, body["runner"], body["notes"], cont)
 	default:
-		writeJSON(w, 400, map[string]any{"error": "kind must be quick, full, verify, verify_finding or fix"})
+		writeJSON(w, 400, map[string]any{"error": "kind must be quick, full, verify, verify_finding, stand or fix"})
 		return
 	}
 	if err != nil {
@@ -1013,6 +1018,8 @@ func kindLabel(kind string) string {
 		return "Проверка изменений"
 	case db.KindVerifyFinding:
 		return "Проверка замечания"
+	case db.KindStandTest:
+		return "Проверка на стенде"
 	case db.KindFixComments:
 		return "Исправление замечаний"
 	case db.KindPlan:
@@ -1033,6 +1040,8 @@ func kindTip(kind string) string {
 		return "AI проверит только изменения после последнего ревью и обновит статусы прежних замечаний: исправлено / открыто / неактуально."
 	case "verify_finding":
 		return "AI перепроверит только это замечание, не считая его верным априори: подтверждено / ложное срабатывание / неактуально / недостаточно данных, с доказательством из кода. Только чтение, остальной MR не трогается."
+	case "stand":
+		return "Агент в отдельном workspace ветки MR через skill доступа к стенду заливает изменённые файлы MR на стенд, прогоняет там тесты по затронутому коду, пишет скрипт-эмуляцию функциональности MR с моками внешних систем, запускает его на стенде и отчитывается. Код MR не меняет; git и БД на стенде не трогает."
 	case "fix":
 		return "Агент создаст отдельный workspace на ветке MR и исправит код по нерешённым обсуждениям ревьюеров. Commit и push — только по вашей кнопке."
 	case "plan":
@@ -1321,6 +1330,8 @@ func errorTitle(kind string) string {
 		return "Не удалось выполнить ревью"
 	case db.KindVerifyFinding:
 		return "Не удалось проверить замечание"
+	case db.KindStandTest:
+		return "Не удалось проверить MR на стенде"
 	case db.KindPlan:
 		return "Не удалось исследовать задачу"
 	case db.KindImplement:

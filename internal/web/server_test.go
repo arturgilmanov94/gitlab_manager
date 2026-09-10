@@ -558,3 +558,26 @@ func TestSkillSettingsPage(t *testing.T) {
 		t.Fatalf("%d %v", code, out)
 	}
 }
+
+// The MR page offers «Проверить на стенде» only when the project has a stand skill; the run page shows the stand report.
+func TestStandTestPages(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	if _, body := get(t, ts.URL+"/-/mr/1"); strings.Contains(body, `id="stand"`) || !strings.Contains(body, "не найден skill доступа к стенду") {
+		t.Fatal("without a stand skill the card is absent and the menu item explains why")
+	}
+	testutil.AddProjectSkill(t, svc.Settings.ProjectRoot, "dev-stand", "Access to the dev stand")
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `id="stand"`) || !strings.Contains(body, "startRun('/api/mrs/1/runs', 'stand', this") {
+		t.Fatal("stand card must appear")
+	}
+	fr.Outputs = []map[string]any{{"summary": "Deployed and exercised the MR on the stand; the emulation script passed.", "deployed": []any{"src/A.php"},
+		"tests": "phpunit: 12 passed", "script_path": "scripts/onerun/mr_42.php", "script_output": "all good", "problems": []any{map[string]any{"severity": "MEDIUM", "title": "Slow query", "description": "took 4s"}}, "changes": []any{}, "todo": []any{}, "commit_message": ""}}
+	code, out := postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "stand", "notes": "x"})
+	if code != 200 || out["redirect"] != "/-/stand-test/1" {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/stand-test/1"); !strings.Contains(body, "Проверка на стенде") || !strings.Contains(body, "Залито на стенд") || !strings.Contains(body, "Slow query") || !strings.Contains(body, "scripts/onerun/mr_42.php") || !strings.Contains(body, `id="workspace"`) {
+		t.Fatal("run page must show the stand report and the workspace")
+	}
+}

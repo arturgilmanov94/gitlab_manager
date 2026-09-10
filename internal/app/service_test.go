@@ -826,3 +826,45 @@ func TestSkillSettingsFromUI(t *testing.T) {
 		t.Fatalf("%+v", sk)
 	}
 }
+
+// «Проверить на стенде»: needs a stand-access skill in the project; runs in the MR worktree in edit mode with the
+// stand skill named in the prompt; the report is stored like other edit runs.
+func TestStandTest(t *testing.T) {
+	svc, _, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	if _, err := svc.StartStandTest(mr.ID, "", "", 0); err == nil || !strings.Contains(err.Error(), "no stand skill") {
+		t.Fatalf("without a stand skill the run must be refused: %v", err)
+	}
+	testutil.AddProjectSkill(t, svc.Settings.ProjectRoot, "gilmanov-stand", "Подключение к dev-стенду по SSH для проверки изменений")
+	if sk := svc.StandSkill(); sk == nil || sk.Name != "gilmanov-stand" {
+		t.Fatalf("stand skill must be detected by description: %+v", sk)
+	}
+	fr.Outputs = []map[string]any{{"summary": "Deployed 2 files, tests green, emulation script ran without errors on the stand.", "deployed": []any{"src/A.php"},
+		"tests": "phpunit ok", "script_path": "scripts/onerun/mr_42_check.php", "script_output": "OK", "problems": []any{}, "changes": []any{}, "todo": []any{}, "commit_message": ""}}
+	runID, err := svc.StartStandTest(mr.ID, "", "mock the payment API", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) != db.StatusQueued && status(svc, runID) != db.StatusRunning })
+	run, _ := svc.DB.GetRun(runID)
+	if run.Status != db.StatusDone {
+		t.Fatalf("%s: %s", run.Status, run.Error)
+	}
+	req := fr.Requests[len(fr.Requests)-1]
+	if req.Mode != runner.ModeEdit || req.Dir != svc.Worktrees.Path("feature") || req.Agent != "" {
+		t.Fatalf("%+v", req)
+	}
+	for _, want := range []string{"Mode: STAND TEST", "`gilmanov-stand`", "mock the payment API", "git diff --name-status origin/develop...HEAD", "Never run `git push`"} {
+		if !strings.Contains(req.Prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+	if run.Kind != db.KindStandTest || run.Branch != "feature" || !run.IsEdit() || !strings.Contains(run.Summary, "Deployed 2 files") {
+		t.Fatalf("%+v", run)
+	}
+	// STAND_SKILL pins the skill by name; an unknown name means "no stand skill".
+	svc.Settings.StandSkill = "nope"
+	if svc.StandSkill() != nil {
+		t.Fatal("unknown STAND_SKILL must not fall back to detection")
+	}
+}

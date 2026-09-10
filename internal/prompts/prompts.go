@@ -358,6 +358,53 @@ var FixSchema = []byte(`{
   "additionalProperties": false
 }`)
 
+// StandSchema is the structured report after deploying and exercising the MR on the developer's stand.
+var StandSchema = []byte(`{
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string", "minLength": 60, "description": "markdown, 3-8 sentences: what was deployed, what was run on the stand, overall outcome"},
+    "deployed": {"type": "array", "items": {"type": "string"}, "description": "repository-relative paths synced to the stand"},
+    "tests": {"type": "string", "description": "markdown: which tests/checks ran on the stand and their result; 'none' with the reason if nothing could run"},
+    "script_path": {"type": "string", "description": "repository-relative path of the emulation script written in the worktree; empty if none"},
+    "script_output": {"type": "string", "description": "trimmed output of the emulation script on the stand (last ~60 lines); empty if not run"},
+    "problems": {"type": "array", "items": {"type": "object", "properties": {
+      "severity": {"type": "string", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]},
+      "title": {"type": "string"},
+      "description": {"type": "string", "description": "markdown with evidence from the stand (output, log lines, file:line)"}
+    }, "required": ["severity", "title", "description"], "additionalProperties": false}, "description": "problems observed while running the MR on the stand"},
+    "changes": {"type": "array", "items": {"type": "object", "properties": {
+      "path": {"type": "string"}, "description": {"type": "string"}
+    }, "required": ["path", "description"], "additionalProperties": false}, "description": "files created or changed in the worktree (the script, fixtures)"},
+    "todo": {"type": "array", "items": {"type": "string"}, "description": "what needs a human: stand access problems, migrations not run, data that had to be faked"},
+    "commit_message": {"type": "string", "description": "suggested commit message if the script is worth keeping; empty otherwise"}
+  },
+  "required": ["summary", "deployed", "tests", "script_path", "script_output", "problems", "changes", "todo", "commit_message"],
+  "additionalProperties": false
+}`)
+
+// StandTest builds the prompt that deploys the MR to the developer's stand and exercises it there. standSkill is the
+// project skill that explains how to reach the stand; s is the optional project skill for the whole scenario.
+func StandTest(mr MR, notes, targetBranch string, standSkill *skill.Skill, s *skill.Skill) string {
+	var extra string
+	if strings.TrimSpace(notes) != "" {
+		extra = "\n--- additional instructions from the developer ---\n" + strings.TrimSpace(notes) + "\n--- end instructions ---\n"
+	}
+	access := "The project has no dedicated stand-access skill: use the stand access described in CLAUDE.md / AGENTS.md; if there is none, stop and report it in `todo`."
+	if standSkill != nil {
+		access = fmt.Sprintf("Stand access: the project skill `%s` (%s) describes the stand and the only allowed way to talk to it (wrapper script, hosts, paths). "+
+			"Read it first and use exactly its commands for every push / run / pull on the stand.", standSkill.Name, standSkill.RelPath)
+	}
+	return SlashPrefix(s, mr.WebURL) + "Mode: STAND TEST (deploy the MR to the developer's stand and exercise it there; edits only in this worktree)\n\n" + mrBlock(mr) + extra +
+		"\n" + skillLine(s) + "\n" + access + "\n\n" +
+		fmt.Sprintf("You are in a git worktree checked out on the MR source branch `%s` (target `%s`). Steps:\n", mr.SourceBranch, targetBranch) +
+		fmt.Sprintf("1. List the files the MR changes: `git diff --name-status origin/%s...HEAD`.\n", targetBranch) +
+		"2. Sync exactly those files to the stand with the stand skill's push mechanism (paths are identical on the stand). Never run `git push`, `git pull`, checkout or reset on the stand; never run DB migrations or touch Redis/DB data unless the developer's instructions explicitly ask — list what was skipped in `todo`.\n" +
+		"3. On the stand, run the project's tests/checks that cover the touched code (unit tests of the touched classes, linters the project uses). Record the outcome in `tests`.\n" +
+		"4. Write an emulation script in this worktree, in the place the project uses for one-off scripts (look at the existing conventions), named after the MR. It must exercise the functionality the MR adds or changes end-to-end while mocking or stubbing external systems (HTTP APIs, queues, mail, payment providers) so it runs on the stand without side effects. Push it to the stand, run it there, capture the output in `script_output` and the path in `script_path`.\n" +
+		"5. Report problems you observed (errors, wrong behaviour, missing config) in `problems` with evidence, and everything that needs a human in `todo`.\n" +
+		"Do not modify the project code itself in this run — only add the script and its fixtures. Leave the stand consistent: if you had to change stand-only config, revert it.\n\n" + editRules()
+}
+
 // FixComments builds the prompt for addressing unresolved reviewer discussions in a worktree of the MR branch.
 func FixComments(mr MR, notes string, s *skill.Skill) string {
 	var extra string
