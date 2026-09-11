@@ -332,6 +332,12 @@ func TestSeenMRSinksAndResetsOnSync(t *testing.T) {
 	if strings.Index(body, "MR 43") < strings.Index(body, "MR 42") || strings.Count(body, `data-seen="1"`) != 1 || !strings.Contains(body, ">просмотрено</span>") || !strings.Contains(body, "Снять отметку") {
 		t.Fatal("a seen MR is dimmed, badged and sinks to the end of the list")
 	}
+	if _, page := get(t, ts.URL+"/-/mr/2"); !strings.Contains(page, `data-back href="/mrs"`) || !strings.Contains(page, "Снять отметку «просмотрено»</button>") || !strings.Contains(page, `>просмотрено</span>`) {
+		t.Fatal("mr page has the back link and the seen toggle in the header")
+	}
+	if _, page := get(t, ts.URL+"/-/mr/1"); !strings.Contains(page, `backHref('/mrs')`) || !strings.Contains(page, ">Просмотрено</button>") {
+		t.Fatal("mr page offers to mark the MR seen and return to the list")
+	}
 	// A sync without changes keeps the mark.
 	postJSON(t, ts.URL+"/api/mrs/sync", map[string]any{})
 	if _, body = get(t, ts.URL+"/mrs"); strings.Count(body, `data-seen="1"`) != 1 {

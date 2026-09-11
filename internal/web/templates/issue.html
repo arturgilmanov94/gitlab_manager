@@ -1,7 +1,7 @@
 {{define "content"}}
 <section class="page-head">
   <div>
-    <div class="crumbs"><a href="/issues">Задачи</a> · {{.Issue.ProjectPath}}</div>
+    <div class="crumbs"><a class="back tip" data-back href="/issues" data-tip="Назад к списку (Esc). Ведёт туда, откуда вы пришли: список задач с вашими фильтрами, сессии или обзор.">← Задачи</a> · {{.Issue.ProjectPath}}</div>
     <h1><a class="ref" href="{{.Issue.WebURL}}" target="_blank" rel="noopener">#{{.Issue.IID}}</a> {{.Issue.Title}}</h1>
     <div class="meta"><span>{{.Issue.Author}}</span><span class="sep"></span><span>{{.Issue.State}}</span>{{if keyLabels .Issue.Labels}}<span class="sep"></span><span>{{template "labels" .Issue.Labels}}</span>{{end}}{{with otherLabels .Issue.Labels}}<span class="sep"></span><span>{{.}}</span>{{end}}<span class="sep"></span><span>GitLab обновлена {{when .Issue.GitLabUpdatedAt}}</span></div>
   </div>

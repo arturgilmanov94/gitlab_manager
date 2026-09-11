@@ -2,7 +2,7 @@
 <section class="page-head">
   <div>
     <div class="crumbs">
-      {{if .MR}}<a href="/mrs">Merge requests</a> · <a href="{{mrPath .MR.ID}}">!{{.MR.IID}} {{.MR.Title}}</a>{{else if .Issue}}<a href="/issues">Задачи</a> · <a href="{{issuePath .Issue.ID}}">#{{.Issue.IID}} {{.Issue.Title}}</a>{{else}}Сессия{{end}}
+      {{if .MR}}<a class="back tip" data-back href="{{mrPath .MR.ID}}" data-tip="Назад (Esc). Ведёт туда, откуда вы пришли: MR, список сессий или обзор.">← !{{.MR.IID}} {{.MR.Title}}</a> · <a href="/mrs">Merge requests</a>{{else if .Issue}}<a class="back tip" data-back href="{{issuePath .Issue.ID}}" data-tip="Назад (Esc). Ведёт туда, откуда вы пришли: задача, список сессий или обзор.">← #{{.Issue.IID}} {{.Issue.Title}}</a> · <a href="/issues">Задачи</a>{{else}}<a class="back tip" data-back href="/runs" data-tip="Назад к списку сессий (Esc).">← Сессии</a>{{end}}{{if or .MR .Issue}} · <a href="/runs">Сессии</a>{{end}}
     </div>
     <h1>{{kindLabel .Run.Kind}} <span class="muted">· сессия #{{.Run.ID}}</span></h1>
     <div class="meta">

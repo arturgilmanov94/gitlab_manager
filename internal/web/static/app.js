@@ -13,6 +13,31 @@
   };
   window.reload = () => { try { sessionStorage.setItem('scroll:' + location.pathname, String(window.scrollY)); } catch (e) {} window.location.reload(); };
   window.go = (url) => { window.location.href = url; };
+
+  // ---- "back" link of detail pages: points where the visitor came from (a same-origin list or object page,
+  // filters and hash preserved) instead of the default list; Esc follows it when nothing else is focused.
+  const backLabels = [['/mrs', 'Merge requests'], ['/issues', 'Задачи'], ['/runs', 'Сессии'], ['/history', 'История'], ['/ci', 'CI'], ['/workspaces', 'Workspaces'], ['/', 'Обзор'], ['/-/mr/', 'к MR'], ['/-/issue/', 'к задаче']];
+  const backLink = document.querySelector('a[data-back]');
+  window.backHref = (fallback) => (backLink && backLink.getAttribute('href')) || fallback;
+  if (backLink) {
+    try {
+      const ref = document.referrer ? new URL(document.referrer) : null;
+      if (ref && ref.origin === location.origin && ref.pathname !== location.pathname) {
+        const known = backLabels.find(([path]) => path === ref.pathname || (path.endsWith('/') && path !== '/' && ref.pathname.startsWith(path)));
+        if (known) {
+          backLink.setAttribute('href', ref.pathname + ref.search + ref.hash);
+          if (!known[0].startsWith('/-/')) backLink.textContent = '← ' + known[1];
+        }
+      }
+    } catch (e) { /* ignore */ }
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const t = event.target;
+      if (t && (t.matches('input, textarea, select, [contenteditable]') || t.closest('dialog, .questions'))) return;
+      if (document.querySelector('details.menu[open]')) return; // Escape closes the menu first
+      window.location.href = backLink.getAttribute('href');
+    });
+  }
   try {
     const saved = sessionStorage.getItem('scroll:' + location.pathname);
     if (saved) { sessionStorage.removeItem('scroll:' + location.pathname); window.scrollTo(0, parseInt(saved, 10) || 0); }
