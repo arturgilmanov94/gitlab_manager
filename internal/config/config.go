@@ -60,6 +60,9 @@ type Settings struct {
 
 	// ReviewWorktree runs reviews in a read-only worktree at the MR head SHA (REVIEW_WORKTREE, default on).
 	ReviewWorktree bool
+	// ReviewWorktreeTTLMin is how long an idle review worktree is kept after its last session before the janitor
+	// removes it (REVIEW_WORKTREE_TTL_MIN, default 60; 0 = keep until the MR leaves the list or by hand).
+	ReviewWorktreeTTLMin int
 	// PrefetchMaxDiffChars caps the MR diff inlined into review prompts (PREFETCH_MAX_DIFF_CHARS; 0 = never inline).
 	PrefetchMaxDiffChars int
 
@@ -239,6 +242,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		TerminalCmd:           strings.TrimSpace(get("TERMINAL_CMD")),
 		StandSkill:            strings.TrimSpace(get("STAND_SKILL")),
 		ReviewWorktree:        boolean("REVIEW_WORKTREE", true),
+		ReviewWorktreeTTLMin:  num("REVIEW_WORKTREE_TTL_MIN", 60),
 		PrefetchMaxDiffChars:  num("PREFETCH_MAX_DIFF_CHARS", 60000),
 	}
 	if s.RunConcurrency < 1 {

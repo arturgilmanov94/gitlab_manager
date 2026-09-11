@@ -1,6 +1,7 @@
 {{define "content"}}
 <section class="page-head">
-  <div><div class="crumbs">Служебное</div><h1>Workspaces</h1><div class="meta"><span>отдельные git worktree, в которых агенты правят код; ваша рабочая копия не затрагивается</span></div></div>
+  <div><div class="crumbs">Служебное</div><h1>Workspaces</h1><div class="meta"><span>отдельные git worktree, в которых агенты правят код; ваша рабочая копия не затрагивается</span>{{if .Reviews}}<span class="sep"></span><span class="tip" data-tip="Read-only checkout на head SHA MR для ревью. Одноразовые: следующее ревью создаёт заново, вопрос агенту восстанавливает каталог своей сессии. Удаляются сами, когда MR влит, закрыт, скрыт или удалён{{if .ReviewTTL}}, и через {{.ReviewTTL}} мин без сессий{{end}}. Настройка REVIEW_WORKTREE_TTL_MIN.">review-worktree: {{.Reviews}}{{if .ReviewTTL}} · чистятся через {{.ReviewTTL}} мин простоя{{else}} · автоочистка по времени выключена{{end}}</span>{{end}}</div></div>
+  {{if .Reviews}}<div class="actions"><button class="btn tip" data-tip="Удалить все review-worktree, в которых сейчас нет активной сессии. Место на диске освободится; следующее ревью создаст checkout заново." onclick="post('/api/workspaces/cleanup-review', {}, this).then(r => r && (flash('Удалено review-worktree: ' + r.removed, true), reload()))">Очистить review-worktree</button></div>{{end}}
 </section>
 {{if .Error}}<div class="alert alert-danger">Не удалось прочитать список worktree: {{.Error}}</div>{{end}}
 {{if not .Workspaces}}
@@ -12,7 +13,7 @@
   <tbody>
   {{range .Workspaces}}
   <tr>
-    <td class="title-cell"><span class="title mono">{{.Branch}}</span><div class="sub">HEAD {{shortSHA .Head}}</div></td>
+    <td class="title-cell">{{if .Review}}<span class="title mono">{{.Name}}</span><div class="sub"><span class="badge">review</span> read-only на HEAD {{shortSHA .Head}} · удаляется автоматически</div>{{else}}<span class="title mono">{{.Branch}}</span><div class="sub">HEAD {{shortSHA .Head}}</div>{{end}}</td>
     <td data-label="Состояние">
       {{if eq .State "active"}}<span class="state state-info"><span class="spinner"></span> Агент работает</span>
       {{else if eq .State "dirty"}}<span class="state state-warning"><span class="glyph">⚠</span> Есть незакоммиченные изменения</span>
@@ -23,12 +24,15 @@
     <td class="mono small hide-lg" data-label="Путь">{{.Path}}</td>
     <td class="actions-cell">
       <div class="actions">
-        {{if .Run}}<a class="btn btn-sm btn-primary" href="{{runPath .Run.Kind .Run.ID}}#workspace">{{if eq .State "dirty"}}Показать diff{{else if eq .State "active"}}Открыть сессию{{else}}Подготовить MR{{end}}</a>{{end}}
+        {{if and .Run .Review}}<a class="btn btn-sm" href="{{runPath .Run.Kind .Run.ID}}">Открыть сессию</a>
+        {{else if .Run}}<a class="btn btn-sm btn-primary" href="{{runPath .Run.Kind .Run.ID}}#workspace">{{if eq .State "dirty"}}Показать diff{{else if eq .State "active"}}Открыть сессию{{else}}Подготовить MR{{end}}</a>{{end}}
         <details class="menu">
           <summary title="Ещё действия">⋯</summary>
           <div class="menu-items">
             <button class="item" onclick="copyText('{{.Path}}')">Скопировать путь</button>
-            {{if and .Run (not .Active)}}<div class="divider"></div>
+            {{if .Review}}{{if not .Active}}<div class="divider"></div>
+            <button class="item danger tip" data-tip="Удалить этот review-worktree сейчас. Следующее ревью или вопрос агенту создадут его заново." onclick="post('/api/workspaces/cleanup-review', {path: '{{.Path}}'}, this).then(r => r && reload())">Удалить review-worktree</button>{{end}}
+            {{else if and .Run (not .Active)}}<div class="divider"></div>
             <button class="item danger tip" data-tip="Удалить каталог workspace из runtime/. Ветка и коммиты остаются в репозитории.{{if .Dirty}} Незакоммиченные изменения будут потеряны.{{end}}" onclick="confirm('Удалить workspace {{.Branch}}?{{if .Dirty}} Незакоммиченные изменения пропадут.{{end}}') && del('/api/runs/{{.Run.ID}}/worktree', this).then(r => r && reload())">Удалить workspace</button>{{end}}
           </div>
         </details>

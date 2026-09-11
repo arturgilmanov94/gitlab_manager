@@ -184,6 +184,18 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /issues", s.issues)
 	s.mux.HandleFunc("GET /runs", s.runs)
 	s.mux.HandleFunc("GET /workspaces", s.workspaces)
+	s.mux.HandleFunc("POST /api/workspaces/cleanup-review", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Path string `json:"path"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Path != "" {
+			s.result(w, map[string]any{"removed": 1}, s.svc.RemoveReviewWorktree(body.Path))
+			return
+		}
+		removed := s.svc.CleanupReviewWorktrees(r.Context(), true)
+		s.result(w, map[string]any{"removed": len(removed)}, nil)
+	})
 	s.mux.HandleFunc("GET /ci", s.ci)
 	s.mux.HandleFunc("GET /doctor", s.doctorPage)
 	// Readable object URLs: /-/mr/1, /-/issue/2, /-/review/3, /-/task-implement/4 (+ /log).
@@ -690,7 +702,13 @@ type runRow struct {
 
 func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
 	items, err := s.svc.Workspaces()
-	data := map[string]any{"Base": s.base("workspaces", "Workspaces"), "Workspaces": items}
+	reviews := 0
+	for _, item := range items {
+		if item.Review {
+			reviews++
+		}
+	}
+	data := map[string]any{"Base": s.base("workspaces", "Workspaces"), "Workspaces": items, "Reviews": reviews, "ReviewTTL": s.svc.Settings.ReviewWorktreeTTLMin}
 	if err != nil {
 		data["Error"] = err.Error()
 	}

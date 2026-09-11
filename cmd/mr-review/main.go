@@ -279,6 +279,7 @@ func showConfig(settings *config.Settings) int {
 	fmt.Printf("logs:            %s\n", settings.LogDir)
 	fmt.Printf("runtime:         %s\n", settings.RuntimeDir)
 	fmt.Printf("worktrees:       %s (base branch %s)\n", settings.WorktreeDir, settings.BaseBranch)
+	fmt.Printf("review_worktree: %v (idle ones removed after %d min; 0 = never)\n", settings.ReviewWorktree, settings.ReviewWorktreeTTLMin)
 	for _, action := range skill.Actions {
 		fmt.Printf("%-20s %s\n", strings.ToLower(action.EnvKey)+":", firstOf(settings.SkillNames[action.Kind], "(auto: "+action.SkillName+")"))
 	}
@@ -327,6 +328,9 @@ func serve(settings *config.Settings, openBrowser bool) int {
 	if n := svc.Recover(); n > 0 {
 		fmt.Printf("marked %d interrupted run(s) as failed\n", n)
 	}
+	janitorCtx, stopJanitor := context.WithCancel(context.Background())
+	defer stopJanitor()
+	go svc.RunJanitor(janitorCtx)
 	server, err := web.New(svc, version, runners(settings))
 	if err != nil {
 		return fail("%v", err)

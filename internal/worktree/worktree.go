@@ -41,6 +41,46 @@ func (m *Manager) Path(branch string) string { return filepath.Join(m.Dir, Slug(
 // ReviewPath returns the read-only review worktree directory for an object name (e.g. "project!123").
 func (m *Manager) ReviewPath(name string) string { return filepath.Join(m.Dir, "review", Slug(name)) }
 
+// IsReview reports whether path is a review worktree (under Dir/review): disposable, recreated on demand.
+func (m *Manager) IsReview(path string) bool {
+	prefix := filepath.Join(filepath.Clean(m.Dir), "review") + string(filepath.Separator)
+	return strings.HasPrefix(filepath.Clean(path)+string(filepath.Separator), prefix) && filepath.Clean(path) != filepath.Clean(prefix)
+}
+
+// ListReview returns the review worktrees only.
+func (m *Manager) ListReview(ctx context.Context) ([]Entry, error) {
+	all, err := m.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []Entry
+	for _, e := range all {
+		if m.IsReview(e.Path) {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// RemoveIf removes the worktree when keep() returns false, both under the manager lock, so a run that starts
+// preparing the same worktree meanwhile is not raced: it either finds the worktree gone (and recreates it) or keeps it.
+func (m *Manager) RemoveIf(ctx context.Context, path string, keep func() bool) (bool, error) {
+	if !strings.HasPrefix(filepath.Clean(path), filepath.Clean(m.Dir)) {
+		return false, errors.New("refusing to remove a directory outside the worktree dir")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if keep != nil && keep() {
+		return false, nil
+	}
+	_, err := m.git(ctx, m.Root, "worktree", "remove", "--force", path)
+	_, _ = m.git(ctx, m.Root, "worktree", "prune")
+	if err != nil && !m.Exists(path) {
+		err = nil // already gone (deleted by hand): prune was all that was needed
+	}
+	return err == nil, err
+}
+
 // PrepareDetached creates (or moves) a detached worktree at exactly `sha` for read-only work on an MR head.
 // branch is fetched first so a commit never seen by this checkout is available; the main checkout is untouched.
 func (m *Manager) PrepareDetached(ctx context.Context, name, branch, sha string, log func(string)) (string, error) {

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"mr-review/internal/config"
 	"mr-review/internal/db"
@@ -1150,6 +1152,90 @@ func TestFixSelectedFindings(t *testing.T) {
 
 // Reviews run in a read-only worktree at the MR head with the diff and discussions prefetched into the prompt;
 // when the head cannot be checked out the run falls back to the project root and says so.
+// Review worktrees are disposable: the janitor removes idle ones after the TTL, triggers remove them when the MR
+// leaves the list, a follow-up question restores the one its session lived in, and active runs are never touched.
+func TestReviewWorktreeJanitor(t *testing.T) {
+	svc, gl, fr := newService(t)
+	out, err := exec.Command("git", "-C", svc.Settings.ProjectRoot, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha := strings.TrimSpace(string(out))
+	gl.MRs[42] = testutil.MRPayload(42, sha)
+	mr, _ := svc.AddMR("!42")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput(sha)}
+	runID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
+	path := svc.Worktrees.ReviewPath("group/sub/project!42")
+	if !svc.Worktrees.Exists(path) {
+		t.Fatal("review worktree expected")
+	}
+	ctx := context.Background()
+	// Fresh activity: kept by age. TTL 0: never by age. force: removed.
+	if removed := svc.CleanupReviewWorktrees(ctx, false); len(removed) != 0 || !svc.Worktrees.Exists(path) {
+		t.Fatalf("a just-used worktree must stay: %v", removed)
+	}
+	svc.Settings.ReviewWorktreeTTLMin = 0
+	if removed := svc.CleanupReviewWorktrees(ctx, false); len(removed) != 0 {
+		t.Fatalf("TTL 0 disables the age sweep: %v", removed)
+	}
+	svc.Settings.ReviewWorktreeTTLMin = 60
+	// Old activity: swept.
+	old := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
+	_ = svc.DB.UpdateRun(runID, map[string]any{"created_at": old, "started_at": old, "finished_at": old})
+	if removed := svc.CleanupReviewWorktrees(ctx, false); len(removed) != 1 || removed[0] != path || svc.Worktrees.Exists(path) {
+		t.Fatalf("idle worktree must go: %v", removed)
+	}
+	if ws, _ := svc.Workspaces(); len(ws) != 0 {
+		t.Fatalf("workspaces list must not show the removed worktree: %+v", ws)
+	}
+	// A follow-up question restores the worktree at the reviewed head and runs there.
+	if _, err := svc.Ask(runID, "why HIGH?"); err != nil {
+		t.Fatal(err)
+	}
+	if req := fr.Requests[len(fr.Requests)-1]; req.Dir != path || req.ResumeSessionID == "" || !svc.Worktrees.Exists(path) {
+		t.Fatalf("follow-up must restore the review worktree: %+v", req)
+	}
+	// An active run claims the worktree: the sweep keeps it even when forced.
+	fr.Block = make(chan struct{})
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput(sha)}
+	second, _ := svc.StartReview(mr.ID, db.KindReviewQuick, "", 0)
+	testutil.WaitFor(t, func() bool {
+		r, _ := svc.DB.GetRun(second)
+		return r != nil && r.Status == db.StatusRunning && r.WorkDir == path
+	})
+	if removed := svc.CleanupReviewWorktrees(ctx, true); len(removed) != 0 || !svc.Worktrees.Exists(path) {
+		t.Fatalf("worktree of an active run must stay: %v", removed)
+	}
+	if err := svc.RemoveReviewWorktree(path); err == nil {
+		t.Fatal("manual removal must refuse while a run is active")
+	}
+	close(fr.Block)
+	testutil.WaitFor(t, func() bool { return status(svc, second) == db.StatusDone })
+	// Trigger: the MR gets merged → the next sync drops the worktree right away.
+	gl.MRs[42]["state"] = "merged"
+	if _, err := svc.SyncMRs(); err != nil {
+		t.Fatal(err)
+	}
+	if svc.Worktrees.Exists(path) {
+		t.Fatal("merged MR must lose its review worktree")
+	}
+	// Trigger: hiding an MR drops its worktree; manual removal works for an idle one; non-review paths are refused.
+	gl.MRs[42]["state"] = "opened"
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput(sha)}
+	third, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, third) == db.StatusDone })
+	if !svc.Worktrees.Exists(path) {
+		t.Fatal("review recreates the worktree")
+	}
+	if err := svc.HideMR(mr.ID); err != nil || svc.Worktrees.Exists(path) {
+		t.Fatalf("hidden MR must lose its review worktree: %v", err)
+	}
+	if err := svc.RemoveReviewWorktree(svc.Settings.ProjectRoot); err == nil {
+		t.Fatal("only review worktrees may be removed through this call")
+	}
+}
+
 func TestReviewWorktreeAndPrefetch(t *testing.T) {
 	svc, gl, fr := newService(t)
 	out, err := exec.Command("git", "-C", svc.Settings.ProjectRoot, "rev-parse", "HEAD").Output()

@@ -467,6 +467,9 @@ func (s *Service) SyncMRs() (SyncResult, error) {
 			if err != nil {
 				return
 			}
+			if !fresh.Relevant() {
+				s.dropReviewWorktree(fresh) // merged, closed, approved, hidden or no longer mine: the checkout is not needed
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -504,6 +507,9 @@ func (s *Service) DeleteMR(id int64) error {
 	if active, _ := s.DB.ActiveRunForMR(id); active != nil {
 		s.Cancel(active.ID)
 	}
+	if mr, _ := s.DB.GetMR(id); mr != nil {
+		s.dropReviewWorktree(mr)
+	}
 	return s.DB.DeleteMR(id)
 }
 
@@ -515,7 +521,12 @@ func (s *Service) HideMR(id int64) error {
 	if active, _ := s.DB.ActiveRunForMR(id); active != nil {
 		s.Cancel(active.ID)
 	}
-	return s.DB.SetMRHidden(id, true)
+	if err := s.DB.SetMRHidden(id, true); err != nil {
+		return err
+	}
+	mr, _ := s.DB.GetMR(id)
+	s.dropReviewWorktree(mr)
+	return nil
 }
 
 // UnhideMR brings a hidden MR back to the main list (as long as it still concerns me).
@@ -830,11 +841,13 @@ func (s *Service) ReviewDir(mr *db.MergeRequest) string {
 
 // prepareReviewDir materialises the review worktree at the MR head; on any failure the run falls back to the
 // project root (logged), so a review never fails because of the checkout.
-func (s *Service) prepareReviewDir(ctx context.Context, mr *db.MergeRequest, logln func(string)) string {
+func (s *Service) prepareReviewDir(ctx context.Context, runID int64, mr *db.MergeRequest, logln func(string)) string {
 	dir := s.ReviewDir(mr)
 	if dir == s.Settings.ProjectRoot {
 		return dir
 	}
+	// Claim the directory first: the janitor keeps a review worktree that an active run has claimed.
+	_ = s.DB.UpdateRun(runID, map[string]any{"work_dir": dir})
 	path, err := s.Worktrees.PrepareDetached(ctx, mr.Ref(), mr.SourceBranch, mr.HeadSHA, logln)
 	if err != nil {
 		logln("review worktree unavailable (" + err.Error() + "); falling back to the project root — the code there may differ from the MR head")
@@ -1529,7 +1542,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "merge request disappeared")
 			return
 		}
-		req.Dir = s.prepareReviewDir(ctx, mr, logln)
+		req.Dir = s.prepareReviewDir(ctx, runID, mr, logln)
 		req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
 		pm := promptMR(mr)
 		pm.Context = s.reviewContext(mr, req.Dir)
@@ -1577,7 +1590,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "finding disappeared")
 			return
 		}
-		req.Dir = s.prepareReviewDir(ctx, mr, logln)
+		req.Dir = s.prepareReviewDir(ctx, runID, mr, logln)
 		req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
 		pm := promptMR(mr)
 		pm.Context = s.reviewContext(mr, req.Dir)
@@ -1595,7 +1608,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "no failed jobs found for the head pipeline (GitLab API unavailable or the pipeline is no longer failed)")
 			return
 		}
-		req.Dir = s.prepareReviewDir(ctx, mr, logln)
+		req.Dir = s.prepareReviewDir(ctx, runID, mr, logln)
 		req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
 		pm := promptMR(mr)
 		pm.Context = s.reviewContext(mr, req.Dir)
@@ -2190,10 +2203,6 @@ func (s *Service) Ask(runID int64, question string) (string, error) {
 		return "", err
 	}
 	_, _ = s.DB.AddMessage(runID, "user", question, 0, 0)
-	dir := run.WorkDir
-	if dir == "" || !dirExists(dir) {
-		dir = s.Settings.ProjectRoot
-	}
 	log, _ := s.logFile(runID)
 	if log != nil {
 		defer log.Close()
@@ -2201,6 +2210,13 @@ func (s *Service) Ask(runID int64, question string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
+	dir := run.WorkDir
+	if dir != "" && !dirExists(dir) {
+		dir = s.restoreReviewDir(ctx, run, log)
+	}
+	if dir == "" {
+		dir = s.Settings.ProjectRoot
+	}
 	result, err := r.Run(ctx, runner.Request{
 		Prompt:          prompts.FollowUp(question),
 		Dir:             dir,
@@ -2243,9 +2259,146 @@ func (s *Service) SetFindingStatus(findingID int64, status string) error {
 	return nil
 }
 
+// ---------------------------------------------------------------------------------- review worktree janitor
+
+// janitorInterval is how often idle review worktrees are checked.
+const janitorInterval = 10 * time.Minute
+
+// RunJanitor sweeps idle review worktrees right away and then every janitorInterval until ctx is done.
+func (s *Service) RunJanitor(ctx context.Context) {
+	ticker := time.NewTicker(janitorInterval)
+	defer ticker.Stop()
+	for {
+		s.CleanupReviewWorktrees(ctx, false)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// CleanupReviewWorktrees removes review worktrees nobody uses: every idle one with force, otherwise those idle for
+// longer than REVIEW_WORKTREE_TTL_MIN (0 = never by age). A worktree claimed by an active run is always kept.
+// Review worktrees are disposable: the next review recreates them at the MR head, and a follow-up question restores
+// the one its session lived in.
+func (s *Service) CleanupReviewWorktrees(ctx context.Context, force bool) []string {
+	if s.Worktrees == nil || (!force && s.Settings.ReviewWorktreeTTLMin <= 0) {
+		return nil
+	}
+	entries, err := s.Worktrees.ListReview(ctx)
+	if err != nil {
+		return nil
+	}
+	ttl := time.Duration(s.Settings.ReviewWorktreeTTLMin) * time.Minute
+	var removed []string
+	for _, e := range entries {
+		if !force {
+			idle, ok := s.idleFor(e.Path)
+			if !ok || idle < ttl {
+				continue
+			}
+		}
+		if s.removeReviewWorktree(ctx, e.Path) {
+			removed = append(removed, e.Path)
+		}
+	}
+	return removed
+}
+
+// RemoveReviewWorktree removes one review worktree by hand (Workspaces page) unless a run is active in it.
+func (s *Service) RemoveReviewWorktree(path string) error {
+	if s.Worktrees == nil || !s.Worktrees.IsReview(path) {
+		return userErr("%s is not a review worktree", path)
+	}
+	if active, _ := s.DB.ActiveRunForWorkDir(path); active != nil {
+		return userErr("session #%d is still working in this worktree", active.ID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), worktree.Timeout)
+	defer cancel()
+	if !s.removeReviewWorktree(ctx, path) {
+		return userErr("could not remove %s (see the server log)", path)
+	}
+	return nil
+}
+
+// removeReviewWorktree removes a review worktree unless an active run claimed it; reports success.
+func (s *Service) removeReviewWorktree(ctx context.Context, path string) bool {
+	ok, err := s.Worktrees.RemoveIf(ctx, path, func() bool {
+		active, _ := s.DB.ActiveRunForWorkDir(path)
+		return active != nil
+	})
+	if err != nil {
+		fmt.Printf("review worktree %s: %v\n", path, err)
+		return false
+	}
+	if ok {
+		fmt.Printf("removed review worktree %s\n", path)
+	}
+	return ok
+}
+
+// idleFor is how long a review worktree has been unused: since the last run or follow-up in it, else since the
+// directory changed last (created before run tracking or by hand).
+func (s *Service) idleFor(path string) (time.Duration, bool) {
+	if at := s.DB.LastActivityForWorkDir(path); at != "" {
+		if t, err := time.Parse(time.RFC3339, at); err == nil {
+			return time.Since(t), true
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, false
+	}
+	return time.Since(info.ModTime()), true
+}
+
+// dropReviewWorktree removes the review worktree of an MR that left the main list (merged, closed, approved,
+// hidden, deleted): nothing will review it again, so the checkout only takes disk space.
+func (s *Service) dropReviewWorktree(mr *db.MergeRequest) {
+	if mr == nil || s.Worktrees == nil {
+		return
+	}
+	path := s.Worktrees.ReviewPath(mr.Ref())
+	if !s.Worktrees.Exists(path) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), worktree.Timeout)
+	defer cancel()
+	s.removeReviewWorktree(ctx, path)
+}
+
+// restoreReviewDir recreates the review worktree a finished session lived in (removed as idle) at the reviewed head,
+// so the agent session resumes from the same path. Falls back to the project root.
+func (s *Service) restoreReviewDir(ctx context.Context, run *db.Run, log *os.File) string {
+	root := s.Settings.ProjectRoot
+	logln := func(line string) {
+		if log != nil {
+			fmt.Fprintln(log, line)
+		}
+	}
+	if run.MRID == nil || s.Worktrees == nil || !s.Worktrees.IsReview(run.WorkDir) {
+		logln("session directory " + run.WorkDir + " is gone; continuing from the project root")
+		return root
+	}
+	mr, _ := s.DB.GetMR(*run.MRID)
+	if mr == nil {
+		return root
+	}
+	path, err := s.Worktrees.PrepareDetached(ctx, mr.Ref(), mr.SourceBranch, firstOf(run.HeadSHA, mr.HeadSHA), logln)
+	if err != nil {
+		logln("review worktree could not be restored (" + err.Error() + "); continuing from the project root")
+		return root
+	}
+	logln("review worktree restored for the follow-up: " + path)
+	return path
+}
+
 // Workspace summarises one worktree for the workspaces page.
 type Workspace struct {
 	Path        string
+	Name        string // directory name (review worktrees have no branch)
+	Review      bool   // read-only review worktree: disposable, removed when idle
 	Branch      string
 	Head        string
 	Run         *db.Run // newest run that used it (nil when unknown)
@@ -2269,7 +2422,7 @@ func (s *Service) Workspaces() ([]Workspace, error) {
 	}
 	var out []Workspace
 	for _, e := range entries {
-		w := Workspace{Path: e.Path, Branch: e.Branch, Head: e.Head}
+		w := Workspace{Path: e.Path, Name: filepath.Base(e.Path), Review: s.Worktrees.IsReview(e.Path), Branch: e.Branch, Head: e.Head}
 		w.Run, _ = s.DB.LatestRunForWorkDir(e.Path)
 		if w.Run != nil && w.Run.Active() {
 			w.Active = true

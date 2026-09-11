@@ -701,6 +701,26 @@ func (d *DB) LatestRunForWorkDir(dir string) (*Run, error) {
 	return r, err
 }
 
+// ActiveRunForWorkDir returns the queued/running/waiting run working in dir, or nil.
+func (d *DB) ActiveRunForWorkDir(dir string) (*Run, error) {
+	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE work_dir = ? AND status IN "+activeStatuses+" ORDER BY id DESC LIMIT 1", dir))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return r, err
+}
+
+// LastActivityForWorkDir is when a run last touched dir: the newest finish, start or creation time, and the
+// newest follow-up message of those runs ("" when no run used the directory).
+func (d *DB) LastActivityForWorkDir(dir string) string {
+	var at string
+	_ = d.sql.QueryRow(`SELECT COALESCE(MAX(t), '') FROM (
+		SELECT MAX(MAX(finished_at, started_at, created_at)) AS t FROM runs WHERE work_dir = ?
+		UNION ALL
+		SELECT MAX(m.created_at) FROM messages m JOIN runs r ON r.id = m.run_id WHERE r.work_dir = ?)`, dir, dir).Scan(&at)
+	return at
+}
+
 // RunListItem is a run with the object it belongs to (for the sessions page and the overview).
 type RunListItem struct {
 	RunSummary
