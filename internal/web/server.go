@@ -231,6 +231,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/mrs/{id}/hide", func(w http.ResponseWriter, r *http.Request) {
 		s.result(w, map[string]any{}, s.svc.HideMR(pathID(r)))
 	})
+	s.mux.HandleFunc("POST /api/mrs/{id}/seen", func(w http.ResponseWriter, r *http.Request) {
+		s.result(w, map[string]any{}, s.svc.SetMRSeen(pathID(r), true))
+	})
+	s.mux.HandleFunc("POST /api/mrs/{id}/unseen", func(w http.ResponseWriter, r *http.Request) {
+		s.result(w, map[string]any{}, s.svc.SetMRSeen(pathID(r), false))
+	})
 	s.mux.HandleFunc("POST /api/mrs/{id}/unhide", func(w http.ResponseWriter, r *http.Request) {
 		s.result(w, map[string]any{}, s.svc.UnhideMR(pathID(r)))
 	})
@@ -373,6 +379,8 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	relevant, archived := splitMRs(mrs)
+	// Seen MRs sink to the end, keeping the GitLab-activity order within each group.
+	sort.SliceStable(relevant, func(i, j int) bool { return !relevant[i].Seen() && relevant[j].Seen() })
 	s.render(w, "index", map[string]any{"Base": s.base("mrs", "Merge requests"), "MRs": relevant, "Archived": len(archived)})
 }
 
@@ -1070,6 +1078,7 @@ func (s *Server) apiRun(w http.ResponseWriter, r *http.Request) {
 		"error": run.Error, "runner": run.Runner, "cost_usd": run.CostUSD, "tokens": run.TotalTokens(), "duration_ms": run.DurationMs,
 		"started_at": run.StartedAt, "finished_at": run.FinishedAt, "findings": len(findings), "session_id": run.SessionID,
 		"progress": run.Progress, "phase": s.svc.DB.CurrentPhase(run.ID), "timeline": s.svc.DB.TimelineFor(run.ID),
+		"context_tokens": run.ContextTokens, "context_window": run.ContextWindow, "context_pct": run.ContextPct(),
 	}
 	if pending, _ := s.svc.DB.PendingApproval(run.ID); pending != nil {
 		payload["pending_approval"] = map[string]any{"id": pending.ID, "tool": pending.ToolName, "description": pending.Description}
@@ -1262,6 +1271,10 @@ func kindTip(kind string) string {
 		return "Убрать MR из основного списка в «Историю» с пометкой «скрыт вами». Запуски сохраняются, вернуть можно оттуда. В GitLab ничего не меняется."
 	case "restore":
 		return "Вернуть MR в основной список, если он всё ещё вас касается (открыт, вы автор, assignee или reviewer, вы его не одобряли)."
+	case "seen":
+		return "Отметить как просмотренный: MR затемнится и уйдёт в конец списка. Отметка снимется сама, когда синхронизация принесёт новые коммиты, комментарии или изменения в обсуждениях. В GitLab ничего не меняется."
+	case "unseen":
+		return "Снять отметку «просмотрено»: MR вернётся на своё место в списке."
 	case "delete":
 		return "Удалить MR из dashboard окончательно вместе с историей запусков. В GitLab ничего не меняется."
 	case "refresh":

@@ -314,6 +314,86 @@ func TestHideAndRestoreMR(t *testing.T) {
 	}
 }
 
+func TestSeenMRSinksAndResetsOnSync(t *testing.T) {
+	ts, svc, _ := newServer(t)
+	gl := svc.GitLab.(*testutil.FakeGitLab)
+	gl.MRs[43] = testutil.MRPayload(43, "sha-43")
+	gl.MRs[43]["updated_at"] = "2026-09-02T10:00:00+03:00" // newer than !42: listed first by default
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!43"})
+	_, body := get(t, ts.URL+"/mrs")
+	if strings.Index(body, "MR 43") > strings.Index(body, "MR 42") || !strings.Contains(body, ">Просмотрено</button>") || strings.Contains(body, `data-seen="1"`) {
+		t.Fatal("default order is by GitLab activity; rows offer the seen mark and none is dimmed")
+	}
+	if code, out := postJSON(t, ts.URL+"/api/mrs/2/seen", map[string]any{}); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	_, body = get(t, ts.URL+"/mrs")
+	if strings.Index(body, "MR 43") < strings.Index(body, "MR 42") || strings.Count(body, `data-seen="1"`) != 1 || !strings.Contains(body, ">просмотрено</span>") || !strings.Contains(body, "Снять отметку") {
+		t.Fatal("a seen MR is dimmed, badged and sinks to the end of the list")
+	}
+	// A sync without changes keeps the mark.
+	postJSON(t, ts.URL+"/api/mrs/sync", map[string]any{})
+	if _, body = get(t, ts.URL+"/mrs"); strings.Count(body, `data-seen="1"`) != 1 {
+		t.Fatal("sync without activity must keep the mark")
+	}
+	// New commits on the MR: the next sync clears the mark and the MR returns to its place.
+	gl.MRs[43] = testutil.MRPayload(43, "sha-43-new")
+	gl.MRs[43]["updated_at"] = "2026-09-02T10:00:00+03:00"
+	postJSON(t, ts.URL+"/api/mrs/sync", map[string]any{})
+	_, body = get(t, ts.URL+"/mrs")
+	if strings.Contains(body, `data-seen="1"`) || strings.Index(body, "MR 43") > strings.Index(body, "MR 42") {
+		t.Fatal("new commits must clear the seen mark")
+	}
+	// New reviewer discussion: same.
+	postJSON(t, ts.URL+"/api/mrs/2/seen", map[string]any{})
+	gl.Unresolved[43] = 1
+	postJSON(t, ts.URL+"/api/mrs/2/refresh", map[string]any{})
+	if _, body = get(t, ts.URL+"/mrs"); strings.Contains(body, `data-seen="1"`) {
+		t.Fatal("a new discussion must clear the seen mark")
+	}
+	postJSON(t, ts.URL+"/api/mrs/2/seen", map[string]any{})
+	if code, _ := postJSON(t, ts.URL+"/api/mrs/2/unseen", map[string]any{}); code != 200 {
+		t.Fatal("unseen")
+	}
+	if _, body = get(t, ts.URL+"/mrs"); strings.Contains(body, `data-seen="1"`) {
+		t.Fatal("mark cleared by hand")
+	}
+}
+
+func TestRunPageShowsContextFill(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	if code, out := postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "full"}); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	run, _ := svc.DB.GetRun(1)
+	if run.ContextTokens != 20000 || run.ContextWindow != 200000 || run.ContextPct() != 10 {
+		t.Fatalf("context stored with the run: %+v", run)
+	}
+	if _, body := get(t, ts.URL+"/-/review/1"); !strings.Contains(body, `<span class="k">контекст</span><span class="ctx-value">10%</span>`) {
+		t.Fatal("run facts must show the context fill")
+	}
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, "Продолжить сессию #1 · Полное ревью · claude · 54.2k токенов · контекст 10% ·") {
+		t.Fatal("context picker must show the fill of the session")
+	}
+	if _, data := get(t, ts.URL+"/api/runs/1"); !strings.Contains(data, `"context_pct":10`) {
+		t.Fatalf("api must report the fill: %s", data)
+	}
+	// The next run of the same model knows the window before its own result arrives (live percent).
+	if w := svc.DB.KnownContextWindow("claude-opus-4-1"); w != 200000 {
+		t.Fatalf("known window: %d", w)
+	}
+	if w := svc.DB.KnownContextWindow("claude-haiku-4-5"); w != 200000 {
+		t.Fatalf("known window for a listed secondary model: %d", w)
+	}
+	if w := svc.DB.KnownContextWindow("other"); w != 0 {
+		t.Fatalf("unknown model: %d", w)
+	}
+}
+
 func fmtInt(v int64) string {
 	const digits = "0123456789"
 	if v == 0 {

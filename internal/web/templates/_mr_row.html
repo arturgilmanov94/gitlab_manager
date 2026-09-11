@@ -5,11 +5,12 @@
 {{$st := aiState .}}
 {{$busy := or (eq $st "running") (eq $st "queued") (eq $st "waiting")}}
 {{$closed := .Closed}}
-<tr data-mine="{{if and $username (eq .Author $username)}}1{{else}}0{{end}}" data-draft="{{if .Draft}}1{{else}}0{{end}}" data-ai="{{$st}}" data-labels="{{labelSlugs .Labels}}">
+{{$seen := and .Seen .Relevant}}
+<tr data-seen="{{if $seen}}1{{else}}0{{end}}" data-mine="{{if and $username (eq .Author $username)}}1{{else}}0{{end}}" data-draft="{{if .Draft}}1{{else}}0{{end}}" data-ai="{{$st}}" data-labels="{{labelSlugs .Labels}}">
   <td class="nowrap ref-cell"><a class="ref" href="{{mrPath .ID}}">!{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div></td>
   <td class="title-cell">
     <a class="title" href="{{mrPath .ID}}">{{.Title}}</a>
-    <div class="sub">{{.Author}}{{if and $username (eq .Author $username)}}<span class="badge badge-info tip" data-tip="Автор MR — вы.">мой</span>{{end}}{{if .Draft}}<span class="badge">Draft</span>{{end}}{{template "labels" .Labels}}{{if .Hidden}}<span class="badge badge-warning tip" data-tip="Вы убрали этот MR из основного списка. Вернуть — в меню ⋯.">скрыт вами</span>{{end}}{{if .ApprovedByMe}}<span class="badge badge-success tip" data-tip="Вы одобрили этот MR.">одобрен мной</span>{{end}}{{if and (not .MyRoles) (not .Manual)}}<span class="badge tip" data-tip="Вы больше не автор, assignee и не reviewer этого MR.">без роли</span>{{end}}{{if and .ContextRunID (not $busy) (not $closed)}}<a class="badge badge-ctx tip" href="{{mrPath .ID}}#context-picker" data-tip="У агента есть сессия с контекстом этого MR (запуск #{{.ContextRunID}}). На странице MR её можно продолжить вместо нового чата.">контекст #{{.ContextRunID}}</a>{{end}} · обновлён {{when .GitLabUpdatedAt}}{{if .ChangesCount}} · {{.ChangesCount}} файлов{{end}}</div>
+    <div class="sub">{{.Author}}{{if and $username (eq .Author $username)}}<span class="badge badge-info tip" data-tip="Автор MR — вы.">мой</span>{{end}}{{if .Draft}}<span class="badge">Draft</span>{{end}}{{template "labels" .Labels}}{{if .Hidden}}<span class="badge badge-warning tip" data-tip="Вы убрали этот MR из основного списка. Вернуть — в меню ⋯.">скрыт вами</span>{{end}}{{if $seen}}<span class="badge tip" data-tip="Отмечен просмотренным {{when .SeenAt}}. Отметка снимется сама при новых коммитах или обсуждениях.">просмотрено</span>{{end}}{{if .ApprovedByMe}}<span class="badge badge-success tip" data-tip="Вы одобрили этот MR.">одобрен мной</span>{{end}}{{if and (not .MyRoles) (not .Manual)}}<span class="badge tip" data-tip="Вы больше не автор, assignee и не reviewer этого MR.">без роли</span>{{end}}{{if and .ContextRunID (not $busy) (not $closed)}}<a class="badge badge-ctx tip" href="{{mrPath .ID}}#context-picker" data-tip="У агента есть сессия с контекстом этого MR (запуск #{{.ContextRunID}}). На странице MR её можно продолжить вместо нового чата.">контекст #{{.ContextRunID}}</a>{{end}} · обновлён {{when .GitLabUpdatedAt}}{{if .ChangesCount}} · {{.ChangesCount}} файлов{{end}}</div>
   </td>
   <td class="mono small hide-lg" data-label="Ветка">{{.SourceBranch}}<div class="muted">→ {{.TargetBranch}}</div></td>
   <td data-label="GitLab">
@@ -49,6 +50,7 @@
       {{else}}
         <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "full"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'full', this)">Запустить ревью</button>
       {{end}}
+      {{if .Relevant}}{{if $seen}}<button class="btn btn-sm btn-link tip" data-tip="{{kindTip "unseen"}}" onclick="post('/api/mrs/{{.ID}}/unseen', {}, this).then(r => r && reload())">Снять отметку</button>{{else}}<button class="btn btn-sm btn-link tip" data-tip="{{kindTip "seen"}}" onclick="post('/api/mrs/{{.ID}}/seen', {}, this).then(r => r && reload())">Просмотрено</button>{{end}}{{end}}
       <a class="btn btn-sm btn-link ext" href="{{.WebURL}}" target="_blank" rel="noopener">GitLab</a>
       <details class="menu">
         <summary title="Ещё действия">⋯</summary>

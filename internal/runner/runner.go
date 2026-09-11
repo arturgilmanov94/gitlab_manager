@@ -70,9 +70,26 @@ type Request struct {
 	Timeout         time.Duration
 	SessionName     string
 	Log             io.Writer
-	Permission      PermissionFunc     // nil: anything that would prompt is denied
-	Progress        func(note string)  // optional: short notes about what the agent is doing right now
-	Event           func(ev ToolEvent) // optional: every tool call, for the structured timeline
+	Permission      PermissionFunc       // nil: anything that would prompt is denied
+	Progress        func(note string)    // optional: short notes about what the agent is doing right now
+	Event           func(ev ToolEvent)   // optional: every tool call, for the structured timeline
+	Context         func(c ContextUsage) // optional: context window fill after every turn of the main agent
+}
+
+// ContextUsage is how full the agent's context window is: tokens present in the context at the last turn of the
+// main agent (input + cache read + cache write of that request) and the window size when the runner knows it.
+type ContextUsage struct {
+	Tokens int64
+	Window int64  // 0 = unknown yet
+	Model  string // model of the session, when reported
+}
+
+// Percent is the fill in whole percents (0 when the window is unknown).
+func (c ContextUsage) Percent() int {
+	if c.Window <= 0 || c.Tokens <= 0 {
+		return 0
+	}
+	return int(c.Tokens * 100 / c.Window)
 }
 
 // ToolEvent is one tool call of the agent.
@@ -102,6 +119,7 @@ type Result struct {
 	Usage      Usage
 	DurationMs int64
 	NumTurns   int
+	Context    ContextUsage    // context window fill at the end of the session (zero when the runner cannot tell)
 	Denials    json.RawMessage // tool calls the agent was refused (Claude Code permission_denials), for the run page
 	Raw        json.RawMessage
 }

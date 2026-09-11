@@ -192,6 +192,7 @@ func (c *Claude) Run(ctx context.Context, req Request) (*Result, error) {
 		Usage:      ClaudeUsage(payload),
 		DurationMs: int64(num(payload["duration_ms"])),
 		NumTurns:   int(num(payload["num_turns"])),
+		Context:    ContextUsage{Tokens: session.ctx, Window: ClaudeContextWindow(payload, session.model), Model: session.model},
 		Raw:        raw,
 	}
 	if denials, ok := payload["permission_denials"].([]any); ok && len(denials) > 0 {
@@ -229,6 +230,8 @@ type streamSession struct {
 	log    io.Writer
 	mu     sync.Mutex
 	closed bool
+	model  string // model of the session from the init event
+	ctx    int64  // tokens in the context at the last turn of the main agent
 }
 
 func (s *streamSession) send(msg map[string]any) {
@@ -271,6 +274,7 @@ func (s *streamSession) consume(ctx context.Context, stdout io.Reader) map[strin
 			s.handleControlRequest(ctx, event)
 		case "assistant":
 			s.noteToolUse(event)
+			s.noteContext(event)
 		case "result":
 			result = event
 			logf(s.log, "--- result --- status=%s turns=%v duration=%vms cost=$%.2f (full JSON is stored with the run)\n%s\n",
@@ -279,6 +283,7 @@ func (s *streamSession) consume(ctx context.Context, stdout io.Reader) map[strin
 		case "system":
 			switch str(event["subtype"]) {
 			case "init":
+				s.model = str(event["model"])
 				logf(s.log, "[init] session=%s model=%s permissions=%s claude=%s cwd=%s\n",
 					str(event["session_id"]), str(event["model"]), str(event["permissionMode"]), str(event["claude_code_version"]), str(event["cwd"]))
 			case "permission_denied":
@@ -290,6 +295,55 @@ func (s *streamSession) consume(ctx context.Context, stdout io.Reader) map[strin
 		logf(s.log, "--- stream read error: %v ---\n", err)
 	}
 	return result
+}
+
+// noteContext reads the usage of an assistant turn of the main agent (subagent turns carry parent_tool_use_id):
+// input + cache read + cache write of one request is the size of the context at that turn.
+func (s *streamSession) noteContext(event map[string]any) {
+	if str(event["parent_tool_use_id"]) != "" {
+		return
+	}
+	message, _ := event["message"].(map[string]any)
+	usage, _ := message["usage"].(map[string]any)
+	if usage == nil {
+		return
+	}
+	tokens := int64(num(usage["input_tokens"]) + num(usage["cache_read_input_tokens"]) + num(usage["cache_creation_input_tokens"]))
+	if tokens <= 0 || tokens == s.ctx {
+		return
+	}
+	s.ctx = tokens
+	if s.req.Context != nil {
+		s.req.Context(ContextUsage{Tokens: tokens, Model: firstNonEmpty(str(message["model"]), s.model)})
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// ClaudeContextWindow returns the context window size of the session's main model from modelUsage
+// (the entry matching model, else the model with most output tokens); 0 when the CLI does not report it.
+func ClaudeContextWindow(payload map[string]any, model string) int64 {
+	models, ok := payload["modelUsage"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	if m, ok := models[model].(map[string]any); ok && model != "" {
+		return int64(num(m["contextWindow"]))
+	}
+	for _, name := range ClaudeModels(payload) {
+		m, _ := models[name].(map[string]any)
+		if w := int64(num(m["contextWindow"])); w > 0 {
+			return w
+		}
+	}
+	return 0
 }
 
 func (s *streamSession) noteToolUse(event map[string]any) {

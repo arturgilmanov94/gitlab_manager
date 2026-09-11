@@ -43,6 +43,7 @@
         <button class="item tip" data-tip="{{kindTip "refresh"}}" onclick="post('/api/mrs/{{.MR.ID}}/refresh', {}, this).then(r => r && reload())">Обновить из GitLab</button>
         <a class="item" href="#history">История AI review</a>
         <button class="item" onclick="copyText('{{.MR.WebURL}}')">Скопировать ссылку</button>
+        {{if .MR.Relevant}}{{if .MR.Seen}}<button class="item tip" data-tip="{{kindTip "unseen"}}" onclick="post('/api/mrs/{{.MR.ID}}/unseen', {}, this).then(r => r && reload())">Снять отметку «просмотрено»</button>{{else}}<button class="item tip" data-tip="{{kindTip "seen"}}" onclick="post('/api/mrs/{{.MR.ID}}/seen', {}, this).then(r => r && (flash('MR отмечен просмотренным', true), reload()))">Отметить просмотренным<span class="sub">затемнить и убрать в конец списка</span></button>{{end}}{{end}}
         <div class="divider"></div>
         {{if .Active}}<button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Active.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
         {{if .MR.Hidden}}

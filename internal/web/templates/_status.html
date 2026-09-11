@@ -9,8 +9,8 @@
   <label class="small secondary" for="context">Контекст:</label>
   <select id="context" class="context-select">
     <option value="">Новый чат · пустой контекст</option>
-    {{range .Sessions}}<option value="{{.ID}}" data-kinds="{{$.Kinds}}">Продолжить сессию #{{.ID}} · {{kindLabel .Kind}} · {{.Runner}} · {{tokens .TotalTokens}} токенов · {{when .FinishedAt}}</option>{{end}}
-    {{with .More}}{{range .Sessions}}<option value="{{.ID}}" data-kinds="{{$.More.Kinds}}">Продолжить сессию #{{.ID}} · {{kindLabel .Kind}} · {{.Runner}} · {{tokens .TotalTokens}} токенов · {{when .FinishedAt}}</option>{{end}}{{end}}
+    {{range .Sessions}}<option value="{{.ID}}" data-kinds="{{$.Kinds}}">Продолжить сессию #{{.ID}} · {{kindLabel .Kind}} · {{.Runner}} · {{tokens .TotalTokens}} токенов{{if .ContextPct}} · контекст {{.ContextPct}}%{{end}} · {{when .FinishedAt}}</option>{{end}}
+    {{with .More}}{{range .Sessions}}<option value="{{.ID}}" data-kinds="{{$.More.Kinds}}">Продолжить сессию #{{.ID}} · {{kindLabel .Kind}} · {{.Runner}} · {{tokens .TotalTokens}} токенов{{if .ContextPct}} · контекст {{.ContextPct}}%{{end}} · {{when .FinishedAt}}</option>{{end}}{{end}}
   </select>
   <span class="hint tip" data-tip="Продолжение = та же сессия агента (resume): он помнит объект и прежние результаты, но и весь уже накопленный контекст в токенах. Сессия продолжается тем же агентом и из того же каталога, поэтому предлагаются только подходящие сессии. Codex и Cursor могут не вернуть идентификатор сессии — тогда доступен только новый чат.">{{if or .Sessions (and .More .More.Sessions)}}как это работает?{{else}}пока нет завершённых сессий с сохранённым контекстом{{end}}</span>
 </div>
@@ -28,7 +28,11 @@
   <span class="fact tip" data-tip="{{if .Model}}Модели, которые реально использовал агент (основная и субагенты), по данным его ответа{{else}}Модель выбирает агент по настройкам проекта; dashboard её не задаёт{{end}}"><span class="k">агент</span>{{.Runner}}{{if .Model}} · <span class="mono">{{.Model}}</span>{{else}} · модель по умолчанию{{end}}</span>
   <span class="fact tip" data-tip="{{if .SkillIdentifier}}Skill проекта, с которым выполнялся запуск{{else}}У проекта нет skill для этого действия: работали CLAUDE.md / AGENTS.md и промпт dashboard{{end}}"><span class="k">skill</span>{{if .SkillIdentifier}}<span class="mono">{{.SkillIdentifier}}</span>{{else}}CLAUDE.md + промпт{{end}}</span>
   <span class="fact tip" data-tip="{{tokensTip .InputTokens .OutputTokens .CacheReadTokens .CacheWriteTokens}}"><span class="k">токены</span>{{tokens .TotalTokens}}</span>
+  {{if or .ContextTokens .Active}}<span class="fact tip" data-context data-tip="Заполнение контекстного окна агента на последнем ходе основной сессии: сколько токенов в контексте из окна модели. Данные Claude Code; у сессий, начатых до 0.21.0, и у других агентов не показывается."><span class="k">контекст</span><span class="ctx-value">{{template "context-fill" .}}</span></span>{{end}}
 </div>{{end}}
+
+{{/* Context window fill of a run: "10%" with the window known, the token count while it is not, "—" for nothing yet. */}}
+{{define "context-fill"}}{{if .ContextPct}}{{.ContextPct}}%{{else if .ContextTokens}}{{tokens .ContextTokens}}{{else}}—{{end}}{{end}}
 
 {{define "ai-state"}}<span class="state state-{{aiTone .}}">{{if eq . "running"}}<span class="spinner"></span>{{else if eq . "queued"}}<span class="dot-pulse"></span>{{else}}<span class="glyph">{{glyph (aiTone .)}}</span>{{end}} {{aiLabel .}}</span>{{end}}
 

@@ -118,8 +118,9 @@ const streamScript = `#!/bin/sh
 read init
 printf '{"type":"control_response","response":{"subtype":"success","request_id":"init-1","response":{}}}\n'
 read user
-printf '{"type":"system","subtype":"init","cwd":"%s"}\n' "$PWD"
-printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git status --short","description":"Show status"}}]}}\n'
+printf '{"type":"system","subtype":"init","cwd":"%s","model":"m"}\n' "$PWD"
+printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git status --short","description":"Show status"}}],"usage":{"input_tokens":10,"cache_read_input_tokens":15000,"cache_creation_input_tokens":4990,"output_tokens":4}}}\n'
+printf '{"type":"assistant","parent_tool_use_id":"sub-1","message":{"content":[{"type":"text","text":"subagent"}],"usage":{"input_tokens":90000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":4}}}\n'
 printf '{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"/tmp/x.txt","content":"hi"},"description":"/tmp/x.txt","decision_reason":"outside working dir","permission_suggestions":[{"type":"setMode","mode":"acceptEdits","destination":"session"}]}}\n'
 read resp
 case "$resp" in
@@ -127,7 +128,7 @@ case "$resp" in
   *'"behavior":"allow"'*) d=allowed;;
   *) d=denied;;
 esac
-printf '{"type":"result","is_error":false,"total_cost_usd":0.5,"duration_ms":10,"session_id":"s1","num_turns":2,"modelUsage":{"m":{"inputTokens":7,"outputTokens":3}},"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"rm -rf x"}}],"structured_output":{"summary":"%s","cwd":"%s"}}\n' "$d" "$PWD"
+printf '{"type":"result","is_error":false,"total_cost_usd":0.5,"duration_ms":10,"session_id":"s1","num_turns":2,"modelUsage":{"m":{"inputTokens":7,"outputTokens":3,"contextWindow":200000}},"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"rm -rf x"}}],"structured_output":{"summary":"%s","cwd":"%s"}}\n' "$d" "$PWD"
 cat >/dev/null
 `
 
@@ -137,8 +138,10 @@ func TestRunStreamsPermissionsAndProgress(t *testing.T) {
 	var log bytes.Buffer
 	var notes []string
 	var asked []PermissionRequest
+	var contexts []ContextUsage
 	res, err := (&Claude{Bin: bin}).Run(context.Background(), Request{Prompt: "prompt text", Schema: []byte(`{}`), Dir: dir, Log: &log,
 		Progress: func(note string) { notes = append(notes, note) },
+		Context:  func(c ContextUsage) { contexts = append(contexts, c) },
 		Permission: func(ctx context.Context, req PermissionRequest) PermissionDecision {
 			asked = append(asked, req)
 			return PermissionDecision{Allow: true, ApplySuggestions: true}
@@ -157,6 +160,13 @@ func TestRunStreamsPermissionsAndProgress(t *testing.T) {
 	}
 	if len(notes) != 1 || notes[0] != "Bash: Show status" {
 		t.Fatalf("progress notes: %v", notes)
+	}
+	// Context fill: the main agent's last turn (subagent turns are skipped), the window from modelUsage.
+	if len(contexts) != 1 || contexts[0].Tokens != 20000 || contexts[0].Window != 0 || contexts[0].Model != "m" {
+		t.Fatalf("live context: %+v", contexts)
+	}
+	if res.Context.Tokens != 20000 || res.Context.Window != 200000 || res.Context.Percent() != 10 {
+		t.Fatalf("result context: %+v", res.Context)
 	}
 	if !strings.Contains(string(res.Denials), "rm -rf x") {
 		t.Fatalf("denials: %s", res.Denials)

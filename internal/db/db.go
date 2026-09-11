@@ -157,7 +157,15 @@ type MergeRequest struct {
 	// Head pipeline identity (Phase 6): the id for the jobs API and the web link.
 	PipelineID  int64
 	PipelineURL string
+	// NotesCount is GitLab's user_notes_count: comments of people (system notes excluded). Together with head_sha
+	// and unresolved it decides whether a sync clears the "seen" mark.
+	NotesCount int64
+	// SeenAt is when the developer marked the MR as seen ("" = not seen). Cleared by UpsertMR on new activity.
+	SeenAt string
 }
+
+// Seen reports whether the developer marked the MR as seen (and nothing new arrived since).
+func (m MergeRequest) Seen() bool { return m.SeenAt != "" }
 
 // Ref is "project!iid".
 func (m MergeRequest) Ref() string { return fmt.Sprintf("%s!%d", m.ProjectPath, m.IID) }
@@ -174,12 +182,12 @@ func (m MergeRequest) Relevant() bool {
 // relevantWhere is the SQL form of Relevant().
 const relevantWhere = "state NOT IN ('merged', 'closed') AND hidden = 0 AND approved_by_me = 0 AND (my_roles != '' OR manual = 1)"
 
-const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, hidden, labels, pipeline_id, pipeline_url"
+const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, hidden, labels, pipeline_id, pipeline_url, notes_count, seen_at"
 
 func scanMRInto(m *MergeRequest, s scanner) error {
 	var draft, approved, manual, hidden int
 	if err := s.Scan(&m.ID, &m.GitLabHost, &m.ProjectPath, &m.IID, &m.WebURL, &m.Title, &m.Author, &m.SourceBranch, &m.TargetBranch, &m.State, &m.HeadSHA, &m.Unresolved, &m.GitLabUpdatedAt, &m.SyncedAt, &m.AddedAt,
-		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount, &m.MyRoles, &approved, &manual, &hidden, &m.Labels, &m.PipelineID, &m.PipelineURL); err != nil {
+		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount, &m.MyRoles, &approved, &manual, &hidden, &m.Labels, &m.PipelineID, &m.PipelineURL, &m.NotesCount, &m.SeenAt); err != nil {
 		return err
 	}
 	m.Draft, m.ApprovedByMe, m.Manual, m.Hidden = draft == 1, approved == 1, manual == 1, hidden == 1
@@ -193,6 +201,16 @@ func (d *DB) SetMRHidden(id int64, hidden bool) error {
 		v = 1
 	}
 	_, err := d.sql.Exec("UPDATE merge_requests SET hidden = ? WHERE id = ?", v, id)
+	return err
+}
+
+// SetMRSeen marks an MR as seen (dimmed, at the end of the list) or clears the mark.
+func (d *DB) SetMRSeen(id int64, seen bool) error {
+	at := ""
+	if seen {
+		at = Now()
+	}
+	_, err := d.sql.Exec("UPDATE merge_requests SET seen_at = ? WHERE id = ?", at, id)
 	return err
 }
 
@@ -215,11 +233,12 @@ func (d *DB) UpsertMR(m MergeRequest) (*MergeRequest, error) {
 		}
 		return 0
 	}
-	// `manual` is sticky: once added by hand the MR stays until removed by hand.
+	// `manual` is sticky: once added by hand the MR stays until removed by hand. `seen_at` survives a refresh
+	// only while nothing new arrived: a new head, a new or resolved discussion, a new comment clear it.
 	_, err := d.sql.Exec(`
 		INSERT INTO merge_requests (gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at,
-			pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, labels, pipeline_id, pipeline_url)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, labels, pipeline_id, pipeline_url, notes_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (gitlab_host, project_path, iid) DO UPDATE SET
 			web_url = excluded.web_url, title = excluded.title, author = excluded.author,
 			source_branch = excluded.source_branch, target_branch = excluded.target_branch,
@@ -228,9 +247,12 @@ func (d *DB) UpsertMR(m MergeRequest) (*MergeRequest, error) {
 			pipeline_status = excluded.pipeline_status, approvals_given = excluded.approvals_given, approvals_required = excluded.approvals_required,
 			diverged = excluded.diverged, draft = excluded.draft, changes_count = excluded.changes_count,
 			my_roles = excluded.my_roles, approved_by_me = excluded.approved_by_me, manual = MAX(merge_requests.manual, excluded.manual),
-			labels = excluded.labels, pipeline_id = excluded.pipeline_id, pipeline_url = excluded.pipeline_url`,
+			labels = excluded.labels, pipeline_id = excluded.pipeline_id, pipeline_url = excluded.pipeline_url,
+			notes_count = excluded.notes_count,
+			seen_at = CASE WHEN merge_requests.head_sha != excluded.head_sha OR merge_requests.unresolved != excluded.unresolved
+			               OR merge_requests.notes_count != excluded.notes_count THEN '' ELSE merge_requests.seen_at END`,
 		m.GitLabHost, m.ProjectPath, m.IID, m.WebURL, m.Title, m.Author, m.SourceBranch, m.TargetBranch, m.State, m.HeadSHA, m.Unresolved, m.GitLabUpdatedAt, now, now,
-		m.PipelineStatus, m.ApprovalsGiven, m.ApprovalsRequired, m.Diverged, flag(m.Draft), m.ChangesCount, m.MyRoles, flag(m.ApprovedByMe), flag(m.Manual), m.Labels, m.PipelineID, m.PipelineURL)
+		m.PipelineStatus, m.ApprovalsGiven, m.ApprovalsRequired, m.Diverged, flag(m.Draft), m.ChangesCount, m.MyRoles, flag(m.ApprovedByMe), flag(m.Manual), m.Labels, m.PipelineID, m.PipelineURL, m.NotesCount)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +352,7 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 		var kind, status, verdict, sha, runner, model, finished, created, session, dKind, dVerdict, dSHA, dFinished sql.NullString
 		var draft, approved, manual, hidden int
 		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Author, &item.SourceBranch, &item.TargetBranch, &item.State, &item.HeadSHA, &item.Unresolved, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
-			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual, &hidden, &item.Labels, &item.PipelineID, &item.PipelineURL,
+			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual, &hidden, &item.Labels, &item.PipelineID, &item.PipelineURL, &item.NotesCount, &item.SeenAt,
 			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &session, &open, &tokens,
 			&dID, &dKind, &dVerdict, &dSHA, &dFinished, &dMajor, &dMinor, &dInfo, &item.ContextRunID); err != nil {
 			return nil, err
@@ -491,11 +513,23 @@ type Run struct {
 	Progress         string // last tool call of the agent (live)
 	DenialsJSON      string // tool calls the agent was refused, as reported by the runner
 	PlanPath         string // markdown file the plan was exported to
+	// Context window fill of the agent session: tokens in the context at the last turn of the main agent and the
+	// window size (0 = unknown). Only runs started from 0.21.0 report them.
+	ContextTokens int64
+	ContextWindow int64
 }
 
 // TotalTokens is the sum of all token kinds consumed by the run.
 func (r Run) TotalTokens() int64 {
 	return r.InputTokens + r.OutputTokens + r.CacheReadTokens + r.CacheWriteTokens
+}
+
+// ContextPct is how full the agent's context window is, in whole percents (0 when unknown).
+func (r Run) ContextPct() int64 {
+	if r.ContextWindow <= 0 || r.ContextTokens <= 0 {
+		return 0
+	}
+	return r.ContextTokens * 100 / r.ContextWindow
 }
 
 // Active reports whether the run is queued, running or waiting for the developer.
@@ -516,12 +550,12 @@ func (r Run) IsEdit() bool {
 	return r.Kind == KindImplement || r.Kind == KindFixComments || r.Kind == KindStandTest || r.Kind == KindCIFix || r.Kind == KindFixFindings
 }
 
-const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path, continue_run_id, finding_id, mode, selection_json"
+const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path, continue_run_id, finding_id, mode, selection_json, context_tokens, context_window"
 
 func scanRun(s scanner) (*Run, error) {
 	var r Run
 	var mrID, issueID, baseID, contID, findingID sql.NullInt64
-	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.CreatedAt, &r.StartedAt, &r.FinishedAt, &r.Progress, &r.DenialsJSON, &r.PlanPath, &contID, &findingID, &r.Mode, &r.SelectionJSON)
+	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.CreatedAt, &r.StartedAt, &r.FinishedAt, &r.Progress, &r.DenialsJSON, &r.PlanPath, &contID, &findingID, &r.Mode, &r.SelectionJSON, &r.ContextTokens, &r.ContextWindow)
 	if err != nil {
 		return nil, err
 	}
@@ -571,6 +605,18 @@ func (d *DB) UpdateRun(id int64, fields map[string]any) error {
 	return err
 }
 
+// KnownContextWindow returns the context window size the given model reported in an earlier run (0 = none):
+// the live percent of a running session uses it until the session's own result arrives.
+func (d *DB) KnownContextWindow(model string) int64 {
+	if model == "" {
+		return 0
+	}
+	var w int64
+	_ = d.sql.QueryRow("SELECT context_window FROM runs WHERE context_window > 0 AND (model = ? OR model LIKE ? OR model LIKE ?) ORDER BY id DESC LIMIT 1",
+		model, model+", %", "%, "+model).Scan(&w)
+	return w
+}
+
 // GetRun returns a run or nil.
 func (d *DB) GetRun(id int64) (*Run, error) {
 	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE id = ?", id))
@@ -600,7 +646,7 @@ func (d *DB) listRuns(where string, arg any) ([]RunSummary, error) {
 	for rows.Next() {
 		var s RunSummary
 		var mrID, issueID, baseID, contID, findingID sql.NullInt64
-		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.Mode, &s.SelectionJSON, &s.OpenFindings, &s.TotalFindings); err != nil {
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.Mode, &s.SelectionJSON, &s.ContextTokens, &s.ContextWindow, &s.OpenFindings, &s.TotalFindings); err != nil {
 			return nil, err
 		}
 		if contID.Valid {
@@ -691,7 +737,7 @@ func (d *DB) ListRuns(limit int) ([]RunListItem, error) {
 		var s RunListItem
 		var mrID, issueID, baseID, contID, findingID sql.NullInt64
 		var mrProject, issueProject string
-		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.Mode, &s.SelectionJSON, &s.OpenFindings, &s.TotalFindings,
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.Mode, &s.SelectionJSON, &s.ContextTokens, &s.ContextWindow, &s.OpenFindings, &s.TotalFindings,
 			&s.MRIID, &s.MRTitle, &s.MRWebURL, &mrProject, &s.IssueIID, &s.IssueTitle, &s.IssueWebURL, &issueProject); err != nil {
 			return nil, err
 		}

@@ -344,6 +344,7 @@ func (s *Service) mrFromPayload(payload map[string]any, ref gitlab.Ref) db.Merge
 		Labels:          gitlab.Labels(payload),
 		PipelineID:      gitlab.PipelineID(payload),
 		PipelineURL:     gitlab.PipelineURL(payload),
+		NotesCount:      gitlab.Int(payload, "user_notes_count"),
 	}
 }
 
@@ -489,6 +490,15 @@ func (s *Service) SyncMRs() (SyncResult, error) {
 	return result, nil
 }
 
+func firstPositive(values ...int64) int64 {
+	for _, v := range values {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
 // DeleteMR removes an MR for good, with its runs (cancelling an active run first).
 func (s *Service) DeleteMR(id int64) error {
 	if active, _ := s.DB.ActiveRunForMR(id); active != nil {
@@ -514,6 +524,15 @@ func (s *Service) UnhideMR(id int64) error {
 		return userErr("merge request #%d is not in the dashboard", id)
 	}
 	return s.DB.SetMRHidden(id, false)
+}
+
+// SetMRSeen marks an MR as seen (it dims and sinks to the end of the list) or clears the mark. The mark also
+// clears itself on the next sync/refresh that brings new commits or discussions.
+func (s *Service) SetMRSeen(id int64, seen bool) error {
+	if mr, _ := s.DB.GetMR(id); mr == nil {
+		return userErr("merge request #%d is not in the dashboard", id)
+	}
+	return s.DB.SetMRSeen(id, seen)
 }
 
 // ---------------------------------------------------------------------------------- issues
@@ -1490,6 +1509,13 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		Event: func(ev runner.ToolEvent) {
 			_ = s.DB.AddRunEvent(runID, db.PhaseFor(ev.Tool, ev.Detail), ev.Tool, ev.Detail)
 		},
+		Context: func(c runner.ContextUsage) {
+			fields := map[string]any{"context_tokens": c.Tokens}
+			if w := firstPositive(c.Window, s.DB.KnownContextWindow(c.Model)); w > 0 {
+				fields["context_window"] = w
+			}
+			_ = s.DB.UpdateRun(runID, fields)
+		},
 	}
 	if sk != nil && sk.Kind == skill.KindAgent {
 		req.Agent = sk.Name
@@ -1735,6 +1761,12 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		fields["session_id"] = firstOf(result.SessionID, run.SessionID)
 		if len(result.Models) > 0 {
 			fields["model"] = strings.Join(result.Models, ", ")
+		}
+		if result.Context.Tokens > 0 {
+			fields["context_tokens"] = result.Context.Tokens
+			if result.Context.Window > 0 {
+				fields["context_window"] = result.Context.Window
+			}
 		}
 		fields["denials_json"] = string(result.Denials)
 		if len(result.Raw) > 0 && len(result.Raw) < 2_000_000 {
@@ -2186,6 +2218,14 @@ func (s *Service) Ask(runID int64, question string) (string, error) {
 	}
 	answer := strings.TrimSpace(result.Text)
 	_, _ = s.DB.AddMessage(runID, "assistant", answer, result.CostUSD, result.Usage.Total())
+	// The follow-up grew the same session: the run's context fill follows it.
+	if result.Context.Tokens > 0 {
+		fields := map[string]any{"context_tokens": result.Context.Tokens}
+		if result.Context.Window > 0 {
+			fields["context_window"] = result.Context.Window
+		}
+		_ = s.DB.UpdateRun(runID, fields)
+	}
 	if result.SessionID != "" && result.SessionID != run.SessionID {
 		_ = s.DB.UpdateRun(runID, map[string]any{"session_id": result.SessionID})
 	}

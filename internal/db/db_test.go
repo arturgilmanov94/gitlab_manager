@@ -21,7 +21,7 @@ func open(t *testing.T) *DB {
 func TestMigrateIdempotent(t *testing.T) {
 	d := open(t)
 	applied, err := d.Migrate()
-	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 15 {
+	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 17 {
 		t.Fatalf("%v %v %v", applied, err, d.SchemaVersion())
 	}
 }
@@ -116,6 +116,50 @@ func TestMRRunFindingsFlow(t *testing.T) {
 	_ = d.DeleteMR(mr.ID)
 	if run, _ := d.GetRun(runID); run != nil {
 		t.Fatal("cascade delete expected")
+	}
+}
+
+func TestMRSeenMarkClearsOnActivity(t *testing.T) {
+	d := open(t)
+	base := MergeRequest{GitLabHost: "gl", ProjectPath: "g/p", IID: 5, WebURL: "u", State: "opened", MyRoles: "reviewer", HeadSHA: "a", Unresolved: 1, NotesCount: 3}
+	mr, err := d.UpsertMR(base)
+	if err != nil || mr.Seen() {
+		t.Fatalf("%+v %v", mr, err)
+	}
+	if err := d.SetMRSeen(mr.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if mr, _ = d.GetMR(mr.ID); !mr.Seen() {
+		t.Fatal("marked seen")
+	}
+	// A refresh that brings nothing new keeps the mark.
+	if mr, _ = d.UpsertMR(base); !mr.Seen() {
+		t.Fatal("unchanged MR must stay seen")
+	}
+	// New commits clear it.
+	changed := base
+	changed.HeadSHA = "b"
+	if mr, _ = d.UpsertMR(changed); mr.Seen() {
+		t.Fatal("new head must clear the mark")
+	}
+	_ = d.SetMRSeen(mr.ID, true)
+	// A new comment clears it.
+	changed.NotesCount = 4
+	if mr, _ = d.UpsertMR(changed); mr.Seen() {
+		t.Fatal("new note must clear the mark")
+	}
+	_ = d.SetMRSeen(mr.ID, true)
+	// A resolved (or new) discussion clears it.
+	changed.Unresolved = 0
+	if mr, _ = d.UpsertMR(changed); mr.Seen() {
+		t.Fatal("changed discussions must clear the mark")
+	}
+	_ = d.SetMRSeen(mr.ID, true)
+	if err := d.SetMRSeen(mr.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if mr, _ = d.GetMR(mr.ID); mr.Seen() {
+		t.Fatal("mark cleared by hand")
 	}
 }
 
