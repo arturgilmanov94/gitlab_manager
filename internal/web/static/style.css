@@ -70,14 +70,13 @@ h3 { font-size: 12px; font-weight: 600; margin: 18px 0 8px; color: var(--fg-2); 
 .card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
 .card-head h2 { margin: 0; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-/* Toolbar of the lists: three invisible columns — filters, GitLab (add / sync), agent controls at the right edge.
-   Each column stacks its controls; the agent column is right-aligned. */
-.toolbar { display: flex; gap: 12px 28px; align-items: flex-start; margin-bottom: 14px; flex-wrap: wrap; }
+/* Toolbar of the lists: two columns. Left, left-aligned rows: GitLab sync (+ history counter), add by link, then the
+   text filter together with the facet chips flowing after it. Right: the agent column, right-aligned. */
+.toolbar { display: flex; gap: 12px 28px; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; }
 .toolbar .spacer { flex: 1; }
-.tb-filters { display: flex; flex-direction: column; gap: 8px; align-items: stretch; flex: 1 1 320px; min-width: 0; }
-.tb-filters > input[data-filter] { align-self: flex-start; max-width: 100%; }
-.tb-filters .filters { margin: 0; max-width: 100%; }
-.tb-sync { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; flex: 0 0 auto; }
+.tb-left { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; flex: 1 1 320px; min-width: 0; }
+.tb-row { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; max-width: 100%; }
+.tb-left .filters { display: contents; }
 .tb-agent { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; margin-left: auto; text-align: right; }
 .tb-agent .agent-picker { flex-direction: column; align-items: flex-end; gap: 6px; }
 .tb-agent .agent-picker .models { justify-items: end; }

@@ -685,12 +685,12 @@ func TestToolbarBlocksAndUsageAPI(t *testing.T) {
 	ts, svc, _ := newServer(t)
 	for _, path := range []string{"/mrs", "/issues", "/ci"} {
 		_, body := get(t, ts.URL+path)
-		if !strings.Contains(body, `class="tb-filters"`) || !strings.Contains(body, `class="tb-agent"`) || !strings.Contains(body, `<span class="usage" data-usage hidden></span>`) {
-			t.Fatalf("%s must have the three toolbar blocks and the usage slot", path)
+		if !strings.Contains(body, `class="tb-left"`) || !strings.Contains(body, `class="tb-agent"`) || !strings.Contains(body, `<span class="usage" data-usage hidden></span>`) {
+			t.Fatalf("%s must have the two toolbar columns and the usage slot", path)
 		}
 	}
-	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, `class="tb-sync"`) {
-		t.Fatal("the MR list has the sync block")
+	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, `class="tb-row tb-filter-row"`) {
+		t.Fatal("the MR list has the filter row")
 	}
 	code, body := get(t, ts.URL+"/api/usage")
 	if code != 200 || !strings.Contains(body, `"agents":{}`) || !strings.Contains(body, `"ok":true`) {
