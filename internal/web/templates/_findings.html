@@ -2,23 +2,23 @@
 {{$pick := $.Pickable}}
 {{if .Findings}}
 <table class="table findings{{if $pick}} pickable{{end}}">
-  <thead><tr>{{if $pick}}<th class="pick-col"><input type="checkbox" class="pick-all tip" data-tip="Выбрать все открытые замечания" data-kind="finding"></th>{{end}}<th>Severity</th><th>Статус</th><th>Где</th><th>Замечание</th><th></th></tr></thead>
+  <thead><tr>{{if $pick}}<th class="pick-col"><input type="checkbox" class="pick-all tip" data-tip="Выбрать все открытые замечания" data-kind="finding"></th>{{end}}<th class="col-sev">Severity</th><th class="col-status">Статус</th><th class="col-where">Где</th><th class="col-text">Замечание</th><th class="col-actions"></th></tr></thead>
   <tbody>
   {{range .Findings}}
   {{$link := fileLink $.Blob $.SHA .File (deref .Line)}}
   <tr class="finding f-{{.Status}}" id="finding-{{.ID}}">
     {{if $pick}}<td class="pick-col">{{if eq .Status "open"}}<input type="checkbox" class="pick" data-finding="{{.ID}}">{{end}}</td>{{end}}
-    <td><span class="sev sev-{{.Severity}}">{{.Severity}}</span><div class="muted small">{{.Category}}</div></td>
-    <td><span class="fstatus fstatus-{{.Status}}">{{fstatusLabel .Status}}</span></td>
-    <td class="mono small">{{if .File}}{{if $link}}<a class="file-ref tip" data-tip="Открыть файл в GitLab на проверенном коммите" href="{{$link}}" target="_blank" rel="noopener">{{.File}}{{if .Line}}:{{deref .Line}}{{end}}</a>{{else}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{end}}{{else}}—{{end}}</td>
-    <td>
+    <td class="col-sev"><span class="sev sev-{{.Severity}}">{{.Severity}}</span><div class="muted small">{{.Category}}</div></td>
+    <td class="col-status"><span class="fstatus fstatus-{{.Status}}">{{fstatusLabel .Status}}</span></td>
+    <td class="mono small col-where">{{if .File}}{{if $link}}<a class="file-ref tip" data-tip="Открыть файл в GitLab на проверенном коммите" href="{{$link}}" target="_blank" rel="noopener">{{.File}}{{if .Line}}:{{deref .Line}}{{end}}</a>{{else}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{end}}{{else}}—{{end}}</td>
+    <td class="col-text">
       <b>{{.Title}}</b>
       {{md .Description $.Blob $.SHA}}
       {{if .Suggestion}}<details class="fix"><summary>Предлагаемый фикс</summary>{{md .Suggestion $.Blob $.SHA}}</details>{{end}}
       {{if .CheckStatus}}<div class="small check check-{{.CheckStatus}}"><b>{{checkLabel .CheckStatus}}</b>{{if .CheckRunID}} · <a href="{{runPath "verify_finding" (deref .CheckRunID)}}">проверка #{{deref .CheckRunID}}</a>{{end}}{{if .VerifyNote}}<div class="check-note">{{md .VerifyNote $.Blob $.SHA}}</div>{{end}}</div>
       {{else if .VerifyNote}}<div class="small muted">проверка: {{.VerifyNote}}</div>{{end}}
     </td>
-    <td class="actions-cell">
+    <td class="actions-cell col-actions">
       <details class="menu">
         <summary title="Действия с замечанием">⋯</summary>
         <div class="menu-items">
