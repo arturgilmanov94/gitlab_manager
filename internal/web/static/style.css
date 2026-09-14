@@ -70,12 +70,17 @@ h3 { font-size: 12px; font-weight: 600; margin: 18px 0 8px; color: var(--fg-2); 
 .card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
 .card-head h2 { margin: 0; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-/* Toolbar of the lists: three invisible blocks — filters (grow), GitLab sync, agent controls (always at the right). */
-.toolbar { display: flex; gap: 10px 20px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+/* Toolbar of the lists: three invisible columns — filters, GitLab (add / sync), agent controls at the right edge.
+   Each column stacks its controls; the agent column is right-aligned. */
+.toolbar { display: flex; gap: 12px 28px; align-items: flex-start; margin-bottom: 14px; flex-wrap: wrap; }
 .toolbar .spacer { flex: 1; }
-.tb-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; flex: 1 1 320px; min-width: 0; }
-.tb-sync { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.tb-agent { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+.tb-filters { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; flex: 1 1 320px; min-width: 0; }
+.tb-filters .filters { margin: 0; }
+.tb-sync { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.tb-agent { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; margin-left: auto; text-align: right; }
+.tb-agent .agent-picker { flex-direction: column; align-items: flex-end; gap: 6px; }
+.tb-agent .agent-picker .models { justify-items: end; }
+.tb-agent .usage { justify-content: flex-end; }
 /* usage chips: how much of the agent's 5-hour / weekly windows is spent (see /api/usage) */
 .usage { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .uchip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 600; background: var(--neutral-soft); color: var(--fg-2); white-space: nowrap; }

@@ -1,21 +1,21 @@
 {{define "content"}}
 <section class="toolbar">
   <div class="tb-filters">
-    <form class="inline" onsubmit="return addRef(event, '/api/issues')">
-      <input type="text" name="ref" placeholder="Ссылка на задачу или #123" size="30" required>
-      <button type="submit" class="btn tip" data-tip="{{kindTip "add"}}">Добавить</button>
-    </form>
-    <input type="text" data-filter="#issues-table" placeholder="Фильтр: номер, название, метки…" size="30">
+    <input type="text" data-filter="#issues-table" placeholder="Фильтр: номер, название, метки…" size="40">
+    {{if .Issues}}{{template "filters" (dict "Target" "#issues-table" "Labels" .Base.Labels)}}{{end}}
   </div>
   <div class="tb-sync">
+    <form class="inline" onsubmit="return addRef(event, '/api/issues')">
+      <input type="text" name="ref" placeholder="Ссылка на задачу или #123" size="26" required>
+      <button type="submit" class="btn tip" data-tip="{{kindTip "add"}}">Добавить</button>
+    </form>
     <button class="btn tip" data-tip="{{kindTip "sync-issues"}}" onclick="post('/api/issues/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' задач для @' + r.username, true), reload()))">Синхронизировать с GitLab</button>
   </div>
   <div class="tb-agent">
-    <span class="small secondary">Агент:</span> {{template "runner-picker" .Base.Runners}}
+    <span class="small secondary">Агент для запусков</span>
+    {{template "runner-picker" .Base.Runners}}
   </div>
 </section>
-
-{{if .Issues}}{{template "filters" (dict "Target" "#issues-table" "Labels" .Base.Labels)}}{{end}}
 
 {{if not .Issues}}
 <div class="empty"><b>Пока нет задач.</b><br>Вставьте ссылку на issue или синхронизируйте назначенные вам.</div>
