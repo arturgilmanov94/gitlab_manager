@@ -488,7 +488,8 @@ type Run struct {
 	HeadSHA          string
 	Status           string
 	Runner           string
-	Model            string
+	Model            string // models the agent actually used, filled after the run
+	RequestedModel   string // model picked by the developer at start ("" = the agent's default)
 	SkillIdentifier  string
 	Notes            string
 	Prompt           string
@@ -545,17 +546,25 @@ func (r Run) IsReview() bool {
 	return r.Kind == KindReviewFull || r.Kind == KindReviewVerify || r.Kind == KindReviewQuick
 }
 
+// AgentSelector is the runner selector that reproduces this run's agent and model: "claude", "claude:opus".
+func (r Run) AgentSelector() string {
+	if r.RequestedModel == "" || r.RequestedModel == "default" {
+		return r.Runner
+	}
+	return r.Runner + ":" + r.RequestedModel
+}
+
 // IsEdit reports whether the run edits files in a worktree.
 func (r Run) IsEdit() bool {
 	return r.Kind == KindImplement || r.Kind == KindFixComments || r.Kind == KindStandTest || r.Kind == KindCIFix || r.Kind == KindFixFindings
 }
 
-const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path, continue_run_id, finding_id, mode, selection_json, context_tokens, context_window"
+const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path, continue_run_id, finding_id, mode, selection_json, context_tokens, context_window, requested_model"
 
 func scanRun(s scanner) (*Run, error) {
 	var r Run
 	var mrID, issueID, baseID, contID, findingID sql.NullInt64
-	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.CreatedAt, &r.StartedAt, &r.FinishedAt, &r.Progress, &r.DenialsJSON, &r.PlanPath, &contID, &findingID, &r.Mode, &r.SelectionJSON, &r.ContextTokens, &r.ContextWindow)
+	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.CreatedAt, &r.StartedAt, &r.FinishedAt, &r.Progress, &r.DenialsJSON, &r.PlanPath, &contID, &findingID, &r.Mode, &r.SelectionJSON, &r.ContextTokens, &r.ContextWindow, &r.RequestedModel)
 	if err != nil {
 		return nil, err
 	}
@@ -580,9 +589,9 @@ func scanRun(s scanner) (*Run, error) {
 // CreateRun inserts a queued run and returns its id.
 func (d *DB) CreateRun(r Run) (int64, error) {
 	res, err := d.sql.Exec(`
-		INSERT INTO runs (kind, mr_id, issue_id, base_run_id, continue_run_id, finding_id, head_sha, status, runner, model, skill_identifier, notes, work_dir, branch, mode, selection_json, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.Kind, nullInt(r.MRID), nullInt(r.IssueID), nullInt(r.BaseRunID), nullInt(r.ContinueRunID), nullInt(r.FindingID), r.HeadSHA, r.Runner, r.Model, r.SkillIdentifier, r.Notes, r.WorkDir, r.Branch, r.Mode, r.SelectionJSON, Now())
+		INSERT INTO runs (kind, mr_id, issue_id, base_run_id, continue_run_id, finding_id, head_sha, status, runner, model, requested_model, skill_identifier, notes, work_dir, branch, mode, selection_json, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.Kind, nullInt(r.MRID), nullInt(r.IssueID), nullInt(r.BaseRunID), nullInt(r.ContinueRunID), nullInt(r.FindingID), r.HeadSHA, r.Runner, r.Model, r.RequestedModel, r.SkillIdentifier, r.Notes, r.WorkDir, r.Branch, r.Mode, r.SelectionJSON, Now())
 	if err != nil {
 		return 0, err
 	}
@@ -646,7 +655,7 @@ func (d *DB) listRuns(where string, arg any) ([]RunSummary, error) {
 	for rows.Next() {
 		var s RunSummary
 		var mrID, issueID, baseID, contID, findingID sql.NullInt64
-		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.Mode, &s.SelectionJSON, &s.ContextTokens, &s.ContextWindow, &s.OpenFindings, &s.TotalFindings); err != nil {
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.Mode, &s.SelectionJSON, &s.ContextTokens, &s.ContextWindow, &s.RequestedModel, &s.OpenFindings, &s.TotalFindings); err != nil {
 			return nil, err
 		}
 		if contID.Valid {
@@ -757,7 +766,7 @@ func (d *DB) ListRuns(limit int) ([]RunListItem, error) {
 		var s RunListItem
 		var mrID, issueID, baseID, contID, findingID sql.NullInt64
 		var mrProject, issueProject string
-		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.Mode, &s.SelectionJSON, &s.ContextTokens, &s.ContextWindow, &s.OpenFindings, &s.TotalFindings,
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.Mode, &s.SelectionJSON, &s.ContextTokens, &s.ContextWindow, &s.RequestedModel, &s.OpenFindings, &s.TotalFindings,
 			&s.MRIID, &s.MRTitle, &s.MRWebURL, &mrProject, &s.IssueIID, &s.IssueTitle, &s.IssueWebURL, &issueProject); err != nil {
 			return nil, err
 		}

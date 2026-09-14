@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
@@ -673,6 +674,32 @@ func TestStandTestPages(t *testing.T) {
 	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
 	if _, body := get(t, ts.URL+"/-/stand-test/1"); !strings.Contains(body, "Проверка на стенде") || !strings.Contains(body, "Залито на стенд") || !strings.Contains(body, "Slow query") || !strings.Contains(body, "scripts/onerun/mr_42.php") || !strings.Contains(body, `id="workspace"`) {
 		t.Fatal("run page must show the stand report and the workspace")
+	}
+}
+
+// Every page with the agent picker also offers the models configured for that agent; the API accepts "agent:model".
+func TestModelPickerPages(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	for _, path := range []string{"/", "/mrs", "/issues", "/-/mr/1"} {
+		if _, body := get(t, ts.URL+path); !strings.Contains(body, `class="segmented segmented-sm model-picker tip" data-runner="claude"`) || !strings.Contains(body, `<input type="radio" name="model_claude" value="opus" >Opus`) || !strings.Contains(body, `value="default" checked>авто`) {
+			t.Fatalf("%s must render the model picker for claude", path)
+		}
+	}
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	code, out := postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "quick", "runner": "claude:fable"})
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	if r, _ := svc.DB.GetRun(1); r.RequestedModel != "fable" || fr.Requests[0].Model != "fable" {
+		t.Fatalf("%+v", r)
+	}
+	if _, body := get(t, ts.URL+"/-/quick-review/1"); !strings.Contains(body, "модель <span class=\"mono\">fable</span>") {
+		t.Fatal("run page must show the requested model")
+	}
+	if code, out := postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "quick", "runner": "claude:nope"}); code == 200 || !strings.Contains(fmt.Sprint(out["error"]), "not offered") {
+		t.Fatalf("%d %v", code, out)
 	}
 }
 

@@ -9,6 +9,7 @@
       <span data-run-status="{{.Run.ID}}" data-status="{{.Run.Status}}" {{if .Run.Active}}data-reload="1"{{end}}>{{template "status" .Run.Status}}</span>
       {{if .Run.HeadSHA}}<span class="sep"></span><span>HEAD <span class="mono">{{shortSHA .Run.HeadSHA}}</span></span>{{end}}
       {{if .Run.Branch}}<span class="sep"></span><span>ветка <span class="mono">{{.Run.Branch}}</span></span>{{end}}
+      {{if .Run.RequestedModel}}<span class="sep"></span><span class="tip" data-tip="Модель, выбранная при запуске; передана агенту как --model. Какие модели реально работали — в фактах ниже после завершения.">модель <span class="mono">{{.Run.RequestedModel}}</span></span>{{end}}
       {{if .Run.BaseRunID}}<span class="sep"></span><span>по результатам <a href="/run/{{deref .Run.BaseRunID}}">#{{deref .Run.BaseRunID}}</a></span>{{end}}
     </div>
     {{template "run-facts" .Run}}

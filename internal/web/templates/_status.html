@@ -37,12 +37,19 @@
 {{define "ai-state"}}<span class="state state-{{aiTone .}}">{{if eq . "running"}}<span class="spinner"></span>{{else if eq . "queued"}}<span class="dot-pulse"></span>{{else}}<span class="glyph">{{glyph (aiTone .)}}</span>{{end}} {{aiLabel .}}</span>{{end}}
 
 {{define "runner-picker"}}
-<span class="segmented tip" data-tip="Какой агент выполняет запуск. У каждого свои правила и модель: Claude Code берёт CLAUDE.md, .claude/agents и skills проекта; Codex читает AGENTS.md; Cursor — правила Cursor. Показываются только установленные.">
+<span class="agent-picker">
+<span class="segmented tip" data-tip="Какой агент выполняет запуск. У каждого свои правила и модель: Claude Code берёт CLAUDE.md, .claude/agents и skills проекта; Codex читает AGENTS.md; Cursor — правила Cursor. Показываются только установленные. Выбор запоминается в браузере.">
   {{range $i, $r := .}}
   <label class="seg{{if eq $i 0}} checked{{end}}" title="{{$r.Path}} {{$r.Version}}">
     <input type="radio" name="runner" value="{{$r.Name}}" {{if eq $i 0}}checked{{end}}>
     {{if eq $r.Name "claude"}}Claude{{else if eq $r.Name "codex"}}Codex{{else if eq $r.Name "cursor"}}Cursor{{else}}{{$r.Name}}{{end}}
   </label>
   {{else}}<span class="text-danger">агенты не найдены</span>{{end}}
+</span>
+{{range $r := .}}{{if gt (len $r.Models) 1}}
+<span class="segmented segmented-sm model-picker tip" data-runner="{{$r.Name}}" hidden data-tip="Модель для запусков {{$r.Name}}. «авто» — модель по умолчанию самого агента (его конфиг и правила проекта). Список задаётся в .env: {{if eq $r.Name "claude"}}CLAUDE_MODELS{{else}}CODEX_MODELS{{end}}. Выбор запоминается в браузере отдельно для каждого агента.">
+  {{range $i, $m := $r.Models}}<label class="seg{{if eq $i 0}} checked{{end}}"><input type="radio" name="model_{{$r.Name}}" value="{{$m}}" {{if eq $i 0}}checked{{end}}>{{modelLabel $m}}</label>{{end}}
+</span>
+{{end}}{{end}}
 </span>
 {{end}}

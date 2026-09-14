@@ -139,6 +139,8 @@ textarea { width: 100%; max-width: 820px; resize: vertical; }
 .seg:last-child { border-right: 0; }
 .seg input { display: none; }
 .seg.checked { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+.agent-picker { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; vertical-align: middle; }
+.segmented-sm .seg { padding: 4px 9px; font-size: 12px; }
 
 /* ---- tables */
 .table { width: 100%; border-collapse: collapse; }

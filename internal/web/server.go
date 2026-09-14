@@ -108,6 +108,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 		"aiLabel":         aiLabel,
 		"aiTone":          aiTone,
 		"statusLabel":     statusLabel,
+		"modelLabel":      modelLabel,
 		"statusTone":      statusTone,
 		"glyph":           glyph,
 		"findingsSummary": findingsSummary,
@@ -1574,6 +1575,23 @@ func findingsSummary(major, minor, info int64) string {
 		return "0 открытых замечаний"
 	}
 	return strings.Join(parts, " · ")
+}
+
+// modelLabel is the picker caption for a model selector from CLAUDE_MODELS / CODEX_MODELS.
+func modelLabel(model string) string {
+	switch model {
+	case "", "default":
+		return "авто"
+	case "fable":
+		return "Fable"
+	case "opus":
+		return "Opus"
+	case "sonnet":
+		return "Sonnet"
+	case "haiku":
+		return "Haiku"
+	}
+	return model
 }
 
 // errorTitle turns a run kind into a human failure headline.

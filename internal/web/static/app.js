@@ -81,26 +81,46 @@
   };
 
   // ---- agent picker
+  // Agent selector for the API: "claude", or "claude:opus" when a non-default model is picked for that agent.
   function selectedRunner() {
     const checked = document.querySelector('input[name="runner"]:checked');
-    return checked ? checked.value : '';
+    if (!checked) return '';
+    const model = document.querySelector('input[name="model_' + checked.value + '"]:checked');
+    return model && model.value && model.value !== 'default' ? checked.value + ':' + model.value : checked.value;
   }
   document.querySelectorAll('.segmented').forEach((group) => {
     group.addEventListener('change', () => {
       group.querySelectorAll('.seg').forEach((seg) => seg.classList.toggle('checked', seg.querySelector('input').checked));
     });
   });
-  // The chosen agent is remembered in this browser (localStorage) and restored on every page instead of the first one.
+  // The chosen agent and its model are remembered in this browser (localStorage) and restored on every page instead
+  // of the first option. Only the model picker of the selected agent is shown.
   (function rememberRunner() {
     const radios = document.querySelectorAll('input[name="runner"]');
     if (!radios.length) return;
-    let saved = '';
-    try { saved = localStorage.getItem('runner') || ''; } catch (e) { /* ignore */ }
+    const load = (key) => { try { return localStorage.getItem(key) || ''; } catch (e) { return ''; } };
+    const save = (key, value) => { try { localStorage.setItem(key, value); } catch (e) { /* ignore */ } };
+    const syncChecked = (inputs) => inputs.forEach((r) => r.closest('.seg') && r.closest('.seg').classList.toggle('checked', r.checked));
+    const showModels = () => {
+      const current = document.querySelector('input[name="runner"]:checked');
+      document.querySelectorAll('.model-picker').forEach((p) => { p.hidden = !current || p.dataset.runner !== current.value; });
+    };
+    const savedRunner = load('runner');
     radios.forEach((r) => {
-      if (saved && r.value === saved) r.checked = true;
-      r.addEventListener('change', () => { try { localStorage.setItem('runner', r.value); } catch (e) { /* ignore */ } });
+      if (savedRunner && r.value === savedRunner) r.checked = true;
+      r.addEventListener('change', () => { save('runner', r.value); showModels(); });
     });
-    radios.forEach((r) => r.closest('.seg') && r.closest('.seg').classList.toggle('checked', r.checked));
+    syncChecked(radios);
+    document.querySelectorAll('.model-picker').forEach((picker) => {
+      const inputs = picker.querySelectorAll('input[type="radio"]');
+      const saved = load('model:' + picker.dataset.runner);
+      inputs.forEach((m) => {
+        if (saved && m.value === saved) m.checked = true;
+        m.addEventListener('change', () => save('model:' + picker.dataset.runner, m.value));
+      });
+      syncChecked(inputs);
+    });
+    showModels();
   })();
 
   // ---- overflow menus: close on outside click / Escape

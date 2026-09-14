@@ -104,7 +104,7 @@ func (s *Service) RunnerInfos() []runner.Info {
 		}
 		seen[name] = true
 		path, version, _ := r.Detect()
-		out = append(out, runner.Info{Name: name, Path: path, Version: version})
+		out = append(out, runner.Info{Name: name, Path: path, Version: version, Models: s.ModelsFor(name)})
 	}
 	return out
 }
@@ -309,18 +309,42 @@ func (s *Service) requireRoot() (string, error) {
 	return s.Settings.ProjectRoot, nil
 }
 
-func (s *Service) pickRunner(name string) (runner.Runner, error) {
+// pickRunner resolves an agent selector — "claude", "codex:gpt-6-astra", "" for the default runner — into the runner
+// and the requested model ("" = the agent's own default). The model must be one the settings offer for that runner.
+func (s *Service) pickRunner(selector string) (runner.Runner, string, error) {
+	name, model, _ := strings.Cut(strings.TrimSpace(selector), ":")
 	if name == "" {
 		name = s.Settings.DefaultRunner
 	}
-	if r, ok := s.Runners[name]; ok {
-		return r, nil
+	r, ok := s.Runners[name]
+	if !ok {
+		if len(s.Runners) == 0 {
+			return nil, "", userErr("no coding agent found: install Claude Code (claude), Codex (codex) or Cursor CLI (cursor-agent)")
+		}
+		return nil, "", userErr("runner %q is not available on this machine", name)
 	}
-	if len(s.Runners) == 0 {
-		return nil, userErr("no coding agent found: install Claude Code (claude), Codex (codex) or Cursor CLI (cursor-agent)")
+	model = strings.TrimSpace(model)
+	if runner.IsDefaultModel(model) {
+		return r, "", nil
 	}
-	return nil, userErr("runner %q is not available on this machine", name)
+	if offered := s.ModelsFor(name); len(offered) > 0 && !containsStr(offered, model) {
+		return nil, "", userErr("model %q is not offered for %s: set %s in .env (now: %s)", model, name, modelsVar(name), strings.Join(offered, ", "))
+	}
+	return r, model, nil
 }
+
+// ModelsFor lists the models the settings offer in the UI for a runner; the first one is preselected.
+func (s *Service) ModelsFor(runnerName string) []string {
+	switch runnerName {
+	case "claude":
+		return s.Settings.ClaudeModels
+	case "codex":
+		return s.Settings.CodexModels
+	}
+	return nil
+}
+
+func modelsVar(runnerName string) string { return strings.ToUpper(runnerName) + "_MODELS" }
 
 // ---------------------------------------------------------------------------------- merge requests
 
@@ -663,16 +687,16 @@ func (s *Service) StartReview(mrID int64, kind, runnerName string, continueRunID
 		return 0, err
 	}
 	if prev != nil {
-		runnerName = prev.Runner
+		runnerName = prev.AgentSelector()
 	}
-	r, err := s.pickRunner(runnerName)
+	r, model, err := s.pickRunner(runnerName)
 	if err != nil {
 		return 0, err
 	}
 	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil {
 		return 0, userErr("a run for this merge request is already queued or running (#%d)", active.ID)
 	}
-	run := db.Run{Kind: kind, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), SkillIdentifier: skillID(s.SkillFor(kind)), ContinueRunID: runIDPtr(prev)}
+	run := db.Run{Kind: kind, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), RequestedModel: model, SkillIdentifier: skillID(s.SkillFor(kind)), ContinueRunID: runIDPtr(prev)}
 	if kind == db.KindReviewVerify {
 		base, _ := s.DB.LatestDoneReview(mrID)
 		if base == nil {
@@ -706,9 +730,9 @@ func (s *Service) StartVerifyFinding(mrID, findingID int64, runnerName string, c
 		return 0, err
 	}
 	if prev != nil {
-		runnerName = prev.Runner
+		runnerName = prev.AgentSelector()
 	}
-	r, err := s.pickRunner(runnerName)
+	r, model, err := s.pickRunner(runnerName)
 	if err != nil {
 		return 0, err
 	}
@@ -723,7 +747,7 @@ func (s *Service) StartVerifyFinding(mrID, findingID int64, runnerName string, c
 		return 0, err
 	}
 	fid := finding.ID
-	return s.enqueue(db.Run{Kind: db.KindVerifyFinding, MRID: &mr.ID, FindingID: &fid, HeadSHA: mr.HeadSHA, Runner: r.Name(),
+	return s.enqueue(db.Run{Kind: db.KindVerifyFinding, MRID: &mr.ID, FindingID: &fid, HeadSHA: mr.HeadSHA, Runner: r.Name(), RequestedModel: model,
 		SkillIdentifier: skillID(s.SkillFor(db.KindVerifyFinding)), ContinueRunID: runIDPtr(prev)})
 }
 
@@ -965,9 +989,9 @@ func (s *Service) StartCIAnalyze(mrID int64, runnerName string, continueRunID in
 		return 0, err
 	}
 	if prev != nil {
-		runnerName = prev.Runner
+		runnerName = prev.AgentSelector()
 	}
-	r, err := s.pickRunner(runnerName)
+	r, model, err := s.pickRunner(runnerName)
 	if err != nil {
 		return 0, err
 	}
@@ -981,7 +1005,7 @@ func (s *Service) StartCIAnalyze(mrID int64, runnerName string, continueRunID in
 	if mr.PipelineStatus != "failed" || mr.PipelineID == 0 {
 		return 0, userErr("the head pipeline of !%d is not failed (%s)", mr.IID, firstOf(mr.PipelineStatus, "unknown"))
 	}
-	return s.enqueue(db.Run{Kind: db.KindCIAnalyze, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), SkillIdentifier: skillID(s.SkillFor(db.KindCIAnalyze)), ContinueRunID: runIDPtr(prev)})
+	return s.enqueue(db.Run{Kind: db.KindCIAnalyze, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), RequestedModel: model, SkillIdentifier: skillID(s.SkillFor(db.KindCIAnalyze)), ContinueRunID: runIDPtr(prev)})
 }
 
 // StartCIFix queues an edit run in the MR worktree that fixes what makes the head pipeline fail («Исправить CI»).
@@ -1008,9 +1032,9 @@ func (s *Service) StartCIFix(mrID int64, runnerName string, analysisRunID, conti
 		return 0, err
 	}
 	if prev != nil {
-		runnerName = prev.Runner
+		runnerName = prev.AgentSelector()
 	}
-	r, err := s.pickRunner(runnerName)
+	r, model, err := s.pickRunner(runnerName)
 	if err != nil {
 		return 0, err
 	}
@@ -1020,7 +1044,7 @@ func (s *Service) StartCIFix(mrID int64, runnerName string, analysisRunID, conti
 			base = &analysis.ID
 		}
 	}
-	run := db.Run{Kind: db.KindCIFix, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), BaseRunID: base, ContinueRunID: runIDPtr(prev),
+	run := db.Run{Kind: db.KindCIFix, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), RequestedModel: model, BaseRunID: base, ContinueRunID: runIDPtr(prev),
 		Branch: mr.SourceBranch, WorkDir: s.Worktrees.Path(mr.SourceBranch), SkillIdentifier: skillID(s.SkillFor(db.KindCIFix))}
 	return s.enqueue(run)
 }
@@ -1073,14 +1097,14 @@ func (s *Service) StartFixFindings(mrID int64, runnerName, notes string, finding
 		return 0, err
 	}
 	if prev != nil {
-		runnerName = prev.Runner
+		runnerName = prev.AgentSelector()
 	}
-	r, err := s.pickRunner(runnerName)
+	r, model, err := s.pickRunner(runnerName)
 	if err != nil {
 		return 0, err
 	}
 	selection, _ := json.Marshal(db.Selection{Findings: findingIDs, Discussions: discussionIDs})
-	run := db.Run{Kind: db.KindFixFindings, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), Notes: notes, SelectionJSON: string(selection), ContinueRunID: runIDPtr(prev),
+	run := db.Run{Kind: db.KindFixFindings, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), RequestedModel: model, Notes: notes, SelectionJSON: string(selection), ContinueRunID: runIDPtr(prev),
 		Branch: mr.SourceBranch, WorkDir: s.Worktrees.Path(mr.SourceBranch), SkillIdentifier: skillID(s.SkillFor(db.KindFixFindings))}
 	return s.enqueue(run)
 }
@@ -1118,13 +1142,13 @@ func (s *Service) StartStandTest(mrID int64, runnerName, notes string, continueR
 		return 0, err
 	}
 	if prev != nil {
-		runnerName = prev.Runner
+		runnerName = prev.AgentSelector()
 	}
-	r, err := s.pickRunner(runnerName)
+	r, model, err := s.pickRunner(runnerName)
 	if err != nil {
 		return 0, err
 	}
-	run := db.Run{Kind: db.KindStandTest, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), Notes: notes, ContinueRunID: runIDPtr(prev),
+	run := db.Run{Kind: db.KindStandTest, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), RequestedModel: model, Notes: notes, ContinueRunID: runIDPtr(prev),
 		Branch: mr.SourceBranch, WorkDir: s.Worktrees.Path(mr.SourceBranch), SkillIdentifier: skillID(s.SkillFor(db.KindStandTest))}
 	return s.enqueue(run)
 }
@@ -1166,13 +1190,13 @@ func (s *Service) StartStandTestIssue(issueID int64, runnerName, notes, branch s
 		return 0, err
 	}
 	if prev != nil {
-		runnerName = prev.Runner
+		runnerName = prev.AgentSelector()
 	}
-	r, err := s.pickRunner(runnerName)
+	r, model, err := s.pickRunner(runnerName)
 	if err != nil {
 		return 0, err
 	}
-	return s.enqueue(db.Run{Kind: db.KindStandTest, IssueID: &issue.ID, Runner: r.Name(), Notes: notes, ContinueRunID: runIDPtr(prev),
+	return s.enqueue(db.Run{Kind: db.KindStandTest, IssueID: &issue.ID, Runner: r.Name(), RequestedModel: model, Notes: notes, ContinueRunID: runIDPtr(prev),
 		Branch: branch, WorkDir: s.Worktrees.Path(branch), SkillIdentifier: skillID(s.SkillFor(db.KindStandTest))})
 }
 
@@ -1217,13 +1241,13 @@ func (s *Service) StartFixComments(mrID int64, runnerName, notes string, continu
 		return 0, err
 	}
 	if prev != nil {
-		runnerName = prev.Runner
+		runnerName = prev.AgentSelector()
 	}
-	r, err := s.pickRunner(runnerName)
+	r, model, err := s.pickRunner(runnerName)
 	if err != nil {
 		return 0, err
 	}
-	run := db.Run{Kind: db.KindFixComments, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), Notes: notes, ContinueRunID: runIDPtr(prev),
+	run := db.Run{Kind: db.KindFixComments, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), RequestedModel: model, Notes: notes, ContinueRunID: runIDPtr(prev),
 		Branch: mr.SourceBranch, WorkDir: s.Worktrees.Path(mr.SourceBranch), SkillIdentifier: skillID(s.SkillFor(db.KindFixComments))}
 	return s.enqueue(run)
 }
@@ -1324,9 +1348,9 @@ func (s *Service) StartPlan(issueID int64, runnerName, notes string, continueRun
 		return 0, err
 	}
 	if prev != nil {
-		runnerName = prev.Runner
+		runnerName = prev.AgentSelector()
 	}
-	r, err := s.pickRunner(runnerName)
+	r, model, err := s.pickRunner(runnerName)
 	if err != nil {
 		return 0, err
 	}
@@ -1337,7 +1361,7 @@ func (s *Service) StartPlan(issueID int64, runnerName, notes string, continueRun
 	if err != nil {
 		return 0, err
 	}
-	return s.enqueue(db.Run{Kind: db.KindPlan, IssueID: &issue.ID, Runner: r.Name(), Notes: notes, Mode: mode, SkillIdentifier: skillID(s.SkillFor(db.KindPlan)), ContinueRunID: runIDPtr(prev)})
+	return s.enqueue(db.Run{Kind: db.KindPlan, IssueID: &issue.ID, Runner: r.Name(), RequestedModel: model, Notes: notes, Mode: mode, SkillIdentifier: skillID(s.SkillFor(db.KindPlan)), ContinueRunID: runIDPtr(prev)})
 }
 
 // StartImplement queues an edit run in a worktree on `branch` (default: the issue reference). continueRunID > 0
@@ -1365,13 +1389,13 @@ func (s *Service) StartImplement(issueID int64, runnerName, notes, branch string
 		return 0, err
 	}
 	if prev != nil {
-		runnerName = prev.Runner
+		runnerName = prev.AgentSelector()
 	}
-	r, err := s.pickRunner(runnerName)
+	r, model, err := s.pickRunner(runnerName)
 	if err != nil {
 		return 0, err
 	}
-	return s.enqueue(db.Run{Kind: db.KindImplement, IssueID: &issue.ID, Runner: r.Name(), Notes: notes, ContinueRunID: runIDPtr(prev),
+	return s.enqueue(db.Run{Kind: db.KindImplement, IssueID: &issue.ID, Runner: r.Name(), RequestedModel: model, Notes: notes, ContinueRunID: runIDPtr(prev),
 		Branch: branch, WorkDir: s.Worktrees.Path(branch), SkillIdentifier: skillID(s.SkillFor(db.KindImplement))})
 }
 
@@ -1452,51 +1476,51 @@ func (s *Service) Retry(runID int64) (int64, error) {
 		if run.MRID == nil {
 			return 0, userErr("run has no merge request")
 		}
-		return s.StartReview(*run.MRID, run.Kind, run.Runner, derefID(run.ContinueRunID))
+		return s.StartReview(*run.MRID, run.Kind, run.AgentSelector(), derefID(run.ContinueRunID))
 	case db.KindFixComments:
 		if run.MRID == nil {
 			return 0, userErr("run has no merge request")
 		}
-		return s.StartFixComments(*run.MRID, run.Runner, run.Notes, derefID(run.ContinueRunID))
+		return s.StartFixComments(*run.MRID, run.AgentSelector(), run.Notes, derefID(run.ContinueRunID))
 	case db.KindVerifyFinding:
 		if run.MRID == nil || run.FindingID == nil {
 			return 0, userErr("run has no finding")
 		}
-		return s.StartVerifyFinding(*run.MRID, *run.FindingID, run.Runner, derefID(run.ContinueRunID))
+		return s.StartVerifyFinding(*run.MRID, *run.FindingID, run.AgentSelector(), derefID(run.ContinueRunID))
 	case db.KindStandTest:
 		if run.IssueID != nil {
-			return s.StartStandTestIssue(*run.IssueID, run.Runner, run.Notes, run.Branch, derefID(run.ContinueRunID))
+			return s.StartStandTestIssue(*run.IssueID, run.AgentSelector(), run.Notes, run.Branch, derefID(run.ContinueRunID))
 		}
 		if run.MRID == nil {
 			return 0, userErr("run has no merge request")
 		}
-		return s.StartStandTest(*run.MRID, run.Runner, run.Notes, derefID(run.ContinueRunID))
+		return s.StartStandTest(*run.MRID, run.AgentSelector(), run.Notes, derefID(run.ContinueRunID))
 	case db.KindCIAnalyze:
 		if run.MRID == nil {
 			return 0, userErr("run has no merge request")
 		}
-		return s.StartCIAnalyze(*run.MRID, run.Runner, derefID(run.ContinueRunID))
+		return s.StartCIAnalyze(*run.MRID, run.AgentSelector(), derefID(run.ContinueRunID))
 	case db.KindCIFix:
 		if run.MRID == nil {
 			return 0, userErr("run has no merge request")
 		}
-		return s.StartCIFix(*run.MRID, run.Runner, derefID(run.BaseRunID), derefID(run.ContinueRunID))
+		return s.StartCIFix(*run.MRID, run.AgentSelector(), derefID(run.BaseRunID), derefID(run.ContinueRunID))
 	case db.KindFixFindings:
 		if run.MRID == nil {
 			return 0, userErr("run has no merge request")
 		}
 		sel := run.SelectionOf()
-		return s.StartFixFindings(*run.MRID, run.Runner, run.Notes, sel.Findings, sel.Discussions, derefID(run.ContinueRunID))
+		return s.StartFixFindings(*run.MRID, run.AgentSelector(), run.Notes, sel.Findings, sel.Discussions, derefID(run.ContinueRunID))
 	case db.KindPlan:
 		if run.IssueID == nil {
 			return 0, userErr("run has no issue")
 		}
-		return s.StartPlan(*run.IssueID, run.Runner, run.Notes, derefID(run.ContinueRunID), run.Mode)
+		return s.StartPlan(*run.IssueID, run.AgentSelector(), run.Notes, derefID(run.ContinueRunID), run.Mode)
 	case db.KindImplement:
 		if run.IssueID == nil {
 			return 0, userErr("run has no issue")
 		}
-		return s.StartImplement(*run.IssueID, run.Runner, run.Notes, run.Branch, derefID(run.ContinueRunID))
+		return s.StartImplement(*run.IssueID, run.AgentSelector(), run.Notes, run.Branch, derefID(run.ContinueRunID))
 	}
 	return 0, userErr("cannot retry a %s run", run.Kind)
 }
@@ -1552,7 +1576,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusCancelled, "error": "Cancelled before start", "finished_at": db.Now()})
 		return
 	}
-	r, err := s.pickRunner(run.Runner)
+	r, _, err := s.pickRunner(run.Runner)
 	if err != nil {
 		s.fail(runID, err.Error())
 		return
@@ -1566,7 +1590,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			fmt.Fprintf(log, "[%s] %s\n", time.Now().UTC().Format(time.RFC3339), msg)
 		}
 	}
-	logln(fmt.Sprintf("run #%d kind=%s runner=%s", runID, run.Kind, run.Runner))
+	logln(fmt.Sprintf("run #%d kind=%s runner=%s model=%s", runID, run.Kind, run.Runner, firstOf(run.RequestedModel, "default")))
 
 	// Build the prompt and decide where to run. The project skill for this action is authoritative:
 	// an agent is selected with --agent, a command/skill is invoked as a slash command inside the prompt.
@@ -1578,6 +1602,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 	}
 	req := runner.Request{
 		Dir:          s.Settings.ProjectRoot,
+		Model:        run.RequestedModel,
 		Mode:         runner.ModeReadOnly,
 		Policy:       s.policy(),
 		ProtectDirs:  []string{s.Settings.ProjectRoot},
@@ -2279,7 +2304,7 @@ func (s *Service) Ask(runID int64, question string) (string, error) {
 	if run.SessionID == "" {
 		return "", userErr("this run has no resumable session (the %s runner did not report one)", run.Runner)
 	}
-	r, err := s.pickRunner(run.Runner)
+	r, _, err := s.pickRunner(run.Runner)
 	if err != nil {
 		return "", err
 	}

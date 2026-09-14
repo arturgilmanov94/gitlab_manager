@@ -849,6 +849,50 @@ func TestSkillSettingsFromUI(t *testing.T) {
 	}
 }
 
+// The agent selector may carry a model ("claude:opus"): it is validated against the offered list, stored on the
+// run, passed to the runner as the model, and kept by retry and continuation; "default" means the agent's own.
+func TestRunnerModelSelection(t *testing.T) {
+	svc, _, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	if _, err := svc.StartReview(mr.ID, db.KindReviewQuick, "claude:gpt-9", 0); err == nil || !strings.Contains(err.Error(), "not offered") || !strings.Contains(err.Error(), "CLAUDE_MODELS") {
+		t.Fatalf("unknown model must be refused with a hint: %v", err)
+	}
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	runID, err := svc.StartReview(mr.ID, db.KindReviewQuick, "claude:opus", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
+	run, _ := svc.DB.GetRun(runID)
+	if run.Runner != "claude" || run.RequestedModel != "opus" || run.AgentSelector() != "claude:opus" || fr.Requests[len(fr.Requests)-1].Model != "opus" {
+		t.Fatalf("%+v / %+v", run, fr.Requests[len(fr.Requests)-1])
+	}
+	if run.Model == "" || run.Model == "opus" {
+		t.Fatalf("the models actually used stay separate from the requested one: %q", run.Model)
+	}
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	again, err := svc.Retry(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, again) == db.StatusDone })
+	if r, _ := svc.DB.GetRun(again); r.RequestedModel != "opus" || fr.Requests[len(fr.Requests)-1].Model != "opus" {
+		t.Fatalf("retry must keep the model: %+v", r)
+	}
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	plain, err := svc.StartReview(mr.ID, db.KindReviewQuick, "claude:default", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, plain) == db.StatusDone })
+	if r, _ := svc.DB.GetRun(plain); r.RequestedModel != "" || r.AgentSelector() != "claude" || fr.Requests[len(fr.Requests)-1].Model != "" {
+		t.Fatalf("default model must be passed as empty: %+v", r)
+	}
+	if infos := svc.RunnerInfos(); len(infos) != 1 || strings.Join(infos[0].Models, ",") != "default,fable,opus,sonnet" {
+		t.Fatalf("runner infos must carry the offered models: %+v", infos)
+	}
+}
+
 // «Проверить на стенде» for a task: refused until the task has an implementation branch; runs in the implementation
 // worktree with the issue, the branch and the verdict instruction in the prompt; found as the branch's latest stand run.
 func TestStandTestIssue(t *testing.T) {

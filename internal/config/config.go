@@ -227,7 +227,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		ApprovalTimeoutSec:    num("APPROVAL_TIMEOUT_SEC", 1800),
 		ReportLanguage:        strings.ToLower(str("REPORT_LANGUAGE", "ru")),
 		CodexBin:              str("CODEX_BIN", "codex"),
-		CodexModels:           splitList(str("CODEX_MODELS", "default,gpt-5-codex")),
+		CodexModels:           splitList(str("CODEX_MODELS", "default,gpt-6-astra,gpt-5.6-terra")),
 		DefaultRunner:         str("DEFAULT_RUNNER", "claude"),
 		RunTimeoutSec:         num("RUN_TIMEOUT_SEC", 1800),
 		GlabBin:               str("GLAB_BIN", "glab"),
