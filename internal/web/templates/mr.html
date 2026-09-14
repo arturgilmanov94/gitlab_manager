@@ -118,14 +118,8 @@
 {{end}}
 
 {{if and (or .StandSkill .StandTestSkill) (not .Active) (not .Closed)}}
-<section class="card" id="stand">
-  <div class="card-head"><h2>Проверить на стенде</h2><span class="small muted mono">{{if .StandTestSkill}}{{.StandTestSkill.Identifier}}{{else}}доступ: {{.StandSkill.Identifier}}{{end}}</span></div>
-  <p class="secondary small">Агент создаст workspace на ветке <span class="mono">{{.MR.SourceBranch}}</span>, через skill стенда зальёт туда изменённые файлы MR, прогонит тесты по затронутому коду, напишет скрипт-эмуляцию функциональности MR с моками внешних систем и запустит его на стенде. Код MR не меняется; на стенде не трогаются git и БД. Скрипт остаётся в workspace: его можно закоммитить или удалить.</p>
-  <div class="inline">
-    <input id="stand-notes" type="text" size="60" placeholder="Необязательно: что именно проверить, какие системы мокать, чего не трогать">
-    <button class="btn btn-primary tip" data-tip="{{kindTip "stand"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'stand', this, {notes: document.getElementById('stand-notes').value})">Запустить на стенде</button>
-  </div>
-</section>
+{{template "stand-card" (dict "Scope" "mrs" "ID" .MR.ID "Skill" .StandSkill "TestSkill" .StandTestSkill "Tip" (kindTip "stand") "Last" .Stand
+  "Text" (printf "Агент создаст workspace на ветке %s, через skill стенда зальёт туда изменённые файлы MR, прогонит тесты по затронутому коду, напишет скрипт-эмуляцию функциональности MR с моками внешних систем и запустит его на стенде. Код MR не меняется; на стенде не трогаются git и БД. Скрипт остаётся в workspace: его можно закоммитить или удалить." .MR.SourceBranch))}}
 {{end}}
 
 {{if .Latest}}

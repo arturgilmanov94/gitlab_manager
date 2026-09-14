@@ -150,6 +150,43 @@ func TestLinkedConfigExcludedAndUnpushed(t *testing.T) {
 	}
 }
 
+// When the project itself ignores .claude, the link must not be named in the exclude pathspec: git then reports
+// "The following paths are ignored by one of your .gitignore files" and exits 1 even though the other files were
+// staged, so Commit used to fail on such projects.
+func TestLinkedConfigIgnoredByProject(t *testing.T) {
+	m, root := newManager(t)
+	_ = os.MkdirAll(filepath.Join(root, ".claude"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, ".claude", "note.md"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".claude\n"), 0o644)
+	git(t, root, "add", ".gitignore")
+	git(t, root, "commit", "-q", "-m", "ignore .claude")
+	git(t, root, "push", "-q", "origin", "develop")
+	ctx := context.Background()
+	path, err := m.Prepare(ctx, "feature/ignored", func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(filepath.Join(path, ".claude")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected a linked .claude in the worktree: %v", err)
+	}
+	if spec := m.linkedPathspec(path); len(spec) != 2 {
+		t.Fatalf("an ignored link must not be named in the pathspec: %v", spec)
+	}
+	_ = os.WriteFile(filepath.Join(path, "a.txt"), []byte("a"), 0o644)
+	if status, _ := m.Status(ctx, path); !strings.Contains(status, "a.txt") || strings.Contains(status, ".claude") {
+		t.Fatalf("status: %q", status)
+	}
+	if _, err := m.Commit(ctx, path, "add a"); err != nil {
+		t.Fatalf("commit must succeed on a project that ignores .claude: %v", err)
+	}
+	if tree := git(t, path, "ls-tree", "--name-only", "HEAD"); strings.Contains(tree, ".claude") || !strings.Contains(tree, "a.txt") {
+		t.Fatalf("commit must contain a.txt and not the symlink: %s", tree)
+	}
+	if !m.HasBranch(ctx, "feature/ignored") || m.HasBranch(ctx, "feature/nope") {
+		t.Fatal("the worktree branch is a branch of the main checkout")
+	}
+}
+
 // Reviews run in a detached worktree at exactly the MR head: created once, reused for the same SHA, moved for a new one.
 func TestPrepareDetached(t *testing.T) {
 	m, root := newManager(t)

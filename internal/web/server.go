@@ -321,6 +321,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/runs/{id}/worktree", func(w http.ResponseWriter, r *http.Request) {
 		s.result(w, map[string]any{}, s.svc.RemoveWorktree(pathID(r)))
 	})
+	s.mux.HandleFunc("POST /api/runs/{id}/release", func(w http.ResponseWriter, r *http.Request) {
+		cmd, err := s.svc.ReleaseBranch(pathID(r))
+		s.result(w, map[string]any{"checkout": cmd}, err)
+	})
 	s.mux.HandleFunc("POST /api/runs/{id}/plan-file", func(w http.ResponseWriter, r *http.Request) {
 		path, err := s.svc.ExportPlan(pathID(r))
 		s.result(w, map[string]any{"path": path}, err)
@@ -778,7 +782,7 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 		"Base": s.base("mrs", fmt.Sprintf("!%d %s", mr.IID, mr.Title)), "MR": mr, "Runs": runs, "Latest": latest,
 		"Sessions":   s.svc.Resumable(runs, s.svc.ReviewDirs(mr)...),
 		"Changes":    changesIf(stale, s.svc, mr, latest),
-		"StandSkill": s.svc.StandSkill(), "StandTestSkill": s.svc.SkillFor(db.KindStandTest),
+		"StandSkill": s.svc.StandSkill(), "StandTestSkill": s.svc.SkillFor(db.KindStandTest), "Stand": app.LatestStandFor(runs, mr.SourceBranch),
 		"FailedJobs": s.svc.FailedJobsFor(mr), "CIAnalysis": latestCIAnalysis(runs, mr.HeadSHA),
 		"Findings": findings, "Discussions": discussions, "Active": active, "LastRun": lastRun,
 		"Stale": stale, "State": state, "OpenMajor": major, "OpenMinor": minor, "OpenInfo": info,
@@ -826,8 +830,17 @@ func (s *Server) issuePage(w http.ResponseWriter, r *http.Request) {
 		"Base": s.base("issues", fmt.Sprintf("#%d %s", issue.IID, issue.Title)), "Issue": issue, "Runs": runs, "Active": active,
 		"Plan": plan, "Impl": impl, "Failed": failed, "State": state, "LooksLikeBug": issue.LooksLikeBug(), "PlanIsBug": plan != nil && plan.Mode == "bug",
 		"PlanSessions": s.svc.Resumable(runs, s.svc.Settings.ProjectRoot), "ImplSessions": s.svc.Resumable(runs, s.svc.Worktrees.Path(issue.Ref())),
-		"DefaultBranch": issue.Ref(), "BaseBranch": s.svc.Settings.BaseBranch,
+		"DefaultBranch": issue.Ref(), "BaseBranch": s.svc.Settings.BaseBranch, "Workspaces": s.svc.IssueWorkspaces(runs),
+		"StandSkill": s.svc.StandSkill(), "StandTestSkill": s.svc.SkillFor(db.KindStandTest), "Stand": standFor(runs, impl),
 	})
+}
+
+// standFor is the newest stand run on the branch of the implementation run (nil without one).
+func standFor(runs []db.RunSummary, impl *db.RunSummary) *db.RunSummary {
+	if impl == nil {
+		return nil
+	}
+	return app.LatestStandFor(runs, impl.Branch)
 }
 
 type planResult struct {
@@ -933,6 +946,9 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 			if run.Kind == db.KindImplement && run.IssueID != nil {
 				issue, _ := s.svc.DB.GetIssue(*run.IssueID)
 				data["MRDraft"] = s.svc.MRDraftFor(run, issue)
+				runs, _ := s.svc.DB.ListRunsForIssue(*run.IssueID)
+				data["StandSkill"], data["StandTestSkill"] = s.svc.StandSkill(), s.svc.SkillFor(db.KindStandTest)
+				data["Stand"] = app.LatestStandFor(runs, run.Branch)
 			}
 		}
 	}
@@ -1073,8 +1089,10 @@ func (s *Server) apiStartIssueRun(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		runID, err = s.svc.StartImplement(id, body["runner"], notes, body["branch"], cont)
+	case "stand":
+		runID, err = s.svc.StartStandTestIssue(id, body["runner"], body["notes"], body["branch"], cont)
 	default:
-		writeJSON(w, 400, map[string]any{"error": "kind must be plan or implement"})
+		writeJSON(w, 400, map[string]any{"error": "kind must be plan, implement or stand"})
 		return
 	}
 	if err != nil {
@@ -1265,6 +1283,8 @@ func kindTip(kind string) string {
 		return "Агент в отдельном workspace ветки MR исправит причину падения pipeline и прогонит относящиеся тесты. Что исправить нельзя (флаки, инфраструктура) — объяснит. Commit и push — по вашим кнопкам."
 	case "stand":
 		return "Агент в отдельном workspace ветки MR через skill доступа к стенду заливает изменённые файлы MR на стенд, прогоняет там тесты по затронутому коду, пишет скрипт-эмуляцию функциональности MR с моками внешних систем, запускает его на стенде и отчитывается. Код MR не меняет; git и БД на стенде не трогает."
+	case "stand-issue":
+		return "Агент в workspace ветки решения через skill доступа к стенду заливает изменённые файлы на стенд (включая незакоммиченные), прогоняет там тесты по затронутому коду, пишет скрипт-эмуляцию функциональности задачи с моками внешних систем, запускает его на стенде и выносит вердикт: работает ли решение. Код решения не меняет; git и БД на стенде не трогает."
 	case "fix":
 		return "Агент создаст отдельный workspace на ветке MR и исправит код по нерешённым обсуждениям ревьюеров. Commit и push — только по вашей кнопке."
 	case "plan":
@@ -1564,7 +1584,7 @@ func errorTitle(kind string) string {
 	case db.KindVerifyFinding:
 		return "Не удалось проверить замечание"
 	case db.KindStandTest:
-		return "Не удалось проверить MR на стенде"
+		return "Не удалось проверить на стенде"
 	case db.KindCIAnalyze:
 		return "Не удалось разобрать падение pipeline"
 	case db.KindCIFix:

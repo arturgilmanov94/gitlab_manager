@@ -459,8 +459,15 @@ func TestIssuesPages(t *testing.T) {
 	if !strings.Contains(last.Prompt, "Plan from the investigation run") || !strings.Contains(last.Prompt, "1. one") {
 		t.Fatalf("plan not passed to implementation prompt")
 	}
-	if _, body := get(t, ts.URL+"/issue/1"); !strings.Contains(body, "Готово к MR") || !strings.Contains(body, "Подготовить MR") {
-		t.Fatal("issue page must show ready state")
+	if _, body := get(t, ts.URL+"/issue/1"); !strings.Contains(body, "Готово к MR") || !strings.Contains(body, "Подготовить MR") || !strings.Contains(body, `class="btn btn-link ext tip" data-tip="Открыть задачу #7 в GitLab`) {
+		t.Fatal("issue page must show ready state and a visible GitLab button")
+	}
+	if _, body := get(t, ts.URL+implURL); !strings.Contains(body, ">Задача в GitLab</a>") || !strings.Contains(body, "Забрать ветку в основную копию") || !strings.Contains(body, "git checkout group/sub/project#7") {
+		t.Fatal("implement run page must link to the GitLab issue and explain where the branch lives")
+	}
+	// The issue page lists the worktree of the implementation with its state and the release action (disabled: dirty).
+	if _, body := get(t, ts.URL+"/issue/1"); !strings.Contains(body, `id="workspaces"`) || !strings.Contains(body, "незакоммиченные изменения") || !strings.Contains(body, `<button class="btn btn-sm btn-primary" disabled>Забрать ветку в основную копию</button>`) {
+		t.Fatal("issue page must list the task's workspaces with the release action")
 	}
 	if _, body := get(t, ts.URL+"/"); !strings.Contains(body, "готово к MR") {
 		t.Fatal("overview must list the implemented task")
@@ -666,6 +673,46 @@ func TestStandTestPages(t *testing.T) {
 	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
 	if _, body := get(t, ts.URL+"/-/stand-test/1"); !strings.Contains(body, "Проверка на стенде") || !strings.Contains(body, "Залито на стенд") || !strings.Contains(body, "Slow query") || !strings.Contains(body, "scripts/onerun/mr_42.php") || !strings.Contains(body, `id="workspace"`) {
 		t.Fatal("run page must show the stand report and the workspace")
+	}
+}
+
+// The task's stand check: card and button appear on the issue and implementation pages once there is an
+// implementation and a stand skill; the run is bound to the task and reported in the «Довести до MR» checklist.
+func TestStandTestIssuePages(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/issues", map[string]any{"url": "https://gitlab.example.com/group/sub/project/-/issues/7"})
+	testutil.AddProjectSkill(t, svc.Settings.ProjectRoot, "dev-stand", "Access to the dev stand")
+	if _, body := get(t, ts.URL+"/issue/1"); strings.Contains(body, `id="stand"`) {
+		t.Fatal("no stand card before the task is implemented")
+	}
+	fr.Outputs = []map[string]any{testutil.ImplementOutput()}
+	code, out := postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "implement"})
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	implURL := out["redirect"].(string)
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/issue/1"); !strings.Contains(body, `id="stand"`) || !strings.Contains(body, "startRun('/api/issues/1/runs', 'stand', this") || !strings.Contains(body, `href="#stand">Проверить на стенде</a>`) {
+		t.Fatal("issue page must offer the stand check for the implementation branch")
+	}
+	if _, body := get(t, ts.URL+implURL); !strings.Contains(body, `id="stand"`) || !strings.Contains(body, "Стенд · не проверялось") || !strings.Contains(body, `href="#stand">Проверить на стенде</a>`) {
+		t.Fatal("implementation page must offer the stand check and list it in the MR checklist")
+	}
+	fr.Outputs = []map[string]any{{"summary": "The emulation script confirms the task works on the stand.", "deployed": []any{"CHANGED.txt"},
+		"tests": "phpunit: 3 passed", "script_path": "scripts/onerun/task_7.php", "script_output": "all good", "problems": []any{}, "changes": []any{}, "todo": []any{}, "commit_message": ""}}
+	code, out = postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "stand", "notes": "x"})
+	if code != 200 || out["redirect"] != "/-/stand-test/2" {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(2); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/stand-test/2"); !strings.Contains(body, "Проверка на стенде") || !strings.Contains(body, "← #7 Task 7") || !strings.Contains(body, "Залито на стенд") || !strings.Contains(body, "scripts/onerun/task_7.php") {
+		t.Fatal("stand run page must be bound to the task and show the report")
+	}
+	if _, body := get(t, ts.URL+implURL); !strings.Contains(body, "Стенд · <a href=\"/-/stand-test/2\">сессия #2</a>") || !strings.Contains(body, "Запустить на стенде ещё раз") {
+		t.Fatal("checklist must reference the stand run")
+	}
+	if _, body := get(t, ts.URL+"/issue/1"); !strings.Contains(body, "стенд: <a href=\"/-/stand-test/2\">#2</a>") {
+		t.Fatal("issue state must mention the stand run")
 	}
 }
 

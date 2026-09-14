@@ -16,6 +16,7 @@
     {{else if eq .State "ready"}}
       <a class="btn btn-primary" href="{{runPath .Impl.Kind .Impl.ID}}">Подготовить MR</a>
       <a class="btn" href="{{runPath .Impl.Kind .Impl.ID}}#workspace">Показать diff</a>
+      {{if or .StandSkill .StandTestSkill}}<a class="btn tip" data-tip="{{kindTip "stand-issue"}}" href="#stand">Проверить на стенде</a>{{end}}
     {{else if eq .State "planned"}}
       <button class="btn btn-primary tip" data-tip="{{kindTip "implement_plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {plan_run: '{{.Plan.ID}}', notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">{{if .PlanIsBug}}Исправить{{else}}Реализовать этот план{{end}}</button>
       <a class="btn" href="{{runPath .Plan.Kind .Plan.ID}}">{{if .PlanIsBug}}Открыть разбор{{else}}Открыть план{{end}}</a>
@@ -23,6 +24,7 @@
       <button class="btn btn-primary tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Решить задачу</button>
       <button class="btn tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'plan', this, {notes: document.getElementById('notes').value, mode: planMode()})">Исследовать</button>
     {{end}}
+    <a class="btn btn-link ext tip" data-tip="Открыть задачу #{{.Issue.IID}} в GitLab (новая вкладка)." href="{{.Issue.WebURL}}" target="_blank" rel="noopener">GitLab</a>
     <details class="menu">
       <summary title="Ещё действия">⋯</summary>
       <div class="menu-items">
@@ -31,9 +33,9 @@
           <button class="item tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Решить без плана<span class="sub">агент сам спланирует и реализует</span></button>
           <div class="divider"></div>
         {{end}}
-        <a class="item ext" href="{{.Issue.WebURL}}" target="_blank" rel="noopener">GitLab</a>
         <button class="item tip" data-tip="{{kindTip "refresh"}}" onclick="post('/api/issues/{{.Issue.ID}}/refresh', {}, this).then(r => r && reload())">Обновить из GitLab</button>
         <a class="item" href="#history">История сессий</a>
+        <button class="item" onclick="copyText('{{.Issue.WebURL}}')">Скопировать ссылку на задачу</button>
         <div class="divider"></div>
         {{if .Active}}<button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Active.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
         <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="confirm('Убрать задачу из dashboard? Ветки и workspace не удаляются.') && del('/api/issues/{{.Issue.ID}}', this).then(r => r && go('/issues'))">Убрать из dashboard</button>
@@ -56,7 +58,7 @@
     <div class="detail">
       {{if .Active}}{{.Active.Runner}} · <span data-started="{{.Active.StartedAt}}"><span class="elapsed">—</span></span>
       {{else if eq .State "failed"}}{{firstLine .Failed.Error}}
-      {{else if eq .State "ready"}}реализация в workspace на ветке <span class="mono">{{.Impl.Branch}}</span>; дальше diff, commit, push и MR
+      {{else if eq .State "ready"}}реализация в workspace на ветке <span class="mono">{{.Impl.Branch}}</span>; дальше {{if or .StandSkill .StandTestSkill}}проверка на стенде, {{end}}diff, commit, push и MR{{with .Stand}} · стенд: <a href="{{runPath .Kind .ID}}">#{{.ID}}</a> {{statusLabel .Status}}{{end}}
       {{else if eq .State "planned"}}{{if .PlanIsBug}}разбор бага{{else}}исследование{{end}} #{{.Plan.ID}} от {{when .Plan.FinishedAt}}; {{if .PlanIsBug}}root cause и предложение исправления будут переданы агенту{{else}}план будет передан агенту при реализации{{end}}
       {{else}}агент ещё не работал над задачей{{end}}
     </div>
@@ -75,6 +77,37 @@
   <div class="progress-head">{{template "status" .Active.Status}} <b>{{kindLabel .Active.Kind}}</b> · {{.Active.Runner}} · <span class="elapsed">—</span> · <a href="{{runPath .Active.Kind .Active.ID}}">открыть сессию</a></div>
   <div class="progress"><div class="progress-bar indeterminate"></div></div>
 </div>
+{{end}}
+
+{{if .Workspaces}}
+<section class="card" id="workspaces">
+  <div class="card-head"><h2>Workspace и ветки решения</h2><span class="small muted">по одному worktree на ветку · ветки живут в основном репозитории{{with (index .Workspaces 0).Root}} <span class="mono">{{.}}</span>{{end}}</span></div>
+  <table class="table compact">
+    <thead><tr><th>Ветка</th><th>Состояние</th><th>Сессия</th><th></th></tr></thead>
+    <tbody>
+    {{range .Workspaces}}
+    <tr>
+      <td class="mono small">{{.Branch}}</td>
+      <td class="small">{{if .Active}}<span class="spinner"></span> агент работает{{else if not .Exists}}workspace удалён · {{if .InRepo}}ветка в основном репозитории{{else}}ветки в репозитории нет{{end}}{{else if not .Clean}}<span class="state state-warning"><span class="glyph">⚠</span> незакоммиченные изменения</span>{{else if .Pushed}}<span class="state state-ok"><span class="glyph">✓</span> закоммичено, ветка на origin</span>{{else if .HasUpstream}}<span class="state state-warning"><span class="glyph">⚠</span> {{.Unpushed}} коммитов не отправлено</span>{{else}}<span class="state state-ok"><span class="glyph">✓</span> закоммичено, ветки нет на origin</span>{{end}}</td>
+      <td class="small">{{if .Run}}<a href="{{runPath .Run.Kind .Run.ID}}">#{{.Run.ID}} {{kindLabel .Run.Kind}}</a>{{end}}</td>
+      <td class="nowrap">
+        {{if .Active}}<a class="btn btn-sm" href="{{runPath .Run.Kind .Run.ID}}">Открыть сессию</a>
+        {{else if .Exists}}
+          <a class="btn btn-sm" href="{{runPath .Run.Kind .Run.ID}}#workspace">Diff · Commit · Push</a>
+          {{if .Clean}}<button class="btn btn-sm btn-primary tip" data-tip="Удалить workspace, оставив ветку {{.Branch}} в основном репозитории, чтобы переключиться на неё там: {{.Checkout}}. Ваша рабочая копия сама не переключается — команда будет показана и скопирована." onclick="releaseBranch('{{.Run.ID}}', '{{.Branch}}', this)">Забрать ветку в основную копию</button>
+          {{else}}<span class="disabled-wrap tip" data-tip="Сначала закоммитьте изменения в workspace (Commit на странице сессии): ветку можно забрать только из чистого workspace."><button class="btn btn-sm btn-primary" disabled>Забрать ветку в основную копию</button></span>{{end}}
+        {{else if .InRepo}}<code class="mono small">{{.Checkout}}</code> <button class="btn btn-sm tip" data-tip="Команда для переключения на ветку в основной копии {{.Root}}." onclick="copyText('{{.Checkout}}')">Скопировать</button>{{end}}
+      </td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}
+
+{{if and .Impl (not .Active) (or .StandSkill .StandTestSkill)}}
+{{template "stand-card" (dict "Scope" "issues" "ID" .Issue.ID "Branch" .Impl.Branch "Skill" .StandSkill "TestSkill" .StandTestSkill "Tip" (kindTip "stand-issue") "Last" .Stand
+  "Text" (printf "Агент возьмёт workspace ветки %s (или создаст его из ветки), через skill стенда зальёт изменённые файлы решения на стенд — включая ещё не закоммиченные, прогонит там тесты по затронутому коду, напишет скрипт-эмуляцию функциональности задачи с моками внешних систем, запустит его на стенде и вынесет вердикт: работает ли решение. Код решения не меняется; на стенде не трогаются git и БД. Скрипт остаётся в workspace: его можно закоммитить вместе с решением или удалить." .Impl.Branch))}}
 {{end}}
 
 <section class="card">

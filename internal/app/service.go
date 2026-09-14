@@ -1129,6 +1129,73 @@ func (s *Service) StartStandTest(mrID int64, runnerName, notes string, continueR
 	return s.enqueue(run)
 }
 
+// StartStandTestIssue queues «Проверить на стенде» for a task's implementation branch: the agent deploys the branch to
+// the developer's stand, runs the tests and an emulation script with mocked external systems there, and reports
+// whether the solution works. branch defaults to the newest finished implementation of the issue.
+func (s *Service) StartStandTestIssue(issueID int64, runnerName, notes, branch string, continueRunID int64) (int64, error) {
+	if _, err := s.requireRoot(); err != nil {
+		return 0, err
+	}
+	if s.StandSkill() == nil && s.SkillFor(db.KindStandTest) == nil {
+		return 0, userErr("the project has no stand skill: add .claude/skills/<name>/SKILL.md describing how to reach the stand (or set STAND_SKILL / SKILL_STAND_TEST)")
+	}
+	if active, _ := s.DB.ActiveRunForIssue(issueID); active != nil {
+		return 0, userErr("a run for this issue is already queued or running (#%d)", active.ID)
+	}
+	issue, _ := s.DB.GetIssue(issueID)
+	if issue == nil {
+		return 0, userErr("issue not found")
+	}
+	runs, _ := s.DB.ListRunsForIssue(issueID)
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		if impl := LatestImplementation(runs); impl != nil {
+			branch = impl.Branch
+		}
+	}
+	if branch == "" {
+		return 0, userErr("the task has no implementation branch yet: solve the task first")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), worktree.Timeout)
+	defer cancel()
+	if !s.Worktrees.Exists(s.Worktrees.Path(branch)) && !s.Worktrees.HasBranch(ctx, branch) {
+		return 0, userErr("branch %q exists neither as a workspace nor in the repository: nothing to check on the stand", branch)
+	}
+	prev, err := s.continuation(continueRunID, nil, &issueID, s.Worktrees.Path(branch))
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		runnerName = prev.Runner
+	}
+	r, err := s.pickRunner(runnerName)
+	if err != nil {
+		return 0, err
+	}
+	return s.enqueue(db.Run{Kind: db.KindStandTest, IssueID: &issue.ID, Runner: r.Name(), Notes: notes, ContinueRunID: runIDPtr(prev),
+		Branch: branch, WorkDir: s.Worktrees.Path(branch), SkillIdentifier: skillID(s.SkillFor(db.KindStandTest))})
+}
+
+// LatestImplementation is the newest finished implementation run among runs (newest first), nil when none.
+func LatestImplementation(runs []db.RunSummary) *db.RunSummary {
+	for i := range runs {
+		if runs[i].Kind == db.KindImplement && runs[i].Status == db.StatusDone {
+			return &runs[i]
+		}
+	}
+	return nil
+}
+
+// LatestStandFor is the newest stand run on branch among runs (newest first), any status; nil when none.
+func LatestStandFor(runs []db.RunSummary, branch string) *db.RunSummary {
+	for i := range runs {
+		if runs[i].Kind == db.KindStandTest && runs[i].Branch == branch {
+			return &runs[i]
+		}
+	}
+	return nil
+}
+
 // StartFixComments queues an edit run that addresses unresolved reviewer discussions in a worktree of the MR branch.
 // continueRunID > 0 continues the agent session of an earlier run in the same worktree (0 = new chat).
 func (s *Service) StartFixComments(mrID int64, runnerName, notes string, continueRunID int64) (int64, error) {
@@ -1397,6 +1464,9 @@ func (s *Service) Retry(runID int64) (int64, error) {
 		}
 		return s.StartVerifyFinding(*run.MRID, *run.FindingID, run.Runner, derefID(run.ContinueRunID))
 	case db.KindStandTest:
+		if run.IssueID != nil {
+			return s.StartStandTestIssue(*run.IssueID, run.Runner, run.Notes, run.Branch, derefID(run.ContinueRunID))
+		}
 		if run.MRID == nil {
 			return 0, userErr("run has no merge request")
 		}
@@ -1669,8 +1739,14 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		req.Prompt, req.Schema = prompts.CIFix(promptMR(mr), jobs, analysis, sk), prompts.CIFixSchema
 		req.SessionName = fmt.Sprintf("ci-fix !%d #%d", mr.IID, runID)
 	case db.KindStandTest:
-		mr, _ := s.DB.GetMR(*run.MRID)
-		if mr == nil {
+		var mr *db.MergeRequest
+		var issue *db.Issue
+		if run.IssueID != nil {
+			if issue, _ = s.DB.GetIssue(*run.IssueID); issue == nil {
+				s.fail(runID, "issue disappeared")
+				return
+			}
+		} else if mr, _ = s.DB.GetMR(*run.MRID); mr == nil {
 			s.fail(runID, "merge request disappeared")
 			return
 		}
@@ -1685,8 +1761,13 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			logln("stand access skill: " + stand.Identifier() + " (" + stand.RelPath + ")")
 		}
 		req.Dir, req.Mode, req.ProtectDirs = path, runner.ModeEdit, nil
-		req.Prompt, req.Schema = prompts.StandTest(promptMR(mr), run.Notes, firstOf(mr.TargetBranch, s.Settings.BaseBranch), stand, sk), prompts.StandSchema
-		req.SessionName = fmt.Sprintf("stand-test !%d #%d", mr.IID, runID)
+		if issue != nil {
+			req.Prompt, req.Schema = prompts.StandTestIssue(promptIssue(issue), run.Notes, run.Branch, s.Settings.BaseBranch, stand, sk), prompts.StandSchema
+			req.SessionName = fmt.Sprintf("stand-test #%d run %d", issue.IID, runID)
+		} else {
+			req.Prompt, req.Schema = prompts.StandTest(promptMR(mr), run.Notes, firstOf(mr.TargetBranch, s.Settings.BaseBranch), stand, sk), prompts.StandSchema
+			req.SessionName = fmt.Sprintf("stand-test !%d #%d", mr.IID, runID)
+		}
 	case db.KindFixComments:
 		mr, _ := s.DB.GetMR(*run.MRID)
 		if mr == nil {
@@ -1708,7 +1789,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "issue disappeared")
 			return
 		}
-		pi := prompts.Issue{WebURL: issue.WebURL, ProjectPath: issue.ProjectPath, Host: issue.GitLabHost, IID: issue.IID, Title: issue.Title, Description: issue.Description}
+		pi := promptIssue(issue)
 		if run.Kind == db.KindPlan {
 			if run.Mode == "bug" {
 				req.Prompt, req.Schema = prompts.PlanBug(pi, run.Notes, sk), prompts.BugSchema
@@ -2452,11 +2533,52 @@ type WorktreeState struct {
 	Exists      bool
 	Path        string
 	Branch      string
+	Root        string // the main checkout the worktree shares .git (and so the branch) with
+	InRepo      bool   // the branch exists in the main checkout's refs
 	Status      string
 	Diff        string
 	Log         string
 	Unpushed    int  // commits not yet on origin
 	HasUpstream bool // the branch exists on origin
+}
+
+// Checkout is the command that switches the main checkout to the branch; possible once the worktree is gone,
+// because git lets a branch be checked out in one worktree at a time.
+func (w WorktreeState) Checkout() string { return "git checkout " + w.Branch }
+
+// IssueWorkspace is a worktree an edit run of an issue worked in, with its git state: one per directory (branch).
+type IssueWorkspace struct {
+	WorktreeState
+	Run    *db.RunSummary // newest run that worked in it
+	Active bool           // that run is still editing
+}
+
+// IssueWorkspaces lists the worktrees of the issue's edit runs (runs newest first), one per directory, including
+// those already removed while their branch still exists in the main checkout — the branch is what the developer wants.
+func (s *Service) IssueWorkspaces(runs []db.RunSummary) []IssueWorkspace {
+	if s.Worktrees == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []IssueWorkspace
+	for i := range runs {
+		r := &runs[i]
+		if !r.IsEdit() || r.WorkDir == "" || seen[r.WorkDir] {
+			continue
+		}
+		seen[r.WorkDir] = true
+		w := IssueWorkspace{Run: r, Active: r.Active()}
+		if w.Active {
+			w.WorktreeState = WorktreeState{Path: r.WorkDir, Branch: r.Branch, Root: s.Settings.ProjectRoot, Exists: s.Worktrees.Exists(r.WorkDir), InRepo: true}
+		} else {
+			w.WorktreeState = s.Worktree(&r.Run)
+		}
+		if !w.Exists && !w.InRepo {
+			continue // nothing left of it
+		}
+		out = append(out, w)
+	}
+	return out
 }
 
 // Clean reports whether everything in the worktree is committed.
@@ -2510,13 +2632,17 @@ func (s *Service) MRDraftFor(run *db.Run, issue *db.Issue) MRDraft {
 
 // Worktree returns the current state of a run's worktree.
 func (s *Service) Worktree(run *db.Run) WorktreeState {
-	state := WorktreeState{Path: run.WorkDir, Branch: run.Branch}
-	if s.Worktrees == nil || run.WorkDir == "" || !s.Worktrees.Exists(run.WorkDir) {
+	state := WorktreeState{Path: run.WorkDir, Branch: run.Branch, Root: s.Settings.ProjectRoot}
+	if s.Worktrees == nil || run.WorkDir == "" {
+		return state
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), worktree.Timeout)
+	defer cancel()
+	state.InRepo = run.Branch != "" && s.Worktrees.HasBranch(ctx, run.Branch)
+	if !s.Worktrees.Exists(run.WorkDir) {
 		return state
 	}
 	state.Exists = true
-	ctx, cancel := context.WithTimeout(context.Background(), worktree.Timeout)
-	defer cancel()
 	state.Status, _ = s.Worktrees.Status(ctx, run.WorkDir)
 	state.Diff, _ = s.Worktrees.Diff(ctx, run.WorkDir)
 	state.Log, _ = s.Worktrees.Log(ctx, run.WorkDir)
@@ -2598,6 +2724,29 @@ func (s *Service) CreateMR(runID int64, title, description string) (string, erro
 	return url, nil
 }
 
+// ReleaseBranch removes the run's worktree so the branch can be checked out in the main checkout (git allows a
+// branch in one worktree at a time). Refuses while there are uncommitted changes: nothing may be lost silently.
+// Returns the command to run in the main checkout; the developer's checkout itself is never switched by the dashboard.
+func (s *Service) ReleaseBranch(runID int64) (string, error) {
+	run, err := s.editRun(runID)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), worktree.Timeout)
+	defer cancel()
+	status, err := s.Worktrees.Status(ctx, run.WorkDir)
+	if err != nil {
+		return "", &UserError{err.Error()}
+	}
+	if strings.TrimSpace(status) != "" {
+		return "", userErr("в workspace есть незакоммиченные изменения — сначала нажмите Commit (или удалите workspace, если они не нужны)")
+	}
+	if err := s.Worktrees.Remove(ctx, run.WorkDir); err != nil {
+		return "", &UserError{err.Error()}
+	}
+	return WorktreeState{Branch: run.Branch}.Checkout(), nil
+}
+
 // RemoveWorktree deletes the worktree directory of a run (branch is kept).
 func (s *Service) RemoveWorktree(runID int64) error {
 	run, err := s.editRun(runID)
@@ -2613,6 +2762,10 @@ func (s *Service) RemoveWorktree(runID int64) error {
 }
 
 // ---------------------------------------------------------------------------------- helpers
+
+func promptIssue(issue *db.Issue) prompts.Issue {
+	return prompts.Issue{WebURL: issue.WebURL, ProjectPath: issue.ProjectPath, Host: issue.GitLabHost, IID: issue.IID, Title: issue.Title, Description: issue.Description}
+}
 
 func promptMR(mr *db.MergeRequest) prompts.MR {
 	return prompts.MR{WebURL: mr.WebURL, ProjectPath: mr.ProjectPath, Host: mr.GitLabHost, IID: mr.IID, Title: mr.Title, SourceBranch: mr.SourceBranch, TargetBranch: mr.TargetBranch, HeadSHA: mr.HeadSHA}

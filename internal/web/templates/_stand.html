@@ -1,0 +1,14 @@
+{{/* stand-card: «Проверить на стенде» for an MR (Scope "mrs") or a task's implementation branch (Scope "issues").
+     Keys: Scope, ID, Branch (issue only), Skill, TestSkill, Text, Tip, Last (newest stand run, may be nil). */}}
+{{define "stand-card"}}
+<section class="card" id="stand">
+  <div class="card-head"><h2>Проверить на стенде</h2><span class="small muted mono">{{if .TestSkill}}{{.TestSkill.Identifier}}{{else}}доступ: {{.Skill.Identifier}}{{end}}</span></div>
+  <p class="secondary small">{{.Text}}</p>
+  {{with .Last}}<div class="stand-last small"><span class="muted">Последняя проверка ветки:</span> <a href="{{runPath .Kind .ID}}">сессия #{{.ID}}</a> {{template "status" .Status}}{{if .FinishedAt}} · {{when .FinishedAt}}{{end}}{{if .Summary}}<div class="clamp">{{.Summary}}</div>{{else if .Error}}<div class="text-danger clamp">{{firstLine .Error}}</div>{{end}}</div>{{end}}
+  <div class="inline">
+    <input id="stand-notes" type="text" size="60" placeholder="Необязательно: что именно проверить, какие системы мокать, чего не трогать">
+    {{if eq .Scope "issues"}}<button class="btn btn-primary tip" data-tip="{{.Tip}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'stand', this, {notes: document.getElementById('stand-notes').value, branch: '{{.Branch}}'})">{{if .Last}}Запустить на стенде ещё раз{{else}}Запустить на стенде{{end}}</button>
+    {{else}}<button class="btn btn-primary tip" data-tip="{{.Tip}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'stand', this, {notes: document.getElementById('stand-notes').value})">Запустить на стенде</button>{{end}}
+  </div>
+</section>
+{{end}}

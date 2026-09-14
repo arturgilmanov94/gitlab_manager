@@ -24,9 +24,13 @@
       {{else}}<span class="disabled-wrap tip" data-tip="{{.Base.TerminalWhy}}"><button class="btn" disabled>Продолжить в терминале</button></span>{{end}}
     {{end}}
     <a class="btn tip" data-tip="Команда, промпт, stderr и stdout агента — для диагностики." href="{{runPath .Run.Kind .Run.ID}}/log" target="_blank">Технический лог</a>
+    {{if .Issue}}<a class="btn btn-link ext tip" data-tip="Открыть задачу #{{.Issue.IID}} в GitLab (новая вкладка)." href="{{.Issue.WebURL}}" target="_blank" rel="noopener">Задача в GitLab</a>
+    {{else if .MR}}<a class="btn btn-link ext tip" data-tip="Открыть MR !{{.MR.IID}} в GitLab (новая вкладка)." href="{{.MR.WebURL}}" target="_blank" rel="noopener">MR в GitLab</a>{{end}}
     <details class="menu">
       <summary title="Ещё действия">⋯</summary>
       <div class="menu-items">
+        {{if .Issue}}<a class="item" href="{{issuePath .Issue.ID}}">Карточка задачи #{{.Issue.IID}}</a><button class="item" onclick="copyText('{{.Issue.WebURL}}')">Скопировать ссылку на задачу</button><div class="divider"></div>
+        {{else if .MR}}<a class="item" href="{{mrPath .MR.ID}}">Карточка MR !{{.MR.IID}}</a><button class="item" onclick="copyText('{{.MR.WebURL}}')">Скопировать ссылку на MR</button><div class="divider"></div>{{end}}
         {{if .Base.Terminal}}<button class="item tip" data-tip="{{kindTip "terminal-dir"}}" onclick="openTerminal('{{.Run.ID}}', false, this)">Открыть терминал в каталоге сессии</button>
         {{else}}<span class="item tip" aria-disabled="true" data-tip="{{.Base.TerminalWhy}}">Открыть терминал в каталоге сессии</span>{{end}}
         <button class="item tip" data-tip="{{kindTip "terminal-copy"}}" onclick="copyText({{termCommand .Run}})">Скопировать команду для терминала<span class="sub mono">{{termCommand .Run}}</span></button>
@@ -240,13 +244,22 @@
 {{if .Worktree}}
 <section class="card" id="workspace">
   <div class="card-head"><h2>Workspace</h2><span class="mono small muted">{{.Worktree.Path}}</span></div>
-  {{if not .Worktree.Exists}}<p class="muted">Workspace удалён. Ветка <span class="mono">{{.Run.Branch}}</span> сохранена в репозитории.</p>
+  {{if not .Worktree.Exists}}
+  <p class="muted">Workspace удалён.{{if .Worktree.InRepo}} Ветка <span class="mono">{{.Run.Branch}}</span> сохранена в основном репозитории{{if .Worktree.Root}} <span class="mono">{{.Worktree.Root}}</span>{{end}} — переключиться на неё:{{else}} Ветки <span class="mono">{{.Run.Branch}}</span> в основном репозитории больше нет (удалена вручную или влита){{if .Worktree.HasUpstream}}; на origin она есть{{end}}.{{end}}</p>
+  {{if .Worktree.InRepo}}<div class="actions left"><code class="mono">{{.Worktree.Checkout}}</code> <button class="btn btn-sm" onclick="copyText('{{.Worktree.Checkout}}')">Скопировать</button></div>{{end}}
   {{else}}
+  <div class="branch-note small">
+    Ветка <span class="mono">{{.Run.Branch}}</span> — это ветка основного репозитория{{if .Worktree.Root}} <span class="mono">{{.Worktree.Root}}</span>{{end}}: workspace делит с ним <span class="mono">.git</span>, поэтому там она уже видна (<span class="mono">git branch</span>, <span class="mono">git log {{.Run.Branch}}</span>).
+    Переключиться на неё в основной копии (<span class="mono">{{.Worktree.Checkout}}</span>) git не даст, пока ветка занята этим workspace, — нажмите «Забрать ветку в основную копию»: workspace удалится, ветка и коммиты останутся.
+  </div>
   <div class="field"><label for="commit-msg">Сообщение коммита</label><div style="flex:1"><input id="commit-msg" type="text" style="width:100%" class="mono" value="{{if .Report}}{{index .Report "commit_message"}}{{end}}" placeholder="Сообщение коммита"></div></div>
   <div class="actions left">
     <button class="btn tip" data-tip="git add -A и git commit в workspace с этим сообщением. Ветка остаётся локальной, пока не нажат Push." onclick="post('/api/runs/{{.Run.ID}}/commit', {message: document.getElementById('commit-msg').value}, this).then(r => r && reload())">Commit</button>
     <button class="btn btn-primary tip" data-tip="git push --set-upstream origin {{.Run.Branch}}. {{if .MR}}Обновит MR !{{.MR.IID}}: ревьюеры увидят новые коммиты.{{else}}Ветка появится на GitLab, после этого можно создать MR.{{end}}" onclick="confirm('Запушить ветку {{.Run.Branch}} в origin?') && post('/api/runs/{{.Run.ID}}/push', {}, this).then(r => r && (flash('Ветка отправлена в origin', true), reload()))">Push</button>
     {{if .MRDraft}}<a class="btn btn-primary" href="#to-mr">Довести до MR</a>{{end}}
+    {{if and .Issue (or .StandSkill .StandTestSkill)}}<a class="btn tip" data-tip="{{kindTip "stand-issue"}}" href="#stand">Проверить на стенде</a>{{end}}
+    {{if .Worktree.Clean}}<button class="btn tip" data-tip="Удалить workspace, оставив ветку {{.Run.Branch}} в основном репозитории, чтобы переключиться на неё там: {{.Worktree.Checkout}}. Ваша рабочая копия сама не переключается — команда будет показана и скопирована." onclick="releaseBranch('{{.Run.ID}}', '{{.Run.Branch}}', this)">Забрать ветку в основную копию</button>
+    {{else}}<span class="disabled-wrap tip" data-tip="Сначала закоммитьте изменения (Commit): ветку можно забрать только из чистого workspace, иначе незакоммиченные правки пропали бы."><button class="btn" disabled>Забрать ветку в основную копию</button></span>{{end}}
     <details class="menu">
       <summary title="Ещё действия">⋯</summary>
       <div class="menu-items">
@@ -266,6 +279,7 @@
       {{$tests := ""}}{{if $r}}{{$tests = index $r "tests"}}{{end}}
       <li class="{{if and $tests (ne $tests "none")}}ok{{else}}warn{{end}}"><span class="glyph">{{if and $tests (ne $tests "none")}}✓{{else}}⚠{{end}}</span> Тесты {{if and $tests (ne $tests "none")}}· выполнены{{else}}· не запускались{{end}}</li>
       <li class="{{if and $r (index $r "self_review")}}ok{{else}}warn{{end}}"><span class="glyph">{{if and $r (index $r "self_review")}}✓{{else}}⚠{{end}}</span> Self-review {{if and $r (index $r "self_review")}}· сделан агентом{{else}}· отсутствует в отчёте{{end}}</li>
+      {{if or .Stand .StandSkill .StandTestSkill}}{{$ok := and .Stand (eq .Stand.Status "done")}}<li class="{{if $ok}}ok{{else}}warn{{end}}"><span class="glyph">{{if $ok}}✓{{else}}⚠{{end}}</span> Стенд {{with .Stand}}· <a href="{{runPath .Kind .ID}}">сессия #{{.ID}}</a> {{statusLabel .Status}}{{if .Summary}} · <span class="muted">{{.Summary}}</span>{{end}}{{else}}· не проверялось, <a href="#stand">запустить</a>{{end}}</li>{{end}}
       <li class="{{if .Worktree.Clean}}ok{{else}}warn{{end}}"><span class="glyph">{{if .Worktree.Clean}}✓{{else}}⚠{{end}}</span> Чистый diff {{if .Worktree.Clean}}· всё закоммичено{{else}}· есть незакоммиченные изменения, нажмите Commit{{end}}</li>
       <li class="{{if .Worktree.Pushed}}ok{{else}}warn{{end}}"><span class="glyph">{{if .Worktree.Pushed}}✓{{else}}⚠{{end}}</span> Push {{if .Worktree.Pushed}}· ветка на origin{{else if .Worktree.HasUpstream}}· {{.Worktree.Unpushed}} коммитов не отправлено{{else}}· ветки ещё нет на origin{{end}}</li>
     </ul>
@@ -285,6 +299,10 @@
   {{if .Worktree.Diff}}<details open class="section"><summary>Diff незакоммиченных изменений</summary><pre class="diff">{{.Worktree.Diff}}</pre></details>{{end}}
   {{end}}
 </section>
+{{if and .Issue (eq .Run.Kind "implement") (or .StandSkill .StandTestSkill)}}
+{{template "stand-card" (dict "Scope" "issues" "ID" .Issue.ID "Branch" .Run.Branch "Skill" .StandSkill "TestSkill" .StandTestSkill "Tip" (kindTip "stand-issue") "Last" .Stand
+  "Text" (printf "Агент в этом workspace (ветка %s) через skill стенда зальёт изменённые файлы решения на стенд — включая ещё не закоммиченные, прогонит там тесты по затронутому коду, напишет скрипт-эмуляцию функциональности задачи с моками внешних систем, запустит его на стенде и вынесет вердикт: работает ли решение. Код решения не меняется; на стенде не трогаются git и БД. Скрипт остаётся в workspace: его можно закоммитить вместе с решением или удалить." .Run.Branch))}}
+{{end}}
 {{end}}
 {{end}}
 

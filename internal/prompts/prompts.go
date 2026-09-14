@@ -604,6 +604,25 @@ var StandSchema = []byte(`{
   "additionalProperties": false
 }`)
 
+// standAccess tells the agent how the stand may be reached.
+func standAccess(standSkill *skill.Skill) string {
+	if standSkill == nil {
+		return "The project has no dedicated stand-access skill: use the stand access described in CLAUDE.md / AGENTS.md; if there is none, stop and report it in `todo`."
+	}
+	return fmt.Sprintf("Stand access: the project skill `%s` (%s) describes the stand and the only allowed way to talk to it (wrapper script, hosts, paths). "+
+		"Read it first and use exactly its commands for every push / run / pull on the stand.", standSkill.Name, standSkill.RelPath)
+}
+
+// standSteps is the shared procedure of a stand run: sync the changed files, run the tests there, write and run an
+// emulation script with mocked external systems, report. diffCmd lists the changed files; subject names what is checked.
+func standSteps(diffCmd, subject string) string {
+	return "1. List the files " + subject + " changes: " + diffCmd + ".\n" +
+		"2. Sync exactly those files to the stand with the stand skill's push mechanism (paths are identical on the stand). Never run `git push`, `git pull`, checkout or reset on the stand; never run DB migrations or touch Redis/DB data unless the developer's instructions explicitly ask — list what was skipped in `todo`.\n" +
+		"3. On the stand, run the project's tests/checks that cover the touched code (unit tests of the touched classes, linters the project uses). Record the outcome in `tests`.\n" +
+		"4. Write an emulation script in this worktree, in the place the project uses for one-off scripts (look at the existing conventions), named after " + subject + ". It must exercise the functionality " + subject + " adds or changes end-to-end while mocking or stubbing external systems (HTTP APIs, queues, mail, payment providers) so it runs on the stand without side effects. Push it to the stand, run it there, capture the output in `script_output` and the path in `script_path`.\n" +
+		"5. Report problems you observed (errors, wrong behaviour, missing config) in `problems` with evidence, and everything that needs a human in `todo`.\n"
+}
+
 // StandTest builds the prompt that deploys the MR to the developer's stand and exercises it there. standSkill is the
 // project skill that explains how to reach the stand; s is the optional project skill for the whole scenario.
 func StandTest(mr MR, notes, targetBranch string, standSkill *skill.Skill, s *skill.Skill) string {
@@ -611,20 +630,24 @@ func StandTest(mr MR, notes, targetBranch string, standSkill *skill.Skill, s *sk
 	if strings.TrimSpace(notes) != "" {
 		extra = "\n--- additional instructions from the developer ---\n" + strings.TrimSpace(notes) + "\n--- end instructions ---\n"
 	}
-	access := "The project has no dedicated stand-access skill: use the stand access described in CLAUDE.md / AGENTS.md; if there is none, stop and report it in `todo`."
-	if standSkill != nil {
-		access = fmt.Sprintf("Stand access: the project skill `%s` (%s) describes the stand and the only allowed way to talk to it (wrapper script, hosts, paths). "+
-			"Read it first and use exactly its commands for every push / run / pull on the stand.", standSkill.Name, standSkill.RelPath)
-	}
 	return SlashPrefix(s, mr.WebURL) + "Mode: STAND TEST (deploy the MR to the developer's stand and exercise it there; edits only in this worktree)\n\n" + mrBlock(mr) + extra +
-		"\n" + skillLine(s) + "\n" + access + "\n\n" +
+		"\n" + skillLine(s) + "\n" + standAccess(standSkill) + "\n\n" +
 		fmt.Sprintf("You are in a git worktree checked out on the MR source branch `%s` (target `%s`). Steps:\n", mr.SourceBranch, targetBranch) +
-		fmt.Sprintf("1. List the files the MR changes: `git diff --name-status origin/%s...HEAD`.\n", targetBranch) +
-		"2. Sync exactly those files to the stand with the stand skill's push mechanism (paths are identical on the stand). Never run `git push`, `git pull`, checkout or reset on the stand; never run DB migrations or touch Redis/DB data unless the developer's instructions explicitly ask — list what was skipped in `todo`.\n" +
-		"3. On the stand, run the project's tests/checks that cover the touched code (unit tests of the touched classes, linters the project uses). Record the outcome in `tests`.\n" +
-		"4. Write an emulation script in this worktree, in the place the project uses for one-off scripts (look at the existing conventions), named after the MR. It must exercise the functionality the MR adds or changes end-to-end while mocking or stubbing external systems (HTTP APIs, queues, mail, payment providers) so it runs on the stand without side effects. Push it to the stand, run it there, capture the output in `script_output` and the path in `script_path`.\n" +
-		"5. Report problems you observed (errors, wrong behaviour, missing config) in `problems` with evidence, and everything that needs a human in `todo`.\n" +
+		standSteps(fmt.Sprintf("`git diff --name-status origin/%s...HEAD`", targetBranch), "the MR") +
 		"Do not modify the project code itself in this run — only add the script and its fixtures. Leave the stand consistent: if you had to change stand-only config, revert it.\n" + questionsRule + "\n" + editRules()
+}
+
+// StandTestIssue builds the stand prompt for a task's implementation branch: deploy the branch, run the tests and an
+// emulation script with mocked external systems there, and say whether the solution works. The worktree may still
+// hold uncommitted changes of the implementation, so the file list includes the working tree.
+func StandTestIssue(issue Issue, notes, branch, baseBranch string, standSkill *skill.Skill, s *skill.Skill) string {
+	return SlashPrefix(s, issue.WebURL) + "Mode: STAND TEST (deploy the task's implementation branch to the developer's stand and prove the solution works there; edits only in this worktree)\n\n" + issueBlock(issue, notes) +
+		"\n" + skillLine(s) + "\n" + standAccess(standSkill) + "\n\n" +
+		fmt.Sprintf("You are in a git worktree on branch `%s` (based on `origin/%s`), which holds the implementation of the task above — possibly with uncommitted changes. "+
+			"Your job is to confirm that the implementation actually works by running it, not by reading the code alone. Steps:\n", branch, baseBranch) +
+		standSteps(fmt.Sprintf("`git diff --name-status origin/%s` plus untracked files from `git status --short`", baseBranch), "the implementation") +
+		"6. Verdict: state clearly in `summary` whether the solution satisfies the task (what was exercised, what passed, what did not); what could not be verified on the stand goes to `todo`.\n" +
+		"Do not modify the implementation itself in this run — only add the script and its fixtures; a bug you find is a `problems` entry, not a fix. Leave the stand consistent: if you had to change stand-only config, revert it.\n" + questionsRule + "\n" + editRules()
 }
 
 // SelectedDiscussion is a reviewer discussion chosen for fixing.

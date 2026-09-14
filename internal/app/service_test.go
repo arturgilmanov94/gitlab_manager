@@ -531,11 +531,29 @@ func TestPlanImplementAndWorktreeActions(t *testing.T) {
 	if err != nil || url == "" || !strings.Contains(gl.CreatedMR, "|group/sub/project#7|develop|group/sub/project#7 Task 7|Closes ") {
 		t.Fatalf("%s %v %s", url, err, gl.CreatedMR)
 	}
-	if err := svc.RemoveWorktree(implID); err != nil {
-		t.Fatal(err)
+	// Releasing the branch to the main checkout refuses while the worktree is dirty, then removes the worktree and
+	// keeps the branch (shared refs), telling the developer how to switch to it themselves.
+	_ = os.WriteFile(filepath.Join(impl.WorkDir, "dirty.txt"), []byte("x"), 0o644)
+	if _, err := svc.ReleaseBranch(implID); err == nil || !strings.Contains(err.Error(), "незакоммиченные") {
+		t.Fatalf("release must refuse a dirty worktree: %v", err)
 	}
-	if svc.Worktree(impl).Exists {
-		t.Fatal("worktree should be gone")
+	_ = os.Remove(filepath.Join(impl.WorkDir, "dirty.txt"))
+	cmd, err := svc.ReleaseBranch(implID)
+	if err != nil || cmd != "git checkout group/sub/project#7" {
+		t.Fatalf("%q %v", cmd, err)
+	}
+	state = svc.Worktree(impl)
+	if state.Exists || !state.InRepo || state.Root != svc.Settings.ProjectRoot || state.Checkout() != cmd {
+		t.Fatalf("after release: %+v", state)
+	}
+	// The issue still lists the branch (one entry per worktree, plan runs skipped) so the checkout hint stays reachable.
+	runs, _ := svc.DB.ListRunsForIssue(issue.ID)
+	ws := svc.IssueWorkspaces(runs)
+	if len(ws) != 1 || ws[0].Exists || !ws[0].InRepo || ws[0].Branch != "group/sub/project#7" || ws[0].Run == nil || ws[0].Run.ID != implID {
+		t.Fatalf("issue workspaces: %+v", ws)
+	}
+	if err := svc.RemoveWorktree(implID); err == nil {
+		t.Fatal("the worktree is already gone")
 	}
 }
 
@@ -828,6 +846,64 @@ func TestSkillSettingsFromUI(t *testing.T) {
 	svc2 := New(svc.Settings, svc.DB, svc.GitLab, []runner.Runner{fr})
 	if sk := svc2.SkillFor(db.KindPlan); sk == nil || sk.Kind != skill.KindCustom {
 		t.Fatalf("%+v", sk)
+	}
+}
+
+// «Проверить на стенде» for a task: refused until the task has an implementation branch; runs in the implementation
+// worktree with the issue, the branch and the verdict instruction in the prompt; found as the branch's latest stand run.
+func TestStandTestIssue(t *testing.T) {
+	svc, _, fr := newService(t)
+	issue, _ := svc.AddIssue("#7")
+	testutil.AddProjectSkill(t, svc.Settings.ProjectRoot, "dev-stand", "Подключение к dev-стенду по SSH для проверки изменений")
+	if _, err := svc.StartStandTestIssue(issue.ID, "", "", "", 0); err == nil || !strings.Contains(err.Error(), "no implementation branch") {
+		t.Fatalf("without an implementation the stand run must be refused: %v", err)
+	}
+	fr.Outputs = []map[string]any{testutil.ImplementOutput()}
+	implID, err := svc.StartImplement(issue.ID, "", "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, implID) == db.StatusDone })
+	impl, _ := svc.DB.GetRun(implID)
+	fr.Outputs = []map[string]any{{"summary": "Deployed the branch, tests green, the emulation script confirms the task works on the stand.", "deployed": []any{"CHANGED.txt"},
+		"tests": "phpunit ok", "script_path": "scripts/onerun/task_7_check.php", "script_output": "OK", "problems": []any{}, "changes": []any{}, "todo": []any{}, "commit_message": ""}}
+	runID, err := svc.StartStandTestIssue(issue.ID, "", "mock the SMS gateway", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, runID) != db.StatusQueued && status(svc, runID) != db.StatusRunning })
+	run, _ := svc.DB.GetRun(runID)
+	if run.Status != db.StatusDone {
+		t.Fatalf("%s: %s", run.Status, run.Error)
+	}
+	if run.IssueID == nil || *run.IssueID != issue.ID || run.MRID != nil || run.Branch != impl.Branch || run.WorkDir != impl.WorkDir || !run.IsEdit() {
+		t.Fatalf("%+v", run)
+	}
+	req := fr.Requests[len(fr.Requests)-1]
+	if req.Mode != runner.ModeEdit || req.Dir != impl.WorkDir {
+		t.Fatalf("%+v", req)
+	}
+	for _, want := range []string{"Mode: STAND TEST", "implementation branch", "`dev-stand`", "mock the SMS gateway", "Task 7", "branch `group/sub/project#7`", "git status --short", "Verdict", "Never run `git push`"} {
+		if !strings.Contains(req.Prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+	runs, _ := svc.DB.ListRunsForIssue(issue.ID)
+	if last := LatestStandFor(runs, impl.Branch); last == nil || last.ID != runID {
+		t.Fatalf("latest stand run: %+v", last)
+	}
+	if LatestStandFor(runs, "other") != nil || LatestImplementation(runs) == nil || LatestImplementation(runs).ID != implID {
+		t.Fatal("helpers must select by branch and kind")
+	}
+	// Retry keeps the task binding.
+	fr.Outputs = []map[string]any{{"summary": "Second stand run of the same branch went through without problems.", "deployed": []any{}, "tests": "none", "script_path": "", "script_output": "", "problems": []any{}, "changes": []any{}, "todo": []any{}, "commit_message": ""}}
+	again, err := svc.Retry(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, again) == db.StatusDone })
+	if r, _ := svc.DB.GetRun(again); r.IssueID == nil || r.Branch != impl.Branch {
+		t.Fatalf("retry: %+v", r)
 	}
 }
 

@@ -221,15 +221,46 @@ func (m *Manager) linkClaudeConfig(path string, log func(string)) {
 	}
 }
 
-// linkedPathspec is the pathspec that covers the worktree except the symlinked instruction files.
+// linkedPathspec is the pathspec that covers the worktree except the symlinked instruction files. Links the
+// project already ignores through .gitignore are left out of the exclude list: git never picks them up anyway,
+// and naming an ignored path in a pathspec (even an exclude one) makes `git add` complain and exit non-zero.
 func (m *Manager) linkedPathspec(path string) []string {
 	spec := []string{"--", "."}
+	var linked []string
 	for _, name := range linkedNames {
 		if info, err := os.Lstat(filepath.Join(path, name)); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			linked = append(linked, name)
+		}
+	}
+	if len(linked) == 0 {
+		return spec
+	}
+	ignored := m.ignored(path, linked)
+	for _, name := range linked {
+		if !ignored[name] {
 			spec = append(spec, ":(exclude)"+name)
 		}
 	}
 	return spec
+}
+
+// ignored reports which of names the repository's ignore rules (.gitignore, info/exclude, core.excludesFile) cover.
+func (m *Manager) ignored(path string, names []string) map[string]bool {
+	out := map[string]bool{}
+	// Exit status 1 only means "none of them is ignored"; stdout lists the ignored ones either way.
+	stdout, _ := m.git(context.Background(), path, append([]string{"check-ignore", "--"}, names...)...)
+	for _, line := range strings.Split(stdout, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			out[line] = true
+		}
+	}
+	return out
+}
+
+// HasBranch reports whether the local branch exists in the main checkout (worktrees share its refs).
+func (m *Manager) HasBranch(ctx context.Context, branch string) bool {
+	_, err := m.git(ctx, m.Root, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	return err == nil
 }
 
 // Status returns `git status --short` of the worktree.

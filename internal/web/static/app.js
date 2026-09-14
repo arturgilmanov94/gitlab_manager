@@ -69,6 +69,16 @@
   }
   window.post = (url, body, button) => call('POST', url, body || {}, button);
   window.del = (url, button) => call('DELETE', url, undefined, button);
+  // Release a run's branch to the main checkout: the worktree goes, the branch stays; the checkout command is copied.
+  window.releaseBranch = function (runID, branch, button) {
+    if (!confirm('Забрать ветку ' + branch + ' в основную копию? Workspace удалится, ветка и коммиты останутся.')) return;
+    post('/api/runs/' + runID + '/release', {}, button).then(r => {
+      if (!r) return;
+      copyText(r.checkout);
+      flash('Workspace удалён. В основной копии выполните: ' + r.checkout + ' (скопировано)', true);
+      setTimeout(reload, 1500);
+    });
+  };
 
   // ---- agent picker
   function selectedRunner() {
@@ -80,6 +90,18 @@
       group.querySelectorAll('.seg').forEach((seg) => seg.classList.toggle('checked', seg.querySelector('input').checked));
     });
   });
+  // The chosen agent is remembered in this browser (localStorage) and restored on every page instead of the first one.
+  (function rememberRunner() {
+    const radios = document.querySelectorAll('input[name="runner"]');
+    if (!radios.length) return;
+    let saved = '';
+    try { saved = localStorage.getItem('runner') || ''; } catch (e) { /* ignore */ }
+    radios.forEach((r) => {
+      if (saved && r.value === saved) r.checked = true;
+      r.addEventListener('change', () => { try { localStorage.setItem('runner', r.value); } catch (e) { /* ignore */ } });
+    });
+    radios.forEach((r) => r.closest('.seg') && r.closest('.seg').classList.toggle('checked', r.checked));
+  })();
 
   // ---- overflow menus: close on outside click / Escape
   document.addEventListener('click', (event) => {
