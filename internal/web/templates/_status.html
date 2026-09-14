@@ -46,10 +46,10 @@
   </label>
   {{else}}<span class="text-danger">агенты не найдены</span>{{end}}
 </span>
-{{range $r := .}}{{if gt (len $r.Models) 1}}
+<span class="models">{{range $r := .}}{{if gt (len $r.Models) 1}}
 <span class="segmented segmented-sm model-picker tip" data-runner="{{$r.Name}}" hidden data-tip="Модель для запусков {{$r.Name}}. «авто» — модель по умолчанию самого агента (его конфиг и правила проекта). Список задаётся в .env: {{if eq $r.Name "claude"}}CLAUDE_MODELS{{else}}CODEX_MODELS{{end}}. Выбор запоминается в браузере отдельно для каждого агента.">
   {{range $i, $m := $r.Models}}<label class="seg{{if eq $i 0}} checked{{end}}"><input type="radio" name="model_{{$r.Name}}" value="{{$m}}" {{if eq $i 0}}checked{{end}}>{{modelLabel $m}}</label>{{end}}
 </span>
-{{end}}{{end}}
+{{end}}{{end}}</span>
 </span>
 {{end}}

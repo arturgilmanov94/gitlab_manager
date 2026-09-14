@@ -141,8 +141,12 @@ textarea { width: 100%; max-width: 820px; resize: vertical; }
 .seg.checked { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
 .agent-picker { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; vertical-align: middle; }
 .segmented-sm .seg { padding: 4px 9px; font-size: 12px; }
-/* the model list of an unselected agent is hidden by JS through the hidden attribute; inline-flex must not override it */
-.segmented[hidden] { display: none; }
+/* Model lists of all agents share one grid cell, so the group is as wide as the longest list and the agent picker
+   does not jump when the agent changes; the lists of unselected agents (hidden attribute) stay invisible in place. */
+.agent-picker .models { display: inline-grid; align-items: center; justify-items: start; }
+.agent-picker .models > .model-picker { grid-area: 1 / 1; }
+.agent-picker .models > .model-picker[hidden] { display: inline-flex; visibility: hidden; pointer-events: none; }
+.agent-picker .models:empty { display: none; }
 
 /* ---- tables */
 .table { width: 100%; border-collapse: collapse; }
