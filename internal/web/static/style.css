@@ -141,6 +141,8 @@ textarea { width: 100%; max-width: 820px; resize: vertical; }
 .seg.checked { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
 .agent-picker { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; vertical-align: middle; }
 .segmented-sm .seg { padding: 4px 9px; font-size: 12px; }
+/* the model list of an unselected agent is hidden by JS through the hidden attribute; inline-flex must not override it */
+.segmented[hidden] { display: none; }
 
 /* ---- tables */
 .table { width: 100%; border-collapse: collapse; }
