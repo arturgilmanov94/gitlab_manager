@@ -70,8 +70,20 @@ h3 { font-size: 12px; font-weight: 600; margin: 18px 0 8px; color: var(--fg-2); 
 .card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
 .card-head h2 { margin: 0; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+/* Toolbar of the lists: three invisible blocks — filters (grow), GitLab sync, agent controls (always at the right). */
+.toolbar { display: flex; gap: 10px 20px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
 .toolbar .spacer { flex: 1; }
+.tb-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; flex: 1 1 320px; min-width: 0; }
+.tb-sync { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.tb-agent { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+/* usage chips: how much of the agent's 5-hour / weekly windows is spent (see /api/usage) */
+.usage { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.uchip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 600; background: var(--neutral-soft); color: var(--fg-2); white-space: nowrap; }
+.uchip .k { font-weight: 500; color: var(--muted); }
+.uchip.sev-warning { background: var(--warning-soft); color: var(--warning); }
+.uchip.sev-critical { background: var(--danger-soft); color: var(--danger); }
+.uchip.sev-off { background: transparent; border: 1px dashed var(--border-strong); color: var(--muted); font-weight: 500; }
+.uchip.current { box-shadow: 0 0 0 1.5px currentColor inset; }
 .empty { color: var(--fg-2); padding: 40px 20px; text-align: center; background: var(--surface); border: 1px dashed var(--border-strong); border-radius: var(--radius); }
 .empty b { color: var(--fg); }
 

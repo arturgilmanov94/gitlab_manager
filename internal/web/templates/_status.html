@@ -51,5 +51,6 @@
   {{range $i, $m := $r.Models}}<label class="seg{{if eq $i 0}} checked{{end}}"><input type="radio" name="model_{{$r.Name}}" value="{{$m}}" {{if eq $i 0}}checked{{end}}>{{modelLabel $m}}</label>{{end}}
 </span>
 {{end}}{{end}}</span>
+<span class="usage" data-usage hidden></span>
 </span>
 {{end}}

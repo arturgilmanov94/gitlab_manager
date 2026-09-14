@@ -80,6 +80,57 @@
     });
   };
 
+  // ---- agent usage: chips next to the agent picker with the spent share of the agent's 5-hour / weekly windows,
+  // refreshed from /api/usage (the server polls the agents' own usage endpoints every USAGE_POLL_MIN minutes).
+  (function agentUsage() {
+    const box = document.querySelector('[data-usage]');
+    if (!box) return;
+    let data = null;
+    const currentRunner = () => { const r = document.querySelector('input[name="runner"]:checked'); return r ? r.value : ''; };
+    const currentModel = () => { const m = document.querySelector('input[name="model_' + currentRunner() + '"]:checked'); return m ? m.value.toLowerCase() : ''; };
+    const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const inWords = (ms) => {
+      const m = Math.max(0, Math.round(ms / 60000));
+      if (m < 60) return m + ' мин';
+      const h = Math.floor(m / 60);
+      if (h < 48) return h + ' ч' + (m % 60 ? ' ' + (m % 60) + ' мин' : '');
+      return Math.floor(h / 24) + ' д ' + (h % 24) + ' ч';
+    };
+    const render = () => {
+      const runner = currentRunner();
+      const snap = data && data.agents ? data.agents[runner] : null;
+      if (!snap) { box.hidden = true; box.innerHTML = ''; return; }
+      const parts = [];
+      const model = currentModel();
+      (snap.limits || []).forEach((l) => {
+        const isModel = l.kind === 'model';
+        const current = isModel && model && l.model && l.model.toLowerCase() === model;
+        const tipBits = [];
+        if (l.kind === 'session') tipBits.push('5-часовое окно агента');
+        else if (l.kind === 'weekly') tipBits.push('недельное окно агента, все модели');
+        else if (isModel) tipBits.push('недельное окно модели ' + l.model + (current ? ' — выбранная сейчас' : ''));
+        else if (l.kind === 'extra') tipBits.push('дополнительные кредиты сверх подписки');
+        if (l.detail) tipBits.push(l.detail);
+        if (l.resets_at && !l.resets_at.startsWith('0001')) { const left = new Date(l.resets_at) - Date.now(); if (left > 0) tipBits.push('сброс через ' + inWords(left)); }
+        const pct = (l.kind !== 'extra' || l.percent > 0) ? Math.round(l.percent) + '%' : '';
+        parts.push('<span class="uchip sev-' + esc(l.severity || 'normal') + (current ? ' current' : '') + ' tip" data-tip="' + esc(tipBits.join(' · ')) + '"><span class="k">' + esc(l.label) + '</span>' + esc(pct) + '</span>');
+      });
+      if (snap.error) parts.push('<span class="uchip sev-off tip" data-tip="' + esc(snap.error) + '">usage недоступен</span>');
+      if (!parts.length) { box.hidden = true; box.innerHTML = ''; return; }
+      const fetched = snap.fetched_at ? new Date(snap.fetched_at) : null;
+      const meta = [snap.plan, fetched ? 'обновлено ' + inWords(Date.now() - fetched) + ' назад' : ''].filter(Boolean).join(' · ');
+      box.innerHTML = parts.join('') + (meta ? '<span class="small muted tip" data-tip="Лимиты подписки агента по данным его собственного usage-эндпоинта; обновляются каждые ' + esc(data.poll_min || 5) + ' мин.">' + esc(meta) + '</span>' : '');
+      box.hidden = false;
+    };
+    const load = async () => {
+      try { const res = await fetch('/api/usage'); data = await res.json(); } catch (e) { data = null; }
+      render();
+    };
+    document.addEventListener('change', (e) => { if (e.target && e.target.name && (e.target.name === 'runner' || e.target.name.startsWith('model_'))) render(); });
+    load();
+    setInterval(load, 5 * 60 * 1000);
+  })();
+
   // ---- agent picker
   // Agent selector for the API: "claude", or "claude:opus" when a non-default model is picked for that agent.
   function selectedRunner() {

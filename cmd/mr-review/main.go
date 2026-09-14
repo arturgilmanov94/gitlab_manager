@@ -25,6 +25,7 @@ import (
 	"mr-review/internal/gitlab"
 	"mr-review/internal/runner"
 	"mr-review/internal/skill"
+	agentusage "mr-review/internal/usage"
 	"mr-review/internal/web"
 )
 
@@ -331,6 +332,14 @@ func serve(settings *config.Settings, openBrowser bool) int {
 	janitorCtx, stopJanitor := context.WithCancel(context.Background())
 	defer stopJanitor()
 	go svc.RunJanitor(janitorCtx)
+	if settings.UsagePollMin > 0 {
+		svc.Usage = agentusage.New(time.Duration(settings.UsagePollMin) * time.Minute)
+		var names []string
+		for name := range svc.Runners {
+			names = append(names, name)
+		}
+		go svc.Usage.Run(janitorCtx, names)
+	}
 	server, err := web.New(svc, version, runners(settings))
 	if err != nil {
 		return fail("%v", err)

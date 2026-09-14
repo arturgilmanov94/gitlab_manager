@@ -2,9 +2,11 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"mr-review/internal/usage"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -674,6 +676,30 @@ func TestStandTestPages(t *testing.T) {
 	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
 	if _, body := get(t, ts.URL+"/-/stand-test/1"); !strings.Contains(body, "Проверка на стенде") || !strings.Contains(body, "Залито на стенд") || !strings.Contains(body, "Slow query") || !strings.Contains(body, "scripts/onerun/mr_42.php") || !strings.Contains(body, `id="workspace"`) {
 		t.Fatal("run page must show the stand report and the workspace")
+	}
+}
+
+// The list toolbars are three blocks (filters, GitLab sync, agent controls with the usage slot); /api/usage serves
+// the poller's snapshots and an empty set when polling is off.
+func TestToolbarBlocksAndUsageAPI(t *testing.T) {
+	ts, svc, _ := newServer(t)
+	for _, path := range []string{"/mrs", "/issues", "/ci"} {
+		_, body := get(t, ts.URL+path)
+		if !strings.Contains(body, `class="tb-filters"`) || !strings.Contains(body, `class="tb-agent"`) || !strings.Contains(body, `<span class="usage" data-usage hidden></span>`) {
+			t.Fatalf("%s must have the three toolbar blocks and the usage slot", path)
+		}
+	}
+	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, `class="tb-sync"`) {
+		t.Fatal("the MR list has the sync block")
+	}
+	code, body := get(t, ts.URL+"/api/usage")
+	if code != 200 || !strings.Contains(body, `"agents":{}`) || !strings.Contains(body, `"ok":true`) {
+		t.Fatalf("%d %s", code, body)
+	}
+	svc.Usage = &usage.Poller{ClaudeCredentials: filepath.Join(t.TempDir(), "none.json")}
+	svc.Usage.Refresh(context.Background(), []string{"claude"})
+	if code, body = get(t, ts.URL+"/api/usage"); code != 200 || !strings.Contains(body, `"runner":"claude"`) || !strings.Contains(body, "не найдены") {
+		t.Fatalf("%d %s", code, body)
 	}
 }
 

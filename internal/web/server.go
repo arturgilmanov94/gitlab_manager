@@ -221,6 +221,9 @@ func (s *Server) routes() {
 	})
 	s.mux.HandleFunc("GET /run/{id}/log", s.runLog)
 
+	s.mux.HandleFunc("GET /api/usage", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"ok": true, "poll_min": s.svc.Settings.UsagePollMin, "agents": s.svc.UsageSnapshots()})
+	})
 	s.mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true, "version": s.version, "project_root": s.svc.Settings.ProjectRoot})
 	})

@@ -1,8 +1,9 @@
 {{define "content"}}
 <section class="toolbar">
-  <span class="small secondary">MR с упавшим head pipeline из основного списка. Данные о jobs берутся из GitLab при открытии страницы.</span>
-  <span class="spacer"></span>
-  <span class="small secondary">Агент для запусков:</span> {{template "runner-picker" .Base.Runners}}
+  <div class="tb-filters"><span class="small secondary">MR с упавшим head pipeline из основного списка. Данные о jobs берутся из GitLab при открытии страницы.</span></div>
+  <div class="tb-agent">
+    <span class="small secondary">Агент:</span> {{template "runner-picker" .Base.Runners}}
+  </div>
 </section>
 
 {{if not .Rows}}

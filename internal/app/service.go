@@ -19,6 +19,7 @@ import (
 	"mr-review/internal/runner"
 	"mr-review/internal/skill"
 	"mr-review/internal/terminal"
+	"mr-review/internal/usage"
 	"mr-review/internal/worktree"
 )
 
@@ -36,6 +37,7 @@ type Service struct {
 	GitLab    gitlab.Client
 	Runners   map[string]runner.Runner
 	Worktrees *worktree.Manager
+	Usage     *usage.Poller // subscription usage of the agents for the header; nil = not polled
 
 	envSkillNames map[string]string  // SKILL_* from .env, the base the UI overrides are merged onto
 	terminal      *terminal.Emulator // detected once at start; nil = «Открыть в терминале» unavailable
@@ -2363,6 +2365,14 @@ func (s *Service) SetFindingStatus(findingID int64, status string) error {
 		return &UserError{err.Error()}
 	}
 	return nil
+}
+
+// UsageSnapshots returns the last known subscription usage per runner (empty when polling is off).
+func (s *Service) UsageSnapshots() map[string]usage.Snapshot {
+	if s.Usage == nil {
+		return map[string]usage.Snapshot{}
+	}
+	return s.Usage.Snapshots()
 }
 
 // ---------------------------------------------------------------------------------- review worktree janitor

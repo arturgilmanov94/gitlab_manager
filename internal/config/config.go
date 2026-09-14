@@ -65,6 +65,9 @@ type Settings struct {
 	ReviewWorktreeTTLMin int
 	// PrefetchMaxDiffChars caps the MR diff inlined into review prompts (PREFETCH_MAX_DIFF_CHARS; 0 = never inline).
 	PrefetchMaxDiffChars int
+	// UsagePollMin is how often the agents' subscription usage (5-hour / weekly windows) is refreshed for the header
+	// (USAGE_POLL_MIN, default 5; 0 = do not poll).
+	UsagePollMin int
 
 	// StandSkill names the project skill that explains how to reach the developer's stand ("" = detect by
 	// "стенд/stand" in a skill's name or description). Used by «Проверить на стенде».
@@ -243,6 +246,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		StandSkill:            strings.TrimSpace(get("STAND_SKILL")),
 		ReviewWorktree:        boolean("REVIEW_WORKTREE", true),
 		ReviewWorktreeTTLMin:  num("REVIEW_WORKTREE_TTL_MIN", 60),
+		UsagePollMin:          num("USAGE_POLL_MIN", 5),
 		PrefetchMaxDiffChars:  num("PREFETCH_MAX_DIFF_CHARS", 60000),
 	}
 	if s.RunConcurrency < 1 {
