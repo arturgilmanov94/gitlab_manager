@@ -74,9 +74,10 @@ h3 { font-size: 12px; font-weight: 600; margin: 18px 0 8px; color: var(--fg-2); 
    Each column stacks its controls; the agent column is right-aligned. */
 .toolbar { display: flex; gap: 12px 28px; align-items: flex-start; margin-bottom: 14px; flex-wrap: wrap; }
 .toolbar .spacer { flex: 1; }
-.tb-filters { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; flex: 1 1 320px; min-width: 0; }
-.tb-filters .filters { margin: 0; }
-.tb-sync { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.tb-filters { display: flex; flex-direction: column; gap: 8px; align-items: stretch; flex: 1 1 320px; min-width: 0; }
+.tb-filters > input[data-filter] { align-self: flex-start; max-width: 100%; }
+.tb-filters .filters { margin: 0; max-width: 100%; }
+.tb-sync { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; flex: 0 0 auto; }
 .tb-agent { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; margin-left: auto; text-align: right; }
 .tb-agent .agent-picker { flex-direction: column; align-items: flex-end; gap: 6px; }
 .tb-agent .agent-picker .models { justify-items: end; }

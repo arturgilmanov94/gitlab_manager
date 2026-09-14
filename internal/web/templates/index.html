@@ -9,7 +9,7 @@
       <input type="text" name="ref" placeholder="Ссылка на MR или !123" size="26" required>
       <button type="submit" class="btn tip" data-tip="{{kindTip "add"}}">Добавить</button>
     </form>
-    <button class="btn tip" data-tip="{{kindTip "sync-mrs"}}" onclick="post('/api/mrs/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' MR для @' + r.username + (r.archived ? ', в историю: ' + r.archived : '') + (r.pruned ? ', убрано: ' + r.pruned : '') + ' · ' + r.seconds + ' с', true), reload()))">Синхронизировать с GitLab</button>
+    <button class="btn btn-primary tip" data-tip="{{kindTip "sync-mrs"}}" onclick="post('/api/mrs/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' MR для @' + r.username + (r.archived ? ', в историю: ' + r.archived : '') + (r.pruned ? ', убрано: ' + r.pruned : '') + ' · ' + r.seconds + ' с', true), reload()))">Синхронизировать с GitLab</button>
     {{if .Archived}}<a class="small tip" href="/history" data-tip="MR, которые вас больше не касаются (одобрены вами, влиты, закрыты, вы сняты с ревью), но по которым были запуски.">в истории: {{.Archived}}</a>{{end}}
   </div>
   <div class="tb-agent">

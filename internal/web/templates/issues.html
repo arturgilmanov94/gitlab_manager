@@ -9,7 +9,7 @@
       <input type="text" name="ref" placeholder="Ссылка на задачу или #123" size="26" required>
       <button type="submit" class="btn tip" data-tip="{{kindTip "add"}}">Добавить</button>
     </form>
-    <button class="btn tip" data-tip="{{kindTip "sync-issues"}}" onclick="post('/api/issues/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' задач для @' + r.username, true), reload()))">Синхронизировать с GitLab</button>
+    <button class="btn btn-primary tip" data-tip="{{kindTip "sync-issues"}}" onclick="post('/api/issues/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' задач для @' + r.username, true), reload()))">Синхронизировать с GitLab</button>
   </div>
   <div class="tb-agent">
     <span class="small secondary">Агент для запусков</span>
