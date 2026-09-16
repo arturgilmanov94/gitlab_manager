@@ -53,11 +53,13 @@ func (c *Claude) Name() string { return "claude" }
 
 // Detect reports the executable and version.
 func (c *Claude) Detect() (string, string, bool) {
-	path, err := exec.LookPath(c.Bin)
-	if err != nil {
+	path, ok := LookAgent(c.Bin)
+	if !ok {
 		return "", "", false
 	}
-	out, _ := exec.Command(path, "--version").CombinedOutput()
+	cmd := exec.Command(path, "--version")
+	cmd.Env = agentEnv(os.Environ(), path)
+	out, _ := cmd.CombinedOutput()
 	return path, strings.TrimSpace(strings.Split(string(out), "\n")[0]), true
 }
 
@@ -136,9 +138,10 @@ func (c *Claude) Run(ctx context.Context, req Request) (*Result, error) {
 	defer cancel()
 
 	args := c.BuildArgs(req)
-	cmd := exec.CommandContext(ctx, c.Bin, args...)
+	bin := agentBin(c.Bin)
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = req.Dir
-	cmd.Env = cleanEnv()
+	cmd.Env = agentEnv(cleanEnv(), bin)
 	cmd.WaitDelay = 3 * time.Second
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

@@ -318,6 +318,8 @@ details.section summary { padding: 6px 0; }
 .table.findings .col-sev { width: 96px; }
 .table.findings .col-status { width: 84px; }
 .table.findings .col-where { width: 22%; }
+a.diff-ref { display: inline-block; padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 11px; line-height: 16px; text-decoration: none; vertical-align: 1px; }
+a.diff-ref:hover { border-color: var(--primary); color: var(--primary); }
 .table.findings .col-actions { width: 48px; }
 .table.findings td { min-width: 0; overflow-wrap: anywhere; }
 .table.findings td.col-status { white-space: normal; }

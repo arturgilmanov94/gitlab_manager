@@ -141,6 +141,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 		"labelSlugs":    func(labels string) string { return labelSlugs(svc.Settings.HighlightLabels, labels) },
 		"blobBase":      blobBase,
 		"fileLink":      fileLink,
+		"mrDiffLink":    mrDiffLink,
 		"pipelineLabel": pipelineLabel,
 		"pipelineTone":  pipelineTone,
 		"fstatusLabel":  findingStatusLabel,

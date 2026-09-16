@@ -1,6 +1,8 @@
 package web
 
 import (
+	"crypto/sha1"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -47,6 +49,23 @@ func TestFormatDuration(t *testing.T) {
 	for ms, want := range map[int64]string{0: "—", 48000: "48 с", 400000: "6 мин 40 с", 4320000: "1 ч 12 мин"} {
 		if got := formatDuration(ms); got != want {
 			t.Fatalf("%d: %q != %q", ms, got, want)
+		}
+	}
+}
+
+func TestMRDiffLink(t *testing.T) {
+	mr := "https://gitlab.example.com/group/sub/project/-/merge_requests/42"
+	// GitLab anchors every file of a diff with the SHA-1 of its path (Gitlab::Diff::File#file_hash).
+	want := mr + "/diffs#" + fmt.Sprintf("%x", sha1.Sum([]byte("internal/web/server.go")))
+	if got := mrDiffLink(mr, "internal/web/server.go"); got != want {
+		t.Fatalf("mrDiffLink = %q, want %q", got, want)
+	}
+	if got := mrDiffLink(mr+"/", "internal/web/server.go"); got != want {
+		t.Fatalf("a trailing slash in the MR url must not change the link: %q", got)
+	}
+	for _, bad := range [][2]string{{"", "a.go"}, {mr, ""}, {mr, "/etc/passwd"}, {mr, "../secrets.go"}} {
+		if got := mrDiffLink(bad[0], bad[1]); got != "" {
+			t.Fatalf("mrDiffLink(%q, %q) = %q", bad[0], bad[1], got)
 		}
 	}
 }

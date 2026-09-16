@@ -46,9 +46,16 @@ PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); p
 (cd "$WORK/mr-review" && PORT="$PORT" OPEN_BROWSER=0 ./mr-review start) || fail "server did not start"
 HEALTH="$(curl -sf "http://127.0.0.1:$PORT/api/health")" || fail "health endpoint"
 echo "$HEALTH" | grep -q '"ok":true' || fail "health payload: $HEALTH"
-curl -sf "http://127.0.0.1:$PORT/" | grep -q "MR Review" || fail "index page"
-curl -sf "http://127.0.0.1:$PORT/issues" | grep -q "Задачи" || fail "issues page"
-curl -sf "http://127.0.0.1:$PORT/doctor" | grep -q "Review skill" || fail "doctor page"
+# The page is fetched into a variable, not piped into grep: `curl | grep -q` fails under `set -o pipefail`
+# whenever the page outgrows the pipe buffer — grep exits at the first match and curl dies of SIGPIPE.
+page() { # url, expected text, label
+    local body
+    body="$(curl -sf "http://127.0.0.1:$PORT/$1")" || fail "$3 did not load"
+    case "$body" in *"$2"*) ;; *) fail "$3 does not show \"$2\"" ;; esac
+}
+page "" "MR Review" "index page"
+page "issues" "Задачи" "issues page"
+page "doctor" "Skill: review_full" "doctor page"
 (cd "$WORK/mr-review" && ./mr-review status) || fail "status"
 (cd "$WORK/mr-review" && ./mr-review stop)
 pass "server start / health / pages / stop"

@@ -1,16 +1,18 @@
 {{define "findings"}}
 {{$pick := $.Pickable}}
+{{$mrURL := ""}}{{if $.MR}}{{$mrURL = $.MR.WebURL}}{{end}}
 {{if .Findings}}
 <table class="table findings{{if $pick}} pickable{{end}}">
   <thead><tr>{{if $pick}}<th class="pick-col"><input type="checkbox" class="pick-all tip" data-tip="Выбрать все открытые замечания" data-kind="finding"></th>{{end}}<th class="col-sev">Severity</th><th class="col-status">Статус</th><th class="col-where">Где</th><th class="col-text">Замечание</th><th class="col-actions"></th></tr></thead>
   <tbody>
   {{range .Findings}}
   {{$link := fileLink $.Blob $.SHA .File (deref .Line)}}
+  {{$diff := mrDiffLink $mrURL .File}}
   <tr class="finding f-{{.Status}}" id="finding-{{.ID}}">
     {{if $pick}}<td class="pick-col">{{if eq .Status "open"}}<input type="checkbox" class="pick" data-finding="{{.ID}}">{{end}}</td>{{end}}
     <td class="col-sev"><span class="sev sev-{{.Severity}}">{{.Severity}}</span><div class="muted small">{{.Category}}</div></td>
     <td class="col-status"><span class="fstatus fstatus-{{.Status}}">{{fstatusLabel .Status}}</span></td>
-    <td class="mono small col-where">{{if .File}}{{if $link}}<a class="file-ref tip" data-tip="Открыть файл в GitLab на проверенном коммите" href="{{$link}}" target="_blank" rel="noopener">{{.File}}{{if .Line}}:{{deref .Line}}{{end}}</a>{{else}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{end}}{{else}}—{{end}}</td>
+    <td class="mono small col-where">{{if .File}}{{if $link}}<a class="file-ref tip" data-tip="Открыть файл в GitLab на проверенном коммите, на этой строке" href="{{$link}}" target="_blank" rel="noopener">{{.File}}{{if .Line}}:{{deref .Line}}{{end}}</a>{{else}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{end}}{{if $diff}} <a class="diff-ref tip" data-tip="Открыть этот файл в «Изменениях» MR" href="{{$diff}}" target="_blank" rel="noopener">diff</a>{{end}}{{else}}—{{end}}</td>
     <td class="col-text">
       <b>{{.Title}}</b>
       {{md .Description $.Blob $.SHA}}
@@ -23,7 +25,8 @@
         <summary title="Действия с замечанием">⋯</summary>
         <div class="menu-items">
           {{if and $.MR (eq .Status "open") (not $.Closed)}}<button class="item tip" data-tip="{{kindTip "verify_finding"}}" onclick="startRun('/api/mrs/{{$.MR.ID}}/runs', 'verify_finding', this, {finding: '{{.ID}}'})">Проверить замечание<span class="sub">второе мнение агента по этому замечанию</span></button>{{end}}
-          {{if $link}}<a class="item ext" href="{{$link}}" target="_blank" rel="noopener">Код</a>{{end}}
+          {{if $link}}<a class="item ext" href="{{$link}}" target="_blank" rel="noopener">Код<span class="sub">файл на проверенном коммите, на строке замечания</span></a>{{end}}
+          {{if $diff}}<a class="item ext" href="{{$diff}}" target="_blank" rel="noopener">Diff в MR<span class="sub">этот файл в «Изменениях» MR</span></a>{{end}}
           <button class="item" onclick="copyText({{printf "%s — %s:%s\n%s" .Title .File (deref .Line) .Description}})">Скопировать текст</button>
           {{if eq .Status "open"}}
             <div class="divider"></div>
@@ -59,10 +62,11 @@
   <tbody>
   {{range .Discussions}}
   {{$dlink := fileLink $.Blob $.SHA .File (deref .Line)}}
+  {{$ddiff := mrDiffLink $mrURL .File}}
   <tr>
     {{if $pick}}<td class="pick-col"><input type="checkbox" class="pick" data-discussion="{{.ID}}"></td>{{end}}
     <td>{{.Author}}</td>
-    <td class="mono small">{{if .File}}{{if $dlink}}<a class="file-ref" href="{{$dlink}}" target="_blank" rel="noopener">{{.File}}{{if .Line}}:{{deref .Line}}{{end}}</a>{{else}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{end}}{{else}}—{{end}}</td>
+    <td class="mono small">{{if .File}}{{if $dlink}}<a class="file-ref" href="{{$dlink}}" target="_blank" rel="noopener">{{.File}}{{if .Line}}:{{deref .Line}}{{end}}</a>{{else}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{end}}{{if $ddiff}} <a class="diff-ref tip" data-tip="Открыть этот файл в «Изменениях» MR" href="{{$ddiff}}" target="_blank" rel="noopener">diff</a>{{end}}{{else}}—{{end}}</td>
     <td>{{md .Body $.Blob $.SHA}}</td>
     <td>{{if .Addressed}}<span class="fstatus fstatus-fixed">учтено</span>{{else}}<span class="fstatus fstatus-open">открыто</span>{{end}} <div class="small">{{md .Assessment $.Blob $.SHA}}</div></td>
   </tr>

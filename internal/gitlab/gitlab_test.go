@@ -29,8 +29,8 @@ func TestParseMRRef(t *testing.T) {
 }
 
 func TestParseIssueRef(t *testing.T) {
-	ref, err := ParseIssueRef("https://gitlab.ffintech.com/tn/project/eu/eu/-/issues/8217", "", "")
-	if err != nil || ref.ProjectPath != "tn/project/eu/eu" || ref.IID != 8217 {
+	ref, err := ParseIssueRef("https://gitlab.example.com/group/sub/project/-/issues/8217", "", "")
+	if err != nil || ref.ProjectPath != "group/sub/project" || ref.IID != 8217 {
 		t.Fatalf("%+v %v", ref, err)
 	}
 	if _, err := ParseIssueRef("g/p!3", "h", ""); err == nil {

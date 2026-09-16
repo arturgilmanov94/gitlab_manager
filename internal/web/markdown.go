@@ -1,6 +1,8 @@
 package web
 
 import (
+	"crypto/sha1"
+	"fmt"
 	"html"
 	"html/template"
 	"regexp"
@@ -39,6 +41,17 @@ func fileLink(base, sha, path, line string) string {
 		url += "#L" + line
 	}
 	return url
+}
+
+// mrDiffLink builds a link into the MR's "Изменения" tab, scrolled to the file: GitLab gives every file of a
+// diff an anchor of SHA-1(path) (app/assets/javascripts/diffs/components/diff_file.vue: :id="file.file_hash").
+// The line is not part of it — GitLab's per-line anchor is <hash>_<old line>_<new line> and a finding carries
+// only the new line — so the blob link next to it stays the one that points at the exact line.
+func mrDiffLink(webURL, path string) string {
+	if webURL == "" || path == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "..") {
+		return ""
+	}
+	return strings.TrimRight(webURL, "/") + "/diffs#" + fmt.Sprintf("%x", sha1.Sum([]byte(path))) // nolint:gosec // an anchor, not a digest
 }
 
 // renderMarkdown renders text as HTML inside <div class="md">.

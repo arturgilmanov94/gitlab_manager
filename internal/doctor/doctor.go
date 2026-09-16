@@ -155,7 +155,7 @@ func Run(s *config.Settings, version string, gl gitlab.Client, runners []rn.Runn
 			if r.Name() == "claude" && found == 0 {
 				status = WARN
 			}
-			add(Check{name, status, "not found in PATH", hint})
+			add(Check{name, status, "not found in PATH or the usual install locations", hint})
 		}
 	}
 	if found == 0 {

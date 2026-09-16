@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -125,6 +126,10 @@ func TestPagesAndFlow(t *testing.T) {
 	// Markdown rendering and file links to GitLab at the reviewed commit.
 	if _, body := get(t, ts.URL+runURL); !strings.Contains(body, `<div class="md">`) || !strings.Contains(body, "/-/blob/sha-1/src/A.php#L10") || !strings.Contains(body, `data-format="log"`) {
 		t.Fatal("run page must render markdown, link findings to GitLab and mark the log for formatting")
+	}
+	// A finding also links into the MR's «Изменения», anchored at the file (GitLab anchors it by SHA-1 of the path).
+	if _, body := get(t, ts.URL+"/mr/1"); !strings.Contains(body, fmt.Sprintf("/-/merge_requests/42/diffs#%x", sha1.Sum([]byte("src/A.php")))) {
+		t.Fatal("MR page must link a finding into the MR diff at its file")
 	}
 	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, "Открыть замечания") || !strings.Contains(body, "1 major") || !strings.Contains(body, "Проверен") {
 		t.Fatal("list must show CURRENT state with findings summary and «Открыть замечания»")

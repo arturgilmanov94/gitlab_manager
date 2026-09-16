@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -20,11 +21,13 @@ func (c *Cursor) Name() string { return "cursor" }
 
 // Detect reports the executable and version.
 func (c *Cursor) Detect() (string, string, bool) {
-	path, err := exec.LookPath(c.Bin)
-	if err != nil {
+	path, ok := LookAgent(c.Bin)
+	if !ok {
 		return "", "", false
 	}
-	out, _ := exec.Command(path, "--version").CombinedOutput()
+	cmd := exec.Command(path, "--version")
+	cmd.Env = agentEnv(os.Environ(), path)
+	out, _ := cmd.CombinedOutput()
 	return path, strings.TrimSpace(strings.Split(string(out), "\n")[0]), true
 }
 
@@ -56,8 +59,10 @@ func (c *Cursor) Run(ctx context.Context, req Request) (*Result, error) {
 		prompt += "\n\nReturn ONLY a JSON object that validates against this JSON schema:\n" + compactJSON(req.Schema) + "\n"
 	}
 	args := c.BuildArgs(req)
-	cmd := exec.CommandContext(ctx, c.Bin, args...)
+	bin := agentBin(c.Bin)
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = req.Dir
+	cmd.Env = agentEnv(os.Environ(), bin)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.WaitDelay = 3 * time.Second
 	var stdout, stderr bytes.Buffer

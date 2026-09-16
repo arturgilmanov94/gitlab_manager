@@ -24,11 +24,13 @@ func (c *Codex) Name() string { return "codex" }
 
 // Detect reports the executable and version.
 func (c *Codex) Detect() (string, string, bool) {
-	path, err := exec.LookPath(c.Bin)
-	if err != nil {
+	path, ok := LookAgent(c.Bin)
+	if !ok {
 		return "", "", false
 	}
-	out, _ := exec.Command(path, "--version").CombinedOutput()
+	cmd := exec.Command(path, "--version")
+	cmd.Env = agentEnv(os.Environ(), path)
+	out, _ := cmd.CombinedOutput()
 	return path, strings.TrimSpace(strings.Split(string(out), "\n")[0]), true
 }
 
@@ -75,8 +77,10 @@ func (c *Codex) Run(ctx context.Context, req Request) (*Result, error) {
 		}
 	}
 	args := c.BuildArgs(req, schemaFile, outFile)
-	cmd := exec.CommandContext(ctx, c.Bin, args...)
+	bin := agentBin(c.Bin)
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = req.Dir
+	cmd.Env = agentEnv(os.Environ(), bin)
 	cmd.Stdin = strings.NewReader(req.Prompt)
 	cmd.WaitDelay = 3 * time.Second
 	var stdout, stderr bytes.Buffer
