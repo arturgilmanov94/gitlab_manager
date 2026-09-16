@@ -5,7 +5,7 @@
 Один статический бинарник для Linux: без Python, без venv, без установки зависимостей.
 
 <p>
-<img alt="Go" src="https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white">
+<img alt="Go" src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white">
 <img alt="Linux" src="https://img.shields.io/badge/Linux-x86--64-black?logo=linux&logoColor=white">
 <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
 </p>
@@ -13,7 +13,7 @@
 ## Содержание
 
 - [Идея](#идея)
-- [Быстрый старт](#быстрый-старт)
+- [Быстрый старт](#быстрый-старт) · [подробное руководство по развёртыванию](docs/DEPLOY.md)
 - [Что умеет](#что-умеет)
 - [Как это работает](#как-это-работает)
 - [Команды](#команды)
@@ -42,6 +42,10 @@ skills, соглашения о ветках и коммитах. Этот ин�
   локальной SQLite рядом с бинарником.
 
 ## Быстрый старт
+
+Разворачиваете впервые или хотите поручить это агенту — возьмите пошаговое руководство
+[docs/DEPLOY.md](docs/DEPLOY.md): предпосылки, установка, какие параметры `.env` прописать под свой проект,
+какие skills завести и готовые промпты для нейронки. Ниже — короткая версия.
 
 Готовый архив для Linux x86-64 берётся из [Releases](https://github.com/arturgilmanov94/gitlab_manager/releases)
 (файл `mr-review-<version>-linux-amd64.tar.gz` и `.sha256` рядом).
@@ -328,7 +332,7 @@ scripts/                build.sh, portability_test.sh, install-desktop.sh
 ## Сборка из исходников и релизы
 
 ```sh
-go build ./cmd/mr-review                       # Go 1.22+
+go build ./cmd/mr-review                       # версия Go — из go.mod (сейчас 1.25+)
 go test ./...
 go test -tags e2e -run TestE2E -v ./internal/runner   # сквозная проверка с настоящим Claude Code (тратит токены)
 scripts/build.sh                               # dist/mr-review + dist/mr-review-<version>-linux-amd64.tar.gz (+ .sha256)
@@ -343,6 +347,8 @@ GitHub Actions (`.github/workflows/ci.yml`) прогонит тесты, соб�
 CLI и включаются только при наличии бинарника в PATH; проверены только на уровне unit-тестов.
 
 ## Решение проблем
+
+Разворачивание с нуля и типовые ошибки первого запуска — в [docs/DEPLOY.md](docs/DEPLOY.md#если-что-то-не-так).
 
 | Симптом | Что делать |
 |---|---|
