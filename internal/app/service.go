@@ -642,6 +642,8 @@ func (s *Service) SyncIssues() (SyncResult, error) {
 		return SyncResult{}, &UserError{err.Error()}
 	}
 	result := SyncResult{Username: username, Project: firstOf(filter, "*")}
+	started := time.Now()
+	listed := map[string]bool{}
 	for _, item := range items {
 		itemHost, itemProject, ok := gitlab.ProjectPathOf(item, "#")
 		if !ok {
@@ -651,11 +653,62 @@ func (s *Service) SyncIssues() (SyncResult, error) {
 			continue
 		}
 		ref := gitlab.Ref{Host: itemHost, ProjectPath: itemProject, IID: gitlab.Int(item, "iid")}
+		listed[issueKey(ref.Host, ref.ProjectPath, ref.IID)] = true
 		if _, err := s.DB.UpsertIssue(issueFromPayload(item, ref)); err == nil {
 			result.Synced++
 		}
 	}
+	// GitLab only lists open issues, so an issue that disappeared from the listing was closed, reassigned or
+	// added by hand: each one is refreshed individually, otherwise a task closed after the last sync would sit
+	// in the list for ever. A closed issue leaves the list — with runs it stays in the database (its history is
+	// worth keeping), without runs it is removed. Issues already known to be closed are not fetched again.
+	known, _ := s.DB.ListIssues()
+	var stale []db.Issue
+	for _, item := range known {
+		if listed[issueKey(item.GitLabHost, item.ProjectPath, item.IID)] || item.Closed() {
+			continue
+		}
+		stale = append(stale, item.Issue)
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, syncConcurrency)
+	for _, item := range stale {
+		wg.Add(1)
+		go func(item db.Issue) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			ref := gitlab.Ref{Host: item.GitLabHost, ProjectPath: item.ProjectPath, IID: item.IID}
+			payload, err := s.GitLab.GetIssue(ref)
+			if err != nil {
+				return
+			}
+			fresh, err := s.DB.UpsertIssue(issueFromPayload(payload, ref))
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case !fresh.Closed():
+				result.Synced++
+			case s.DB.CountRunsForIssue(fresh.ID) > 0:
+				result.Archived++
+			default:
+				if err := s.DB.DeleteIssue(fresh.ID); err == nil {
+					result.Pruned++
+				}
+			}
+		}(item)
+	}
+	wg.Wait()
+	result.Duration = time.Since(started)
 	return result, nil
+}
+
+func issueKey(host, projectPath string, iid int64) string {
+	return fmt.Sprintf("%s|%s|%d", host, projectPath, iid)
 }
 
 // DeleteIssue removes an issue (cancelling an active run first).

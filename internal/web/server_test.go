@@ -962,3 +962,24 @@ func TestRunFactsOnPages(t *testing.T) {
 		t.Fatal("task page must show the facts of the plan run, including the missing skill")
 	}
 }
+
+// The task list drops issues closed in GitLab; one an agent is still working on stays until the run ends.
+func TestOpenIssuesFiltersClosed(t *testing.T) {
+	item := func(iid int64, state string, last *db.LastRun) db.IssueListItem {
+		return db.IssueListItem{Issue: db.Issue{IID: iid, State: state}, Last: last}
+	}
+	got := openIssues([]db.IssueListItem{
+		item(1, "opened", nil),
+		item(2, "closed", nil),
+		item(3, "closed", &db.LastRun{Status: db.StatusRunning}),
+		item(4, "closed", &db.LastRun{Status: db.StatusDone}),
+		item(5, "", nil), // added by hand, not fetched yet
+	})
+	var iids []int64
+	for _, issue := range got {
+		iids = append(iids, issue.IID)
+	}
+	if fmt.Sprint(iids) != "[1 3 5]" {
+		t.Fatalf("openIssues kept %v", iids)
+	}
+}

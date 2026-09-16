@@ -2,7 +2,7 @@
 <section class="toolbar">
   <div class="tb-left">
     <div class="tb-row">
-      <button class="btn btn-primary tip" data-tip="{{kindTip "sync-issues"}}" onclick="post('/api/issues/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' задач для @' + r.username, true), reload()))">Синхронизировать с GitLab</button>
+      <button class="btn btn-primary tip" data-tip="{{kindTip "sync-issues"}}" onclick="post('/api/issues/sync', {}, this).then(r => r && (flash('Синхронизировано ' + r.synced + ' задач для @' + r.username + (r.archived ? ', закрытых скрыто: ' + r.archived : '') + (r.pruned ? ', убрано: ' + r.pruned : '') + ' · ' + r.seconds + ' с', true), reload()))">Синхронизировать с GitLab</button>
     </div>
     <form class="inline tb-row" onsubmit="return addRef(event, '/api/issues')">
       <input type="text" name="ref" placeholder="Ссылка на задачу или #123" size="30" required>

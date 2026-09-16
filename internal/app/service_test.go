@@ -791,6 +791,48 @@ func TestSyncIssuesAcrossProjects(t *testing.T) {
 	}
 }
 
+// A task closed in GitLab disappears from the open-issue listing, so sync refreshes what is left over: a closed
+// issue without runs is removed, one with runs stays in the database for its history but out of the task list.
+func TestSyncIssuesDropsClosed(t *testing.T) {
+	svc, gl, _ := newService(t)
+	gl.Issues[8] = testutil.IssuePayload(8)
+	if res, err := svc.SyncIssues(); err != nil || res.Synced != 2 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	issues, _ := svc.DB.ListIssues()
+	var withRuns *db.Issue
+	for _, item := range issues {
+		if item.IID == 8 {
+			withRuns = &item.Issue
+		}
+	}
+	if withRuns == nil {
+		t.Fatal("issue 8 was not synced")
+	}
+	if _, err := svc.DB.CreateRun(db.Run{Kind: db.KindPlan, IssueID: &withRuns.ID, Runner: "claude"}); err != nil {
+		t.Fatal(err)
+	}
+
+	gl.Issues[7]["state"] = "closed"
+	gl.Issues[8]["state"] = "closed"
+	res, err := svc.SyncIssues()
+	if err != nil || res.Synced != 0 || res.Pruned != 1 || res.Archived != 1 {
+		t.Fatalf("closed issues must leave the list: %+v %v", res, err)
+	}
+	issues, _ = svc.DB.ListIssues()
+	if len(issues) != 1 || issues[0].IID != 8 || !issues[0].Closed() {
+		t.Fatalf("only the closed issue with runs is kept: %+v", issues)
+	}
+	// Nothing left to reconcile: a known-closed issue is not fetched from GitLab again.
+	before := len(gl.Calls)
+	if res, _ := svc.SyncIssues(); res.Archived != 0 || res.Pruned != 0 {
+		t.Fatalf("%+v", res)
+	}
+	if len(gl.Calls) != before+1 {
+		t.Fatalf("only the listing call was expected: %v", gl.Calls[before:])
+	}
+}
+
 // Skill overrides from the UI: another project skill name, or dashboard-written instructions that replace the skill.
 func TestSkillSettingsFromUI(t *testing.T) {
 	svc, _, fr := newService(t)

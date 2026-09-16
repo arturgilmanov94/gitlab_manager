@@ -297,6 +297,11 @@ type LastRun struct {
 	SessionID    string // agent session the run left behind ("" = cannot be continued)
 }
 
+// Active reports whether this run is queued, running or waiting for the developer.
+func (r *LastRun) Active() bool {
+	return r != nil && (r.Status == StatusQueued || r.Status == StatusRunning || r.Status == StatusWaiting)
+}
+
 // DoneReview summarises the latest completed review of an MR.
 type DoneReview struct {
 	ID         int64
@@ -393,6 +398,10 @@ type Issue struct {
 // Ref is "project#iid" — also the project's branch naming convention.
 func (i Issue) Ref() string { return fmt.Sprintf("%s#%d", i.ProjectPath, i.IID) }
 
+// Closed reports whether the issue is done in GitLab and so out of the task list. An empty state is an issue
+// added by hand that has not been fetched yet — it stays in the list.
+func (i Issue) Closed() bool { return i.State != "" && i.State != "opened" }
+
 const issueColumns = "id, gitlab_host, project_path, iid, web_url, title, description, author, state, labels, gitlab_updated_at, synced_at, added_at"
 
 func scanIssue(s scanner) (*Issue, error) {
@@ -427,6 +436,13 @@ func (d *DB) GetIssue(id int64) (*Issue, error) {
 		return nil, nil
 	}
 	return i, err
+}
+
+// CountRunsForIssue returns how many runs an issue has (history worth keeping).
+func (d *DB) CountRunsForIssue(issueID int64) int64 {
+	var n int64
+	_ = d.sql.QueryRow("SELECT COUNT(*) FROM runs WHERE issue_id = ?", issueID).Scan(&n)
+	return n
 }
 
 // DeleteIssue removes an issue and its runs.

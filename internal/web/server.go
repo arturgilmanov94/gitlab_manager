@@ -262,7 +262,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/issues", s.apiAddIssue)
 	s.mux.HandleFunc("POST /api/issues/sync", func(w http.ResponseWriter, r *http.Request) {
 		res, err := s.svc.SyncIssues()
-		s.result(w, map[string]any{"synced": res.Synced, "username": res.Username, "project": res.Project}, err)
+		s.result(w, map[string]any{"synced": res.Synced, "archived": res.Archived, "pruned": res.Pruned,
+			"username": res.Username, "project": res.Project, "seconds": int(res.Duration.Seconds())}, err)
 	})
 	s.mux.HandleFunc("POST /api/issues/{id}/refresh", func(w http.ResponseWriter, r *http.Request) {
 		issue, err := s.svc.RefreshIssue(pathID(r))
@@ -485,6 +486,7 @@ type inboxItem struct {
 func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	mrs, _ := s.svc.DB.ListMRs()
 	issues, _ := s.svc.DB.ListIssues()
+	issues = openIssues(issues)
 	runs, _ := s.svc.DB.ListRuns(300)
 	username := s.svc.CurrentUser()
 	var inbox []inboxItem
@@ -730,7 +732,19 @@ func (s *Server) issues(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.render(w, "issues", map[string]any{"Base": s.base("issues", "Задачи"), "Issues": issues})
+	s.render(w, "issues", map[string]any{"Base": s.base("issues", "Задачи"), "Issues": openIssues(issues)})
+}
+
+// openIssues is the task list: an issue closed in GitLab is kept in the database for its run history but is no
+// longer work to do, so it leaves the list — unless an agent is still working on it.
+func openIssues(issues []db.IssueListItem) []db.IssueListItem {
+	out := make([]db.IssueListItem, 0, len(issues))
+	for _, issue := range issues {
+		if !issue.Closed() || issue.Last.Active() {
+			out = append(out, issue)
+		}
+	}
+	return out
 }
 
 func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {

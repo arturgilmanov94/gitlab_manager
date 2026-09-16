@@ -138,7 +138,9 @@ func (f *FakeGitLab) ListOpenIssues(host, username, projectPath string) ([]map[s
 	f.mu.Unlock()
 	var out []map[string]any
 	for _, issue := range f.Issues {
-		out = append(out, issue)
+		if issue["state"] == "opened" { // GitLab lists open issues only
+			out = append(out, issue)
+		}
 	}
 	return out, nil
 }
