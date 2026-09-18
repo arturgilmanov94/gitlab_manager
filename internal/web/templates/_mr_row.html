@@ -25,7 +25,7 @@
     </div>
   </td>
   <td data-label="AI review">
-    <div class="state-stack">
+    <div class="state-stack" data-ai-state>
       {{if .Last}}<a href="{{runPath .Last.Kind .Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}">{{template "ai-state" $st}}</a>{{else}}{{template "ai-state" $st}}{{end}}
       {{if eq $st "stale"}}<span class="small muted">после ревью {{shortSHA .Done.HeadSHA}} появились новые коммиты</span>{{end}}
       {{if and .Done (or (eq $st "current") (eq $st "stale"))}}<span class="small {{if eq $st "stale"}}stale-note{{end}}">{{findingsSummary .Done.OpenMajor .Done.OpenMinor .Done.OpenInfo}}{{if .Done.Verdict}} · <span class="verdict-{{.Done.Verdict}}">{{verdict .Done.Verdict}}</span>{{end}}</span>{{end}}

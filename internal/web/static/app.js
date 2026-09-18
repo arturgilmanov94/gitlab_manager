@@ -43,14 +43,26 @@
     if (saved) { sessionStorage.removeItem('scroll:' + location.pathname); window.scrollTo(0, parseInt(saved, 10) || 0); }
   } catch (e) { /* ignore */ }
 
+  // A press has to be visible before the server answers: starting a run first refreshes the object in GitLab,
+  // which takes a second or two. The control goes busy at once, the overflow menu it sits in closes, and it
+  // stays busy until the page reloads with the real state — otherwise it flicks back to its idle label in
+  // between and looks as if the click never happened (and invites a second, duplicate one).
   function busy(button, on) {
     if (!button || !button.classList) return;
+    if (!on && button.dataset.hold === '1') return;
     button.disabled = on;
     button.classList.toggle('busy', on);
+    if (on) {
+      const menu = button.closest('details.menu');
+      if (menu) menu.removeAttribute('open');
+    }
   }
+  function hold(button) { if (button && button.dataset) { button.dataset.hold = '1'; busy(button, true); } }
+  function release(button) { if (button && button.dataset) { delete button.dataset.hold; busy(button, false); } }
 
   async function call(method, url, body, button) {
     busy(button, true);
+    let ok = false;
     try {
       const response = await fetch(url, {
         method,
@@ -59,12 +71,16 @@
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.ok === false) throw new Error(data.error || response.statusText);
+      ok = true;
       return data;
     } catch (error) {
       flash(error.message || String(error), false);
       return null;
     } finally {
-      busy(button, false);
+      // Almost every successful action reloads the page or navigates away; the spinner covers that gap.
+      // A failed one gives the control back at once, so the action can be repeated.
+      if (ok) setTimeout(() => busy(button, false), 1500);
+      else release(button);
     }
   }
   window.post = (url, body, button) => call('POST', url, body || {}, button);
@@ -214,12 +230,38 @@
     }
     return { ok: true, value: select.value };
   }
+  // The state of a started run, shown before the server confirms it: the row (or the object's status block)
+  // says «В очереди» from the moment of the click, the rest of the row's actions are locked so the same run
+  // is not started twice, and everything goes back as it was if the server refuses the run.
+  const queuedChip = '<span class="state state-info"><span class="dot-pulse"></span> В очереди</span>';
+  function paintQueued(button) {
+    const row = button.closest('tr');
+    const box = row ? row.querySelector('[data-ai-state]') : document.querySelector('[data-ai-state]'); // in a list only this row's own state
+    const locked = [];
+    if (row) {
+      row.classList.add('pending');
+      row.querySelectorAll('button:not(:disabled)').forEach((other) => { if (other !== button) { other.disabled = true; locked.push(other); } });
+    }
+    const before = box ? box.innerHTML : '';
+    const beforeState = row ? row.dataset.ai : '';
+    if (box) box.innerHTML = queuedChip;
+    if (row) row.dataset.ai = 'queued';
+    return () => {
+      if (box) box.innerHTML = before;
+      if (row) { row.classList.remove('pending'); row.dataset.ai = beforeState; }
+      locked.forEach((other) => { other.disabled = false; });
+    };
+  }
   window.startRun = async function (url, kind, button, extra) {
     const context = selectedContext(kind);
     if (!context.ok) return;
+    const restore = paintQueued(button);
+    hold(button);
     const body = Object.assign({ kind, runner: selectedRunner(), continue_run: context.value }, extra || {});
     const data = await call('POST', url, body, button);
-    if (data && data.redirect) { flash(startedLabels[kind] || 'Запуск поставлен в очередь', true); setTimeout(reload, 500); }
+    if (data && data.redirect) { flash(startedLabels[kind] || 'Запуск поставлен в очередь', true); setTimeout(reload, 500); return; }
+    restore();
+    release(button);
   };
 
   // ---- list filters: text input (input[data-filter="#table"]) plus facet chips (.filters[data-filter-target="#table"]).

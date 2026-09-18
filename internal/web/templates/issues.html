@@ -36,7 +36,7 @@
       <div class="sub">{{.Author}}{{template "labels" .Labels}}{{if and .ContextRunID (not $busy)}}<a class="badge badge-ctx tip" href="{{issuePath .ID}}#context-picker" data-tip="У агента есть сессия с контекстом этой задачи (запуск #{{.ContextRunID}}). На странице задачи её можно продолжить вместо нового чата.">контекст #{{.ContextRunID}}</a>{{end}} · обновлена {{when .GitLabUpdatedAt}}{{with otherLabels .Labels}} · <span class="muted">{{.}}</span>{{end}}</div>
     </td>
     <td data-label="Состояние">
-      <div class="state-stack">
+      <div class="state-stack" data-ai-state>
         {{if not .Last}}<span class="state state-neutral"><span class="glyph">○</span> Новая</span>
         {{else if $waiting}}<a href="{{runPath .Last.Kind .Last.ID}}#approval" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}"><span class="state state-warning"><span class="glyph">⚠</span> Нужен ваш ответ</span></a>
         {{else if $busy}}<a href="{{runPath .Last.Kind .Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}"><span class="state state-info"><span class="spinner"></span> {{if eq .Last.Kind "plan"}}Исследуется{{else}}Пишется код{{end}}</span></a>

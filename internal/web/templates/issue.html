@@ -47,7 +47,7 @@
 <section class="status-panel">
   <div class="status-block tone-{{if and .Active (eq .Active.Status "waiting")}}warning{{else if .Active}}info{{else if eq .State "failed"}}danger{{else if or (eq .State "ready") (eq .State "planned")}}success{{else}}neutral{{end}}">
     <div class="label">Состояние задачи</div>
-    <div class="value">
+    <div class="value" data-ai-state>
       {{if and .Active (eq .Active.Status "waiting")}}<span class="glyph">⚠</span> Нужен ваш ответ
       {{else if .Active}}<span class="spinner"></span> {{if eq .Active.Kind "plan"}}Исследуется{{else}}Пишется код{{end}}
       {{else if eq .State "failed"}}<span class="glyph">✕</span> Ошибка

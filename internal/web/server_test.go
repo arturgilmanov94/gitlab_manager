@@ -708,6 +708,20 @@ func TestToolbarBlocksAndUsageAPI(t *testing.T) {
 	}
 }
 
+// The state block of an object carries data-ai-state: app.js paints «В очереди» there the moment an action is
+// pressed, before the server (which first refreshes the object in GitLab) answers.
+func TestStateBlocksAreMarkedForOptimisticUpdate(t *testing.T) {
+	ts, _, _ := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	postJSON(t, ts.URL+"/api/issues", map[string]any{"url": "https://gitlab.example.com/group/sub/project/-/issues/7"})
+	for _, path := range []string{"/mrs", "/issues", "/-/mr/1", "/-/issue/1"} {
+		code, body := get(t, ts.URL+path)
+		if code != 200 || !strings.Contains(body, "data-ai-state") {
+			t.Fatalf("%s: %d, no data-ai-state hook for the optimistic state", path, code)
+		}
+	}
+}
+
 // Every page with the agent picker also offers the models configured for that agent; the API accepts "agent:model".
 func TestModelPickerPages(t *testing.T) {
 	ts, svc, fr := newServer(t)
