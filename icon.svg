@@ -1,1 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#292961"/><path d="M16 44V20l12 14 12-14v24" fill="none" stroke="#fc6d26" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="MR Review">
+  <rect width="64" height="64" rx="14" fill="#292961"/>
+  <g fill="none" stroke="#fc6d26" stroke-width="5" stroke-linecap="round">
+    <path d="M21 17v30"/>
+    <path d="M45 23v3c0 9-24 3-24 13"/>
+  </g>
+  <g fill="#fc6d26">
+    <circle cx="21" cy="14" r="5"/>
+    <circle cx="45" cy="18" r="5"/>
+    <circle cx="21" cy="50" r="5"/>
+  </g>
+</svg>

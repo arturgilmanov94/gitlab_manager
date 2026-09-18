@@ -67,8 +67,9 @@ cd mr-review
 ./mr-review                                      # сервер + браузер: http://127.0.0.1:8765
 ```
 
-Двойной клик по `mr-review` в файловом менеджере делает то же самое. Ярлык в меню приложений:
-`./install-desktop.sh` (пишет только `~/.local/share/applications/mr-review.desktop`).
+Двойной клик по `mr-review` в файловом менеджере делает то же самое. Ярлык в меню приложений **и на рабочем
+столе** — `./install-desktop.sh`: пишет `~/.local/share/applications/mr-review.desktop`, копию иконки в
+`~/.local/share/icons/` и ярлык на рабочем столе. `--no-desktop` — только меню, `--uninstall` — убрать всё.
 
 Если dashboard лежит не рядом с проектом и не внутри него:
 

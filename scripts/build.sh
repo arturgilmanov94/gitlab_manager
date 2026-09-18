@@ -24,7 +24,7 @@ done
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/mr-review"
-cp dist/mr-review README.md LICENSE VERSION .env.example "$STAGE/mr-review/"
+cp dist/mr-review README.md LICENSE VERSION .env.example icon.svg "$STAGE/mr-review/"
 cp scripts/mr-review.desktop.template scripts/install-desktop.sh scripts/portability_test.sh "$STAGE/mr-review/"
 mkdir -p "$STAGE/mr-review/scripts" && mv "$STAGE/mr-review/portability_test.sh" "$STAGE/mr-review/scripts/"
 cat > "$STAGE/mr-review/MANIFEST.md" <<MANIFEST
@@ -39,7 +39,7 @@ cat > "$STAGE/mr-review/MANIFEST.md" <<MANIFEST
 
 - \`mr-review\` — the dashboard (web UI + CLI), single executable
 - \`.env.example\` — all settings; copy to \`.env\` next to the binary if you need to change anything
-- \`install-desktop.sh\` + \`mr-review.desktop.template\` — optional launcher for the application menu / double-click
+- \`install-desktop.sh\` + \`mr-review.desktop.template\` + \`icon.svg\` — optional launcher for the application menu, the desktop and double-click
 - \`scripts/portability_test.sh\` — smoke test for a fresh unpack
 - \`README.md\`, \`LICENSE\`, \`VERSION\`, \`MANIFEST.md\`
 

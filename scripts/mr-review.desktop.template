@@ -1,9 +1,12 @@
 [Desktop Entry]
 Type=Application
 Name=MR Review
+GenericName=GitLab merge request review
 Comment=Review GitLab merge requests with the project's Claude review skill
 Exec=__BIN__
+Path=__WORKDIR__
 Icon=__ICON__
 Terminal=false
-Categories=Development;
+Categories=Development;RevisionControl;
+Keywords=gitlab;merge;request;review;mr;claude;
 StartupNotify=false
