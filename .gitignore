@@ -4,3 +4,5 @@ logs/
 runtime/
 dist/
 /mr-review
+/mr-review.new
+/mr-review.old
