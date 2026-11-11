@@ -997,3 +997,52 @@ func TestOpenIssuesFiltersClosed(t *testing.T) {
 		t.Fatalf("openIssues kept %v", iids)
 	}
 }
+
+// The MR page: «на что обратить внимание» is stored and goes with the review; findings get a code excerpt, inline
+// actions and «Отправить в GitLab»; the page carries its data version for the live refresh.
+func TestReviewFocusFindingsAndLiveRefresh(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	if code, out := postJSON(t, ts.URL+"/api/mrs/1/focus", map[string]any{"focus": "только миграции"}); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `id="review-focus"`) || !strings.Contains(body, ">только миграции</textarea>") ||
+		!strings.Contains(body, `data-autorefresh="1"`) || !strings.Contains(body, `data-scope="mr" data-scope-id="1"`) || !strings.Contains(body, "Ревью и действия") {
+		t.Fatal("mr page: focus field, action block and live-refresh attributes")
+	}
+	_, v1 := getJSON(t, ts.URL+"/api/version?scope=mr&id=1")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	// The focus sent with the start replaces the stored one.
+	postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "full", "focus": "API"})
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	if r, _ := svc.DB.GetRun(1); r.Notes != "API" {
+		t.Fatalf("run notes %q", r.Notes)
+	}
+	if _, v2 := getJSON(t, ts.URL+"/api/version?scope=mr&id=1"); v2["version"] == v1["version"] {
+		t.Fatal("version must change when a run finishes")
+	}
+	_, body := get(t, ts.URL+"/-/mr/1")
+	for _, want := range []string{`data-finding-code="1"`, `data-post-finding="1"`, "Отправить в GitLab", "ляжет на строку", "**Null deref**", ">Ложное</button>"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("mr page lacks %q", want)
+		}
+	}
+	if code, out := getJSON(t, ts.URL+"/api/findings/1/code"); code != 200 || out["code"] == nil {
+		t.Fatalf("%d %v", code, out)
+	}
+	code, out := postJSON(t, ts.URL+"/api/findings/1/gitlab", map[string]any{"body": "Поправь, пожалуйста"})
+	if code != 200 || out["on_line"] != true {
+		t.Fatalf("%d %v", code, out)
+	}
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, ">в GitLab</a>") || strings.Contains(body, `data-post-finding="1"`) {
+		t.Fatal("a posted finding links to its GitLab note instead of offering the editor")
+	}
+}
+
+func getJSON(t *testing.T, url string) (int, map[string]any) {
+	t.Helper()
+	code, body := get(t, url)
+	var out map[string]any
+	_ = json.Unmarshal([]byte(body), &out)
+	return code, out
+}

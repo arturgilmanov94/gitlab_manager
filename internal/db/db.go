@@ -6,10 +6,12 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -162,6 +164,8 @@ type MergeRequest struct {
 	NotesCount int64
 	// SeenAt is when the developer marked the MR as seen ("" = not seen). Cleared by UpsertMR on new activity.
 	SeenAt string
+	// ReviewFocus is what the developer asked reviews of this MR to pay attention to ("" = nothing special).
+	ReviewFocus string
 }
 
 // Seen reports whether the developer marked the MR as seen (and nothing new arrived since).
@@ -182,12 +186,12 @@ func (m MergeRequest) Relevant() bool {
 // relevantWhere is the SQL form of Relevant().
 const relevantWhere = "state NOT IN ('merged', 'closed') AND hidden = 0 AND approved_by_me = 0 AND (my_roles != '' OR manual = 1)"
 
-const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, hidden, labels, pipeline_id, pipeline_url, notes_count, seen_at"
+const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, hidden, labels, pipeline_id, pipeline_url, notes_count, seen_at, review_focus"
 
 func scanMRInto(m *MergeRequest, s scanner) error {
 	var draft, approved, manual, hidden int
 	if err := s.Scan(&m.ID, &m.GitLabHost, &m.ProjectPath, &m.IID, &m.WebURL, &m.Title, &m.Author, &m.SourceBranch, &m.TargetBranch, &m.State, &m.HeadSHA, &m.Unresolved, &m.GitLabUpdatedAt, &m.SyncedAt, &m.AddedAt,
-		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount, &m.MyRoles, &approved, &manual, &hidden, &m.Labels, &m.PipelineID, &m.PipelineURL, &m.NotesCount, &m.SeenAt); err != nil {
+		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount, &m.MyRoles, &approved, &manual, &hidden, &m.Labels, &m.PipelineID, &m.PipelineURL, &m.NotesCount, &m.SeenAt, &m.ReviewFocus); err != nil {
 		return err
 	}
 	m.Draft, m.ApprovedByMe, m.Manual, m.Hidden = draft == 1, approved == 1, manual == 1, hidden == 1
@@ -211,6 +215,12 @@ func (d *DB) SetMRSeen(id int64, seen bool) error {
 		at = Now()
 	}
 	_, err := d.sql.Exec("UPDATE merge_requests SET seen_at = ? WHERE id = ?", at, id)
+	return err
+}
+
+// SetMRReviewFocus stores what the next reviews of an MR should pay attention to.
+func (d *DB) SetMRReviewFocus(id int64, focus string) error {
+	_, err := d.sql.Exec("UPDATE merge_requests SET review_focus = ? WHERE id = ?", focus, id)
 	return err
 }
 
@@ -357,7 +367,7 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 		var kind, status, verdict, sha, runner, model, finished, created, session, dKind, dVerdict, dSHA, dFinished sql.NullString
 		var draft, approved, manual, hidden int
 		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Author, &item.SourceBranch, &item.TargetBranch, &item.State, &item.HeadSHA, &item.Unresolved, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
-			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual, &hidden, &item.Labels, &item.PipelineID, &item.PipelineURL, &item.NotesCount, &item.SeenAt,
+			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual, &hidden, &item.Labels, &item.PipelineID, &item.PipelineURL, &item.NotesCount, &item.SeenAt, &item.ReviewFocus,
 			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &session, &open, &tokens,
 			&dID, &dKind, &dVerdict, &dSHA, &dFinished, &dMajor, &dMinor, &dInfo, &item.ContextRunID); err != nil {
 			return nil, err
@@ -856,12 +866,80 @@ func (d *DB) RunsWithoutTokens() ([]int64, error) {
 func (d *DB) FailStaleRuns(message string) (int64, error) {
 	_, _ = d.sql.Exec("UPDATE approvals SET status = 'expired', decided_at = ? WHERE status = 'pending'", Now())
 	// Runs waiting for the developer's answers to the agent's questions need no process: they survive a restart.
-	res, err := d.sql.Exec("UPDATE runs SET status = 'failed', error = ?, finished_at = ? WHERE status IN "+activeStatuses+
+	// Queued runs never started: they stay in the queue and are launched again (QueuedRunIDs).
+	res, err := d.sql.Exec("UPDATE runs SET status = 'failed', error = ?, finished_at = ? WHERE status IN ('running', 'waiting')"+
 		" AND NOT (status = 'waiting' AND EXISTS (SELECT 1 FROM run_questions q WHERE q.run_id = runs.id AND q.answer = ''))", message, Now())
 	if err != nil {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// QueuedRunIDs lists runs still waiting in the queue, oldest first (re-launched after a restart).
+func (d *DB) QueuedRunIDs() ([]int64, error) {
+	rows, err := d.sql.Query("SELECT id FROM runs WHERE status = 'queued' ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// QueueCounts reports how many runs are queued and how many hold an agent slot.
+func (d *DB) QueueCounts() (queued, running int64) {
+	// A run waiting for answers to its questions has no process and holds no agent slot; one waiting for a
+	// permission prompt does.
+	_ = d.sql.QueryRow("SELECT COALESCE(SUM(status = 'queued'), 0), COALESCE(SUM(status = 'running' OR (status = 'waiting' AND NOT EXISTS "+
+		"(SELECT 1 FROM run_questions q WHERE q.run_id = runs.id AND q.answer = ''))), 0) FROM runs WHERE status IN "+activeStatuses).Scan(&queued, &running)
+	return queued, running
+}
+
+// QueuePosition is how many queued runs were created before this one (0 = next in line).
+func (d *DB) QueuePosition(runID int64) int64 {
+	var n int64
+	_ = d.sql.QueryRow("SELECT COUNT(*) FROM runs WHERE status = 'queued' AND id < ?", runID).Scan(&n)
+	return n
+}
+
+// SetFindingGitLabNote stores the link to the GitLab comment a finding was posted as.
+func (d *DB) SetFindingGitLabNote(id int64, url string) error {
+	_, err := d.sql.Exec("UPDATE findings SET gitlab_note_url = ? WHERE id = ?", url, id)
+	return err
+}
+
+// DataFingerprint changes whenever what a page shows changes: MRs and issues as synced from GitLab and the state of
+// the runs. Open pages compare it to the one they were rendered with and refresh themselves. Sync timestamps are left
+// out on purpose. mrID > 0 narrows it to one MR and its runs; 0 covers every MR, issue and run.
+func (d *DB) DataFingerprint(mrID int64) string {
+	const mrRow = `id || ':' || head_sha || ':' || state || ':' || unresolved || ':' || gitlab_updated_at || ':' || pipeline_status || ':' ||
+		approvals_given || ':' || my_roles || ':' || approved_by_me || ':' || hidden || ':' || notes_count || ':' || labels || ':' || title || ':' ||
+		draft || ':' || diverged || ':' || seen_at`
+	const runRow = `id || ':' || status || ':' || (SELECT COUNT(*) FROM findings f WHERE f.run_id = runs.id AND f.status = 'open')`
+	var mrs, issues, runs string
+	if mrID > 0 {
+		_ = d.sql.QueryRow("SELECT COALESCE("+mrRow+", '') FROM merge_requests WHERE id = ?", mrID).Scan(&mrs)
+		_ = d.sql.QueryRow("SELECT COALESCE(group_concat(x, '|'), '') FROM (SELECT "+runRow+" AS x FROM runs WHERE mr_id = ? ORDER BY id)", mrID).Scan(&runs)
+	} else {
+		_ = d.sql.QueryRow("SELECT COALESCE(group_concat(x, '|'), '') FROM (SELECT " + mrRow + " AS x FROM merge_requests ORDER BY id)").Scan(&mrs)
+		_ = d.sql.QueryRow(`SELECT COALESCE(group_concat(x, '|'), '') FROM (SELECT id || ':' || state || ':' || gitlab_updated_at || ':' || labels || ':' || title AS x
+			FROM issues ORDER BY id)`).Scan(&issues)
+		// Only the latest runs matter for the lists; the full history would make this grow without bound.
+		_ = d.sql.QueryRow("SELECT COALESCE(group_concat(x, '|'), '') FROM (SELECT " + runRow + " AS x FROM runs WHERE id > (SELECT COALESCE(MAX(id), 0) - 200 FROM runs) OR status IN " + activeStatuses + " ORDER BY id)").Scan(&runs)
+	}
+	h := fnv.New64a()
+	for _, part := range []string{mrs, issues, runs} {
+		h.Write([]byte(part))
+		h.Write([]byte{0})
+	}
+	return strconv.FormatUint(h.Sum64(), 36)
 }
 
 // ---------------------------------------------------------------------------------- approvals
@@ -998,6 +1076,7 @@ type Finding struct {
 	VerifyNote      string
 	CheckStatus     string // outcome of «Проверить замечание»: confirmed | false_positive | obsolete | unclear ("" = not checked)
 	CheckRunID      *int64 // the verify_finding run that produced CheckStatus
+	GitLabNoteURL   string // the GitLab comment this finding was posted as ("" = not posted)
 }
 
 // ReplaceFindings replaces a run's findings.
@@ -1084,7 +1163,7 @@ func (d *DB) SetFindingCheck(id int64, checkStatus, note string, runID int64) er
 
 // GetFinding returns a finding or nil.
 func (d *DB) GetFinding(id int64) (*Finding, error) {
-	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note, check_status, check_run_id FROM findings WHERE id = ?", id)
+	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note, check_status, check_run_id, gitlab_note_url FROM findings WHERE id = ?", id)
 	if err != nil {
 		return nil, err
 	}
@@ -1094,7 +1173,7 @@ func (d *DB) GetFinding(id int64) (*Finding, error) {
 	}
 	var f Finding
 	var origin, line, checkRun sql.NullInt64
-	if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.VerifyNote, &f.CheckStatus, &checkRun); err != nil {
+	if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.VerifyNote, &f.CheckStatus, &checkRun, &f.GitLabNoteURL); err != nil {
 		return nil, err
 	}
 	if origin.Valid {
@@ -1111,7 +1190,7 @@ func (d *DB) GetFinding(id int64) (*Finding, error) {
 
 // ListFindings returns a run's findings in order.
 func (d *DB) ListFindings(runID int64) ([]Finding, error) {
-	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note, check_status, check_run_id FROM findings WHERE run_id = ? ORDER BY ordinal", runID)
+	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note, check_status, check_run_id, gitlab_note_url FROM findings WHERE run_id = ? ORDER BY ordinal", runID)
 	if err != nil {
 		return nil, err
 	}
@@ -1120,7 +1199,7 @@ func (d *DB) ListFindings(runID int64) ([]Finding, error) {
 	for rows.Next() {
 		var f Finding
 		var origin, line, checkRun sql.NullInt64
-		if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.VerifyNote, &f.CheckStatus, &checkRun); err != nil {
+		if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.VerifyNote, &f.CheckStatus, &checkRun, &f.GitLabNoteURL); err != nil {
 			return nil, err
 		}
 		if origin.Valid {

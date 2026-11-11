@@ -115,7 +115,8 @@ REPORT_LANGUAGE=ru      # язык текстов агента: ru | en | de | u
 | `HIGHLIGHT_LABELS` | свои метки приоритета (цвета: red, orange, yellow, green, blue, gray) | `blocker:red,bug:orange,feature:green` |
 | `DEFAULT_RUNNER`, `CLAUDE_MODELS` | основной агент не `claude` или нужен свой список моделей | `codex`, `default,opus,sonnet` |
 | `PORT` | 8765 занят | `8766` |
-| `RUN_CONCURRENCY` | сколько агентов работают одновременно (по разным MR/задачам) | `2` |
+| `RUN_CONCURRENCY` | сколько агентов работают одновременно (по разным MR/задачам); остальные запуски ждут в очереди | `2` |
+| `GITLAB_AUTO_SYNC_SEC` | как часто (сек) запущенный dashboard сам синхронизирует MR и задачи с GitLab; `0` — только кнопкой | `60` |
 | `RUN_TIMEOUT_SEC`, `CLAUDE_MAX_BUDGET_USD` | нужен потолок по времени/деньгам на запуск | `2700`, `5` |
 | `REVIEW_WORKTREE_TTL_MIN` | проект большой и жалко диск (или наоборот — не удалять) | `30`, `0` |
 | `CLAUDE_EXTRA_ALLOWED_TOOLS` | ревью должно уметь звать линтер/анализатор | `Bash(php *) Bash(composer *)` |

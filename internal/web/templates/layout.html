@@ -7,7 +7,7 @@
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body{{if .Base.AutoRefresh}} data-autorefresh="1" data-version="{{.Base.DataVersion}}"{{if .Base.DataScope}} data-scope="{{.Base.DataScope}}" data-scope-id="{{.Base.DataScopeID}}"{{end}}{{end}}>
 <header class="navbar">
   <div class="navbar-inner">
     <a class="brand" href="/"><span class="brand-mark"></span>MR Review</a>
@@ -22,6 +22,8 @@
     </nav>
     <div class="nav-context">
       {{if .Base.Waiting}}<a class="chip attention tip" href="/run/{{index .Base.Waiting 0}}#approval" data-tip="Агент ждёт вас: разрешение на действие или ответ на вопрос по задаче. Откройте сессию и ответьте.">⚠ Нужен ваш ответ{{if gt (len .Base.Waiting) 1}} ({{len .Base.Waiting}}){{end}}</a>{{end}}
+      {{with .Base.Queue}}{{if or .Running .Queued}}<a class="chip{{if .Queued}} warn{{end}} tip" href="/runs" data-tip="Агенты: {{.Running}} из {{.Capacity}} заняты (RUN_CONCURRENCY). {{if .Queued}}Ещё {{.Queued}} запуск(ов) ждут в очереди и стартуют сами, как только освободится агент; очередь переживает перезапуск dashboard.{{else}}Новые запуски стартуют сразу, пока есть свободные агенты; иначе встают в очередь.{{end}}">агенты {{.Running}}/{{.Capacity}}{{if .Queued}} · очередь {{.Queued}}{{end}}</a>{{end}}{{end}}
+      {{if .Base.SyncError}}<span class="chip bad tip" data-tip="Фоновая синхронизация с GitLab не удалась: {{.Base.SyncError}}">GitLab: ошибка синхронизации</span>{{else if .Base.AutoSyncSec}}<span class="chip tip" data-tip="Dashboard сам синхронизирует MR и задачи с GitLab каждые {{.Base.AutoSyncSec}} с (GITLAB_AUTO_SYNC_SEC); открытая страница обновится сама, когда что-то изменится и вы ничего не вводите.">⟳ авто {{.Base.AutoSyncSec}} с</span>{{end}}
       {{if .Base.Username}}<span class="chip tip" data-tip="Пользователь GitLab из glab. По нему определяются «мои» MR и задачи.">@{{.Base.Username}}</span>{{end}}
       {{if .Base.ProjectRoot}}<span class="chip path mono tip" data-tip="Корень проекта. Все агенты стартуют отсюда и берут правила именно этого чекаута.">{{.Base.ProjectRoot}}</span>{{else}}<span class="chip bad">project root не определён</span>{{end}}
       {{if .Base.Skill}}<a class="chip tip" href="/doctor#skills" data-tip="Skill полного ревью проекта ({{.Base.Skill.RelPath}}). Не копируется: после git pull используется новая версия. Карта всех действий → skills: на странице проверки окружения.">skill: {{.Base.Skill.Name}}</a>{{else}}<a class="chip warn tip" href="/doctor#skills" data-tip="В проекте не найден агент/skill ревью; ревью идёт по CLAUDE.md и промпту dashboard. Какие skills ожидаются — на странице проверки окружения.">review skill не найден</a>{{end}}

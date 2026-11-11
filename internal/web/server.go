@@ -54,12 +54,21 @@ type pageBase struct {
 	Nav         string
 	Title       string
 	Started     time.Time
+	// Live refresh: the page reloads itself (when idle) once /api/version?scope=DataScope differs from DataVersion.
+	AutoRefresh bool
+	DataScope   string // "" = everything; "mr" = the MR page's own MR and runs (DataScopeID)
+	DataScopeID int64
+	DataVersion string
+	Queue       app.QueueInfo
+	AutoSyncSec int
+	SyncError   string // last background sync error ("" = fine)
 }
 
 // New builds the HTTP server.
 func New(svc *app.Service, version string, runners []runner.Runner) (*Server, error) {
 	s := &Server{svc: svc, version: version, runners: runners, pages: map[string]*template.Template{}, mux: http.NewServeMux(), started: time.Now()}
 	funcs := template.FuncMap{
+		"findingComment": app.FindingComment,
 		"shortSHA": func(sha string) string {
 			if len(sha) > 10 {
 				return sha[:10]
@@ -258,6 +267,33 @@ func (s *Server) routes() {
 		s.result(w, map[string]any{}, s.svc.UnhideMR(pathID(r)))
 	})
 	s.mux.HandleFunc("POST /api/mrs/{id}/runs", s.apiStartMRRun)
+	s.mux.HandleFunc("POST /api/mrs/{id}/focus", func(w http.ResponseWriter, r *http.Request) {
+		s.result(w, map[string]any{}, s.svc.SetReviewFocus(pathID(r), readBody(r)["focus"]))
+	})
+	s.mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, r *http.Request) {
+		var mrID int64
+		if r.URL.Query().Get("scope") == "mr" {
+			mrID, _ = strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+		}
+		at, syncErr := s.svc.AutoSyncState()
+		synced := ""
+		if !at.IsZero() {
+			synced = at.UTC().Format(time.RFC3339)
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "version": s.svc.DataVersion(mrID), "synced_at": synced, "sync_error": syncErr, "queue": s.svc.Queue()})
+	})
+	s.mux.HandleFunc("GET /api/findings/{id}/code", func(w http.ResponseWriter, r *http.Request) {
+		code, err := s.svc.FindingCode(pathID(r))
+		s.result(w, map[string]any{"code": code}, err)
+	})
+	s.mux.HandleFunc("POST /api/findings/{id}/gitlab", func(w http.ResponseWriter, r *http.Request) {
+		res, err := s.svc.PostFinding(pathID(r), readBody(r)["body"])
+		if err != nil {
+			s.result(w, nil, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "url": res.URL, "on_line": res.OnLine})
+	})
 
 	s.mux.HandleFunc("POST /api/issues", s.apiAddIssue)
 	s.mux.HandleFunc("POST /api/issues/sync", func(w http.ResponseWriter, r *http.Request) {
@@ -368,6 +404,7 @@ func (s *Server) base(nav, title string) pageBase {
 	if termOK {
 		termWhy = ""
 	}
+	_, syncErr := s.svc.AutoSyncState()
 	return pageBase{
 		Version:     s.version,
 		ProjectRoot: s.svc.Settings.ProjectRoot,
@@ -383,8 +420,17 @@ func (s *Server) base(nav, title string) pageBase {
 		Nav:         nav,
 		Title:       title,
 		Started:     s.started,
+		AutoRefresh: autoRefreshNav[nav],
+		DataVersion: s.svc.DataVersion(0),
+		Queue:       s.svc.Queue(),
+		AutoSyncSec: s.svc.Settings.AutoSyncSec,
+		SyncError:   syncErr,
 	}
 }
+
+// autoRefreshNav lists the sections whose pages refresh themselves when GitLab data or run states change. Run pages
+// poll their own run instead.
+var autoRefreshNav = map[string]bool{"overview": true, "mrs": true, "issues": true, "history": true, "ci": true}
 
 func (s *Server) render(w http.ResponseWriter, page string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -797,8 +843,14 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 	if latest != nil && latest.HeadSHA != "" {
 		sha = latest.HeadSHA
 	}
+	base := s.base("mrs", fmt.Sprintf("!%d %s", mr.IID, mr.Title))
+	base.DataScope, base.DataScopeID, base.DataVersion = "mr", mr.ID, s.svc.DataVersion(mr.ID)
+	var queuePos int64 = -1
+	if active != nil && active.Status == db.StatusQueued {
+		queuePos = s.svc.DB.QueuePosition(active.ID)
+	}
 	s.render(w, "mr", map[string]any{
-		"Base": s.base("mrs", fmt.Sprintf("!%d %s", mr.IID, mr.Title)), "MR": mr, "Runs": runs, "Latest": latest,
+		"Base": base, "MR": mr, "QueuePos": queuePos, "Runs": runs, "Latest": latest,
 		"Sessions":   s.svc.Resumable(runs, s.svc.ReviewDirs(mr)...),
 		"Changes":    changesIf(stale, s.svc, mr, latest),
 		"StandSkill": s.svc.StandSkill(), "StandTestSkill": s.svc.SkillFor(db.KindStandTest), "Stand": app.LatestStandFor(runs, mr.SourceBranch),
@@ -1059,6 +1111,14 @@ func (s *Server) apiStartMRRun(w http.ResponseWriter, r *http.Request) {
 	var runID int64
 	var err error
 	cont, _ := strconv.ParseInt(body["continue_run"], 10, 64) // agent session to continue; 0 = new chat
+	// The MR page sends its «на что обратить внимание» with every review start: it is stored on the MR first,
+	// so this run and the following ones (also started from the list) take it.
+	if focus, ok := body["focus"]; ok && (body["kind"] == "quick" || body["kind"] == "full" || body["kind"] == "verify" || body["kind"] == "") {
+		if err := s.svc.SetReviewFocus(id, focus); err != nil {
+			s.result(w, nil, err)
+			return
+		}
+	}
 	switch body["kind"] {
 	case "quick":
 		runID, err = s.svc.StartReview(id, db.KindReviewQuick, body["runner"], cont)

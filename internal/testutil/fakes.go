@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -56,6 +57,9 @@ type FakeGitLab struct {
 	Listed     []int64            // MRs returned by ListOpenMRs; nil = every MR in MRs
 	Calls      []string
 	CreatedMR  string
+	// Discussions records CreateDiscussion calls ("body" or "body @path:line"); RejectPosition makes diff comments fail.
+	Discussions    []string
+	RejectPosition bool
 }
 
 // NewFakeGitLab seeds one MR (!42, authored by alice = the current user) and one issue (#7).
@@ -185,6 +189,46 @@ func (f *FakeGitLab) Compare(ref gitlab.Ref, from, to string) (gitlab.Changes, e
 func (f *FakeGitLab) CreateMR(host, projectPath, sourceBranch, targetBranch, title, description string) (string, error) {
 	f.CreatedMR = fmt.Sprintf("%s|%s|%s|%s|%s", projectPath, sourceBranch, targetBranch, title, description)
 	return "https://gitlab.example.com/group/sub/project/-/merge_requests/100", nil
+}
+
+// MRVersions returns one version per MR, at the MR's current head.
+func (f *FakeGitLab) MRVersions(ref gitlab.Ref) ([]gitlab.Version, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	head := ""
+	if mr, ok := f.MRs[ref.IID]; ok {
+		head = gitlab.HeadSHA(mr)
+	}
+	return []gitlab.Version{{ID: 9, HeadSHA: head, BaseSHA: "base-sha", StartSHA: "start-sha", State: "collected"}}, nil
+}
+
+// MRVersionDiffs returns a canned diff of src/A.php: lines 9-10 added, 8 and 11 unchanged context.
+func (f *FakeGitLab) MRVersionDiffs(ref gitlab.Ref, versionID int64) ([]gitlab.FileDiff, error) {
+	return []gitlab.FileDiff{{OldPath: "src/A.php", NewPath: "src/A.php", Diff: "@@ -8,2 +8,4 @@\n ctx\n+added\n+added too\n ctx\n"}}, nil
+}
+
+// RawFile returns a numbered canned file.
+func (f *FakeGitLab) RawFile(ref gitlab.Ref, path, sha string) (string, error) {
+	var b strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&b, "line %d of %s\n", i, path)
+	}
+	return b.String(), nil
+}
+
+// CreateDiscussion records the comment.
+func (f *FakeGitLab) CreateDiscussion(ref gitlab.Ref, body string, pos *gitlab.Position) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if pos != nil && f.RejectPosition {
+		return 0, fmt.Errorf("GitLab did not accept the comment: 400 line_code can't be blank")
+	}
+	entry := body
+	if pos != nil {
+		entry = fmt.Sprintf("%s @%s:%d", body, pos.NewPath, pos.NewLine)
+	}
+	f.Discussions = append(f.Discussions, entry)
+	return int64(1000 + len(f.Discussions)), nil
 }
 
 func containsInt(list []int64, v int64) bool {

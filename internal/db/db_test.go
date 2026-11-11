@@ -21,7 +21,7 @@ func open(t *testing.T) *DB {
 func TestMigrateIdempotent(t *testing.T) {
 	d := open(t)
 	applied, err := d.Migrate()
-	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 18 {
+	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 19 {
 		t.Fatalf("%v %v %v", applied, err, d.SchemaVersion())
 	}
 }
@@ -170,9 +170,22 @@ func TestIssuesAndStale(t *testing.T) {
 		t.Fatalf("%+v %v", issue, err)
 	}
 	runID, _ := d.CreateRun(Run{Kind: KindPlan, IssueID: &issue.ID, Runner: "claude"})
+	queuedID, _ := d.CreateRun(Run{Kind: KindPlan, IssueID: &issue.ID, Runner: "claude"})
+	_ = d.UpdateRun(runID, map[string]any{"status": StatusRunning})
 	if n, _ := d.FailStaleRuns("restart"); n != 1 {
 		t.Fatal("stale run")
 	}
+	// A queued run never started: it survives the restart and is launched again.
+	if ids, _ := d.QueuedRunIDs(); len(ids) != 1 || ids[0] != queuedID {
+		t.Fatalf("queued after restart: %v", ids)
+	}
+	if q, r := d.QueueCounts(); q != 1 || r != 0 {
+		t.Fatalf("counts %d %d", q, r)
+	}
+	if r, _ := d.GetRun(runID); r.Status != StatusFailed {
+		t.Fatalf("running run after restart: %s", r.Status)
+	}
+	_, _ = d.sql.Exec("DELETE FROM runs WHERE id = ?", queuedID)
 	list, _ := d.ListIssues()
 	if len(list) != 1 || list[0].Last == nil || list[0].Last.ID != runID || list[0].Last.Status != StatusFailed {
 		t.Fatalf("%+v", list)

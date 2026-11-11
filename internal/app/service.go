@@ -44,6 +44,11 @@ type Service struct {
 	terminalNote  string             // why no terminal is available
 
 	sem       chan struct{}
+	mrSync    sync.Mutex              // one MR sync at a time (button and background sync)
+	issueSync sync.Mutex              // one issue sync at a time
+	snippets  map[string][]string     // file lines per "ref sha path" (FindingCode)
+	versions  map[string]*diffVersion // MR diff version per "ref sha" (FindingCode, PostFinding)
+	lastSync  syncStamp               // last background sync (AutoSyncState)
 	mu        sync.Mutex
 	cancels   map[int64]context.CancelFunc
 	changes   map[string]gitlab.Changes       // compare results per "ref from..to" (Changes)
@@ -259,11 +264,34 @@ func (s *Service) SkillCandidates() []skill.Skill {
 	return skill.NewWithNames(s.Settings.ProjectRoot, nil).Candidates()
 }
 
-// Recover marks runs interrupted by a restart as failed and backfills token counters of old runs.
+// Recover marks runs interrupted by a restart as failed and backfills token counters of old runs. Runs that were
+// still waiting in the queue never started: they are kept (ResumeQueue launches them again).
 func (s *Service) Recover() int64 {
 	n, _ := s.DB.FailStaleRuns("Interrupted: the dashboard was restarted while this run was active")
 	s.backfillTokens()
 	return n
+}
+
+// ResumeQueue launches the runs left in the queue by the previous process, oldest first, so a queued run is never
+// lost to a restart. It returns how many were re-queued.
+func (s *Service) ResumeQueue() int {
+	ids, _ := s.DB.QueuedRunIDs()
+	for _, id := range ids {
+		s.launch(id)
+	}
+	return len(ids)
+}
+
+// QueueInfo describes the run queue for the UI: queued runs, runs holding an agent slot, and the slot count.
+type QueueInfo struct {
+	Queued, Running int64
+	Capacity        int
+}
+
+// Queue reports the state of the run queue.
+func (s *Service) Queue() QueueInfo {
+	q, r := s.DB.QueueCounts()
+	return QueueInfo{Queued: q, Running: r, Capacity: cap(s.sem)}
 }
 
 // backfillTokens fills token counters for runs stored before token accounting existed (from raw_result).
@@ -439,8 +467,11 @@ type SyncResult struct {
 // syncConcurrency is how many glab processes a sync runs at once (each MR costs three API calls of ~0.7 s).
 const syncConcurrency = 6
 
-// SyncMRs pulls open MRs where the current user has one of the configured roles.
+// SyncMRs pulls open MRs where the current user has one of the configured roles. Syncs never overlap: a press
+// of the button during a background sync waits for it and then syncs again.
 func (s *Service) SyncMRs() (SyncResult, error) {
+	s.mrSync.Lock()
+	defer s.mrSync.Unlock()
 	host, project := s.DefaultProject()
 	if host == "" {
 		return SyncResult{}, userErr("GitLab host is unknown: set GITLAB_HOST or make sure the project has an origin remote")
@@ -616,8 +647,10 @@ func (s *Service) RefreshIssue(id int64) (*db.Issue, error) {
 	return s.fetchIssue(gitlab.Ref{Host: issue.GitLabHost, ProjectPath: issue.ProjectPath, IID: issue.IID})
 }
 
-// SyncIssues pulls open issues assigned to the current user.
+// SyncIssues pulls open issues assigned to the current user (never two at once, like SyncMRs).
 func (s *Service) SyncIssues() (SyncResult, error) {
+	s.issueSync.Lock()
+	defer s.issueSync.Unlock()
 	host, project := s.DefaultProject()
 	if host == "" {
 		return SyncResult{}, userErr("GitLab host is unknown: set GITLAB_HOST or make sure the project has an origin remote")
@@ -751,7 +784,8 @@ func (s *Service) StartReview(mrID int64, kind, runnerName string, continueRunID
 	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil {
 		return 0, userErr("a run for this merge request is already queued or running (#%d)", active.ID)
 	}
-	run := db.Run{Kind: kind, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), RequestedModel: model, SkillIdentifier: skillID(s.SkillFor(kind)), ContinueRunID: runIDPtr(prev)}
+	run := db.Run{Kind: kind, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), RequestedModel: model, SkillIdentifier: skillID(s.SkillFor(kind)), ContinueRunID: runIDPtr(prev),
+		Notes: mr.ReviewFocus} // the MR's «на что обратить внимание», as it was when the review started
 	if kind == db.KindReviewVerify {
 		base, _ := s.DB.LatestDoneReview(mrID)
 		if base == nil {
@@ -1696,6 +1730,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
 		pm := promptMR(mr)
 		pm.Context = s.reviewContext(mr, req.Dir)
+		pm.Focus = run.Notes
 		req.SessionName = fmt.Sprintf("mr-review !%d #%d", mr.IID, runID)
 		switch run.Kind {
 		case db.KindReviewQuick:
@@ -2407,6 +2442,21 @@ func (s *Service) Ask(runID int64, question string) (string, error) {
 		_ = s.DB.UpdateRun(runID, map[string]any{"session_id": result.SessionID})
 	}
 	return answer, nil
+}
+
+// maxFocusChars caps the review focus note: it is a short hint, not a second prompt.
+const maxFocusChars = 4000
+
+// SetReviewFocus stores what the next reviews of an MR should pay attention to ("" clears it).
+func (s *Service) SetReviewFocus(mrID int64, focus string) error {
+	if mr, _ := s.DB.GetMR(mrID); mr == nil {
+		return userErr("merge request #%d not found", mrID)
+	}
+	focus = strings.TrimSpace(focus)
+	if len([]rune(focus)) > maxFocusChars {
+		return userErr("слишком длинный текст: до %d символов", maxFocusChars)
+	}
+	return s.DB.SetMRReviewFocus(mrID, focus)
 }
 
 // SetFindingStatus records the developer's decision about a finding (open / false_positive / ignored / resolved).

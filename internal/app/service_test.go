@@ -462,9 +462,109 @@ func TestFailureAndRecover(t *testing.T) {
 	if !strings.Contains(run.Error, "timed out") {
 		t.Fatal(run.Error)
 	}
-	_, _ = svc.DB.CreateRun(db.Run{Kind: db.KindReviewFull, MRID: &mr.ID, Runner: "claude"})
+	// A run that was running dies with the process; one still waiting in the queue is kept and started again.
+	staleID, _ := svc.DB.CreateRun(db.Run{Kind: db.KindReviewFull, MRID: &mr.ID, Runner: "claude"})
+	_ = svc.DB.UpdateRun(staleID, map[string]any{"status": db.StatusRunning})
+	queuedID, _ := svc.DB.CreateRun(db.Run{Kind: db.KindReviewFull, MRID: &mr.ID, HeadSHA: "sha-1", Runner: "claude"})
 	if svc.Recover() != 1 {
 		t.Fatal("recover")
+	}
+	if status(svc, staleID) != db.StatusFailed || status(svc, queuedID) != db.StatusQueued {
+		t.Fatalf("after recover: running→%s queued→%s", status(svc, staleID), status(svc, queuedID))
+	}
+	fr.FailWith = ""
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	if svc.ResumeQueue() != 1 {
+		t.Fatal("resume queue")
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, queuedID) == db.StatusDone })
+}
+
+func TestReviewFocusGoesIntoPrompt(t *testing.T) {
+	svc, _, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	if err := svc.SetReviewFocus(mr.ID, "  миграции и обратная совместимость  "); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetReviewFocus(mr.ID, strings.Repeat("x", maxFocusChars+1)); err == nil {
+		t.Fatal("too long focus accepted")
+	}
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	runID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
+	run, _ := svc.DB.GetRun(runID)
+	if run.Notes != "миграции и обратная совместимость" {
+		t.Fatalf("run notes %q", run.Notes)
+	}
+	fr.Lock()
+	prompt := fr.Requests[len(fr.Requests)-1].Prompt
+	fr.Unlock()
+	if !strings.Contains(prompt, "Developer's focus") || !strings.Contains(prompt, "миграции и обратная совместимость") {
+		t.Fatalf("focus missing from prompt:\n%s", prompt)
+	}
+	// A sync from GitLab keeps the focus.
+	if again, _ := svc.RefreshMR(mr.ID); again.ReviewFocus != "миграции и обратная совместимость" {
+		t.Fatalf("focus lost on refresh: %q", again.ReviewFocus)
+	}
+}
+
+func TestFindingCodeAndPostToGitLab(t *testing.T) {
+	svc, gl, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	reviewID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, reviewID) == db.StatusDone })
+	findings, _ := svc.DB.ListFindings(reviewID) // [0] src/A.php:10 (added by the MR), [1] src/B.php without a line
+
+	code, err := svc.FindingCode(findings[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !code.InDiff || code.Lines[0].N != 2 || code.Lines[len(code.Lines)-1].N != 18 {
+		t.Fatalf("excerpt %+v", code)
+	}
+	for _, l := range code.Lines {
+		if l.Target != (l.N == 10) || l.Added != (l.N == 9 || l.N == 10) {
+			t.Fatalf("line marks %+v", l)
+		}
+	}
+
+	res, err := svc.PostFinding(findings[0].ID, "  edited text  ")
+	if err != nil || !res.OnLine || !strings.HasSuffix(res.URL, "#note_1001") {
+		t.Fatalf("post on line: %+v %v", res, err)
+	}
+	if gl.Discussions[0] != "edited text @src/A.php:10" {
+		t.Fatalf("discussion %q", gl.Discussions[0])
+	}
+	if _, err := svc.PostFinding(findings[0].ID, "again"); err == nil {
+		t.Fatal("posted twice")
+	}
+	if f, _ := svc.DB.GetFinding(findings[0].ID); f.GitLabNoteURL != res.URL {
+		t.Fatalf("note url %q", f.GitLabNoteURL)
+	}
+	// No line: a general MR comment naming the file.
+	if res, err := svc.PostFinding(findings[1].ID, "naming"); err != nil || res.OnLine || gl.Discussions[1] != "`src/B.php`\n\nnaming" {
+		t.Fatalf("general: %+v %v %q", res, err, gl.Discussions)
+	}
+	if _, err := svc.PostFinding(findings[1].ID, "   "); err == nil {
+		t.Fatal("empty body accepted")
+	}
+	if text := FindingComment(findings[0]); !strings.Contains(text, "**Null deref**") || !strings.Contains(text, "**Предложение:**\ns") {
+		t.Fatalf("default comment %q", text)
+	}
+}
+
+func TestPostFindingFallsBackWhenGitLabRejectsTheLine(t *testing.T) {
+	svc, gl, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	reviewID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, reviewID) == db.StatusDone })
+	findings, _ := svc.DB.ListFindings(reviewID)
+	gl.RejectPosition = true
+	res, err := svc.PostFinding(findings[0].ID, "text")
+	if err != nil || res.OnLine || gl.Discussions[0] != "`src/A.php:10`\n\ntext" {
+		t.Fatalf("%+v %v %q", res, err, gl.Discussions)
 	}
 }
 
@@ -1463,5 +1563,30 @@ func TestReviewWorktreeAndPrefetch(t *testing.T) {
 	req = fr.Requests[len(fr.Requests)-1]
 	if strings.Contains(req.Prompt, "```diff") || !strings.Contains(req.Prompt, "too large to inline") {
 		t.Fatal("large diff must be replaced by the file list")
+	}
+}
+
+// The background sync pulls MRs without the button and records when it ran.
+func TestAutoSyncPullsMRs(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { svc.RunAutoSync(ctx, time.Hour); close(done) }()
+	testutil.WaitFor(t, func() bool { at, _ := svc.AutoSyncState(); return !at.IsZero() })
+	cancel()
+	<-done
+	if _, msg := svc.AutoSyncState(); msg != "" {
+		t.Fatalf("sync error: %s", msg)
+	}
+	if list, _ := svc.DB.ListMRs(); len(list) != 1 || list[0].IID != 42 {
+		t.Fatalf("synced %+v", list)
+	}
+	before := svc.DataVersion(0)
+	svc.GitLab.(*testutil.FakeGitLab).MRs[42] = testutil.MRPayload(42, "sha-2")
+	if _, err := svc.SyncMRs(); err != nil {
+		t.Fatal(err)
+	}
+	if svc.DataVersion(0) == before {
+		t.Fatal("data version must change with a new head")
 	}
 }

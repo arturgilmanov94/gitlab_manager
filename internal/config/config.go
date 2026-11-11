@@ -57,6 +57,9 @@ type Settings struct {
 
 	BaseBranch     string
 	RunConcurrency int
+	// AutoSyncSec is how often (seconds) the running dashboard re-syncs MRs and issues from GitLab by itself
+	// (GITLAB_AUTO_SYNC_SEC, default 60; 0 = only by the button). Values below 15 are raised to 15.
+	AutoSyncSec int
 
 	// ReviewWorktree runs reviews in a read-only worktree at the MR head SHA (REVIEW_WORKTREE, default on).
 	ReviewWorktree bool
@@ -241,6 +244,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		GitLabIssueProjects:   splitList(get("GITLAB_ISSUE_PROJECTS")),
 		BaseBranch:            str("BASE_BRANCH", "develop"),
 		RunConcurrency:        num("RUN_CONCURRENCY", 4),
+		AutoSyncSec:           num("GITLAB_AUTO_SYNC_SEC", 60),
 		HighlightLabels:       ParseHighlightLabels(str("HIGHLIGHT_LABELS", DefaultHighlightLabels)),
 		TerminalCmd:           strings.TrimSpace(get("TERMINAL_CMD")),
 		StandSkill:            strings.TrimSpace(get("STAND_SKILL")),
@@ -251,6 +255,11 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 	}
 	if s.RunConcurrency < 1 {
 		s.RunConcurrency = 1
+	}
+	if s.AutoSyncSec < 0 {
+		s.AutoSyncSec = 0
+	} else if s.AutoSyncSec > 0 && s.AutoSyncSec < 15 {
+		s.AutoSyncSec = 15
 	}
 	if s.ClaudePermissions != "strict" && s.ClaudePermissions != "manual" {
 		s.ClaudePermissions = "auto"

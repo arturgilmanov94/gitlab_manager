@@ -332,6 +332,12 @@ func serve(settings *config.Settings, openBrowser bool) int {
 	janitorCtx, stopJanitor := context.WithCancel(context.Background())
 	defer stopJanitor()
 	go svc.RunJanitor(janitorCtx)
+	if n := svc.ResumeQueue(); n > 0 {
+		fmt.Printf("re-queued %d run(s) that were waiting for a free agent\n", n)
+	}
+	if settings.AutoSyncSec > 0 {
+		go svc.RunAutoSync(janitorCtx, time.Duration(settings.AutoSyncSec)*time.Second)
+	}
 	if settings.UsagePollMin > 0 {
 		svc.Usage = agentusage.New(time.Duration(settings.UsagePollMin) * time.Minute)
 		var names []string

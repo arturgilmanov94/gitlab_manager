@@ -39,7 +39,7 @@ h3 { font-size: 12px; font-weight: 600; margin: 18px 0 8px; color: var(--fg-2); 
 .pill.hot { background: var(--danger-soft); color: var(--danger); }
 .pill { background: var(--neutral-soft); color: var(--fg-2); border-radius: 10px; padding: 0 7px; font-size: 11px; font-weight: 600; }
 .nav-context { margin-left: auto; font-size: 12px; color: var(--fg-2); display: flex; gap: 14px; align-items: center; }
-.nav-context .chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 2px 10px; }
+.nav-context .chip { white-space: nowrap; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 2px 10px; }
 .nav-context .chip.warn { border-color: var(--warning); color: var(--warning); }
 .nav-context .chip.bad { border-color: var(--danger); color: var(--danger); }
 .nav-context .chip.attention { background: var(--warning-soft); border-color: var(--warning); color: #6b4a00; font-weight: 600; }
@@ -393,3 +393,34 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
   .table.list tbody tr { grid-template-columns: 1fr; }
   .table.list tbody td.actions-cell { grid-column: 1; grid-row: auto; flex-direction: row; justify-content: flex-start; }
 }
+
+/* MR page: review focus + visible actions */
+.review-box textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius); resize: vertical; min-height: 44px; background: var(--surface); color: var(--fg); }
+.review-box .focus-label { display: block; font-weight: 600; margin-bottom: 4px; }
+.review-box .focus-state { min-height: 16px; margin: 2px 0 8px; }
+.action-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.action-bar .action-sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
+.btn.danger, .btn-link.danger { color: var(--danger); }
+
+/* findings: code excerpt, inline actions, GitLab post editor */
+.code-snippet { margin: 8px 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface-2); }
+.code-snippet .snippet-head { padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.code-snippet .snippet { max-height: 320px; overflow: auto; font-size: 12px; line-height: 1.5; position: relative; }
+.code-snippet .cl { display: flex; white-space: pre; }
+.code-snippet .cl .ln { flex: 0 0 auto; min-width: 44px; padding: 0 8px; text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--border); }
+.code-snippet .cl .mk { flex: 0 0 auto; width: 16px; text-align: center; color: var(--success); user-select: none; }
+.code-snippet .cl .tx { flex: 1 1 auto; padding-right: 8px; }
+.code-snippet .cl.add { background: var(--success-soft); }
+.code-snippet .cl.target { background: var(--warning-soft); box-shadow: inset 3px 0 0 var(--warning); font-weight: 600; }
+.code-snippet .cl.add.target { background: #f3efc9; }
+.finding-actions { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; margin: 6px 0 2px; }
+.gl-post { display: inline-block; }
+.gl-post[open] { display: block; width: 100%; }
+.gl-post > summary { list-style: none; display: inline-flex; }
+.gl-post > summary::-webkit-details-marker { display: none; }
+.gl-post-body { margin-top: 6px; }
+.gl-post-body textarea { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; padding: 8px; border: 1px solid var(--border-strong); border-radius: var(--radius); resize: vertical; background: var(--surface); color: var(--fg); }
+.gl-post-body .inline { display: flex; gap: 8px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+
+/* live refresh: shown when data changed while the developer was busy on the page */
+.refresh-banner { position: fixed; left: 50%; transform: translateX(-50%); bottom: 20px; z-index: 90; background: var(--fg); color: var(--surface); border: 0; border-radius: 18px; padding: 8px 16px; font: inherit; font-size: 13px; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }

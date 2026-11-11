@@ -148,6 +148,10 @@ type Client interface {
 	JobTrace(ref Ref, jobID int64, tailLines int) (string, error)
 	MRDiffs(ref Ref) ([]FileDiff, error)
 	UnresolvedThreads(ref Ref) ([]Thread, error)
+	MRVersions(ref Ref) ([]Version, error)
+	MRVersionDiffs(ref Ref, versionID int64) ([]FileDiff, error)
+	RawFile(ref Ref, path, sha string) (string, error)
+	CreateDiscussion(ref Ref, body string, pos *Position) (int64, error)
 }
 
 // FileDiff is one changed file of an MR.

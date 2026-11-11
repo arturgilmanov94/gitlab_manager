@@ -17,6 +17,28 @@
       <b>{{.Title}}</b>
       {{md .Description $.Blob $.SHA}}
       {{if .Suggestion}}<details class="fix"><summary>Предлагаемый фикс</summary>{{md .Suggestion $.Blob $.SHA}}</details>{{end}}
+      {{if .File}}<div class="code-snippet" data-finding-code="{{.ID}}" hidden></div>{{end}}
+      <div class="finding-actions">
+        {{if .GitLabNoteURL}}<a class="badge badge-success ext tip" data-tip="Замечание отправлено в MR комментарием" href="{{.GitLabNoteURL}}" target="_blank" rel="noopener">в GitLab</a>
+        {{else if and $.MR (not $.Closed)}}<details class="gl-post">
+          <summary class="btn btn-sm tip" data-tip="Отправить замечание комментарием в MR — сначала можно отредактировать текст">Отправить в GitLab</summary>
+          <div class="gl-post-body">
+            <textarea rows="6" data-post-finding="{{.ID}}">{{findingComment .}}</textarea>
+            <div class="inline"><button class="btn btn-primary btn-sm" onclick="postFinding('{{.ID}}', this)">Отправить</button>
+              <span class="small muted">{{if and .File .Line}}ляжет на строку <span class="mono">{{.File}}:{{deref .Line}}</span> в diff MR; если строка вне изменений MR — общим комментарием с указанием файла и строки{{else}}общим комментарием в MR{{end}}. Markdown GitLab.</span></div>
+          </div>
+        </details>{{end}}
+        {{if and $.MR (eq .Status "open") (not $.Closed)}}
+          <button class="btn btn-sm btn-link tip" data-tip="{{kindTip "verify_finding"}}" onclick="startRun('/api/mrs/{{$.MR.ID}}/runs', 'verify_finding', this, {finding: '{{.ID}}'})">Проверить</button>
+        {{end}}
+        {{if eq .Status "open"}}
+          <button class="btn btn-sm btn-link tip" data-tip="Замечание неверно: агент ошибся. Не считается открытым и не попадёт в проверку изменений." onclick="post('/api/findings/{{.ID}}/status', {status: 'false_positive'}, this).then(r => r && reload())">Ложное</button>
+          <button class="btn btn-sm btn-link tip" data-tip="Замечание по делу, но исправлять не будем. Не считается открытым." onclick="post('/api/findings/{{.ID}}/status', {status: 'ignored'}, this).then(r => r && reload())">Игнорировать</button>
+          <button class="btn btn-sm btn-link tip" data-tip="Исправлено вручную, без проверки агентом." onclick="post('/api/findings/{{.ID}}/status', {status: 'resolved'}, this).then(r => r && reload())">Решено</button>
+        {{else if or (eq .Status "false_positive") (eq .Status "ignored") (eq .Status "resolved")}}
+          <button class="btn btn-sm btn-link" onclick="post('/api/findings/{{.ID}}/status', {status: 'open'}, this).then(r => r && reload())">Вернуть в открытые</button>
+        {{end}}
+      </div>
       {{if .CheckStatus}}<div class="small check check-{{.CheckStatus}}"><b>{{checkLabel .CheckStatus}}</b>{{if .CheckRunID}} · <a href="{{runPath "verify_finding" (deref .CheckRunID)}}">проверка #{{deref .CheckRunID}}</a>{{end}}{{if .VerifyNote}}<div class="check-note">{{md .VerifyNote $.Blob $.SHA}}</div>{{end}}</div>
       {{else if .VerifyNote}}<div class="small muted">проверка: {{.VerifyNote}}</div>{{end}}
     </td>

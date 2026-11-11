@@ -122,3 +122,17 @@ func TestParseDiffsAndThreads(t *testing.T) {
 		t.Fatalf("%+v", threads)
 	}
 }
+
+func TestNewFileLines(t *testing.T) {
+	diff := "@@ -8,3 +8,4 @@ func x\n ctx8\n-gone\n+new9\n+new10\n ctx\n@@ -40 +41,2 @@\n+n41\n c\n\\ No newline at end of file\n"
+	got := NewFileLines(diff)
+	want := map[int64]DiffLine{8: {OldLine: 8}, 9: {Added: true}, 10: {Added: true}, 11: {OldLine: 10}, 41: {Added: true}, 42: {OldLine: 40}}
+	if len(got) != len(want) {
+		t.Fatalf("%v", got)
+	}
+	for n, w := range want {
+		if got[n] != w {
+			t.Fatalf("line %d: %+v, want %+v", n, got[n], w)
+		}
+	}
+}

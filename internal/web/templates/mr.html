@@ -86,9 +86,35 @@
 
 {{if .Active}}
 <div class="progress-box" data-run-status="{{.Active.ID}}" data-status="{{.Active.Status}}" data-started="{{.Active.StartedAt}}" data-reload="1">
-  <div class="progress-head">{{template "status" .Active.Status}} <b>{{kindLabel .Active.Kind}}</b> · {{.Active.Runner}} · <span class="elapsed">—</span> · <a href="{{runPath .Active.Kind .Active.ID}}">открыть сессию</a></div>
+  <div class="progress-head">{{template "status" .Active.Status}} <b>{{kindLabel .Active.Kind}}</b> · {{.Active.Runner}} · <span class="elapsed">—</span> · <a href="{{runPath .Active.Kind .Active.ID}}">открыть сессию</a>
+    <button class="btn btn-sm btn-link danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Active.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button></div>
+  {{if eq .Active.Status "queued"}}<div class="small muted">Ждёт свободного агента: заняты {{.Base.Queue.Running}} из {{.Base.Queue.Capacity}}{{if gt .QueuePos 0}}, перед ним в очереди {{.QueuePos}}{{else}}, он следующий{{end}}. Запуск стартует сам и не потеряется при перезапуске dashboard.</div>{{end}}
+  {{if .Active.Notes}}{{if .Active.IsReview}}<div class="small"><b>На что обратить внимание:</b> {{.Active.Notes}}</div>{{end}}{{end}}
   <div class="progress"><div class="progress-bar indeterminate"></div></div>
 </div>
+{{end}}
+
+{{if not .Closed}}
+<section class="card review-box" id="review">
+  <div class="card-head"><h2>Ревью и действия</h2>{{if .Active}}<span class="small muted">пока идёт запуск, новые по этому MR недоступны — остановите текущий или дождитесь его</span>{{end}}</div>
+  <label class="focus-label" for="review-focus">На что обратить внимание <span class="muted small">— уйдёт в промпт ревью; сохраняется для этого MR и для запусков из списка</span></label>
+  <textarea id="review-focus" rows="2" maxlength="4000" data-mr="{{.MR.ID}}" data-saved="{{.MR.ReviewFocus}}" placeholder="Например: миграции и обратная совместимость API; не придираться к стилю">{{.MR.ReviewFocus}}</textarea>
+  <div class="small muted focus-state" id="focus-state">{{if .MR.ReviewFocus}}сохранено{{end}}</div>
+  <div class="action-bar">
+    {{if .Active}}
+      <span class="disabled-wrap tip" data-tip="Сначала дождитесь или остановите текущий запуск"><button class="btn btn-primary" disabled>Полное ревью</button></span>
+    {{else}}
+      <button class="btn {{if not .Latest}}btn-primary {{end}}tip" data-tip="{{kindTip "full"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'full', this)">Полное ревью{{if .Latest}} заново{{end}}</button>
+      <button class="btn tip" data-tip="{{kindTip "quick"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'quick', this)">Быстрое ревью</button>
+      {{if .Latest}}{{if .Stale}}<button class="btn btn-primary tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'verify', this)">Проверить изменения</button>{{else}}<span class="disabled-wrap tip" data-tip="Нет новых коммитов после последнего ревью"><button class="btn" disabled>Проверить изменения</button></span>{{end}}{{end}}
+    {{end}}
+    <span class="action-sep"></span>
+    {{if .IsMine}}{{if and .MR.Unresolved (not .Active)}}<a class="btn tip" data-tip="{{kindTip "fix"}}" href="#fix">Исправить замечания ревьюеров ({{.MR.Unresolved}})</a>{{else}}<span class="disabled-wrap tip" data-tip="{{if .Active}}Идёт запуск{{else}}Нет нерешённых обсуждений ревьюеров{{end}}"><button class="btn" disabled>Исправить замечания ревьюеров</button></span>{{end}}{{end}}
+    {{if eq .MR.PipelineStatus "failed"}}<a class="btn tip" data-tip="{{kindTip "ci_analyze"}}" href="#ci">CI упал: разобрать / исправить</a>{{end}}
+    {{if or .StandSkill .StandTestSkill}}{{if .Active}}<span class="disabled-wrap tip" data-tip="Идёт запуск"><button class="btn" disabled>Проверить на стенде</button></span>{{else}}<a class="btn tip" data-tip="{{kindTip "stand"}}" href="#stand">Проверить на стенде</a>{{end}}{{end}}
+    <button class="btn btn-link tip" data-tip="{{kindTip "refresh"}}" onclick="post('/api/mrs/{{.MR.ID}}/refresh', {}, this).then(r => r && reload())">Обновить из GitLab</button>
+  </div>
+</section>
 {{end}}
 
 {{if and .IsMine .MR.Unresolved (not .Active) (not .Closed)}}

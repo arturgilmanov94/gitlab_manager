@@ -239,6 +239,7 @@ type MR struct {
 	Title, SourceBranch       string
 	TargetBranch, HeadSHA     string
 	Context                   *MRContext // prefetched by the dashboard (nil = the agent fetches everything itself)
+	Focus                     string     // what the developer asked this review to pay special attention to ("" = nothing)
 }
 
 // MRContext is what the dashboard prefetched for a review so the agent skips the first round of tool calls.
@@ -347,7 +348,18 @@ func mrBlock(mr MR) string {
 		head = "(unknown, use current head)"
 	}
 	return fmt.Sprintf("Merge request: %s\nProject path: %s (GitLab host: %s)\nMR IID: %d\nTitle: %s\nSource branch: %s -> target branch: %s\nHead SHA to review: %s\n",
-		mr.WebURL, mr.ProjectPath, mr.Host, mr.IID, mr.Title, mr.SourceBranch, mr.TargetBranch, head) + contextBlock(mr.Context, head)
+		mr.WebURL, mr.ProjectPath, mr.Host, mr.IID, mr.Title, mr.SourceBranch, mr.TargetBranch, head) + contextBlock(mr.Context, head) + focusBlock(mr.Focus)
+}
+
+// focusBlock is the developer's note on what this review should look at first. It narrows the attention, it
+// does not narrow the review: real problems elsewhere are still reported.
+func focusBlock(focus string) string {
+	focus = strings.TrimSpace(focus)
+	if focus == "" {
+		return ""
+	}
+	return "\nDeveloper's focus for this review (check these points first and say explicitly in the summary what you found " +
+		"about each of them; still report every other real problem):\n<<<FOCUS\n" + focus + "\nFOCUS>>>\n"
 }
 
 // FullReview builds the full review prompt.

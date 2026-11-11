@@ -258,11 +258,116 @@
     const restore = paintQueued(button);
     hold(button);
     const body = Object.assign({ kind, runner: selectedRunner(), continue_run: context.value }, extra || {});
+    const focus = document.getElementById('review-focus');
+    if (focus && ['quick', 'full', 'verify'].includes(kind)) body.focus = focus.value;
     const data = await call('POST', url, body, button);
     if (data && data.redirect) { flash(startedLabels[kind] || 'Запуск поставлен в очередь', true); setTimeout(reload, 500); return; }
     restore();
     release(button);
   };
+
+  // ---- «На что обратить внимание» on the MR page: saved on the MR as you type (debounced) and on leaving the field.
+  (function reviewFocus() {
+    const box = document.getElementById('review-focus');
+    if (!box) return;
+    const state = document.getElementById('focus-state');
+    let timer = null;
+    const save = async () => {
+      clearTimeout(timer);
+      if (box.value.trim() === (box.dataset.saved || '').trim()) return;
+      if (state) state.textContent = 'сохраняю…';
+      const data = await call('POST', `/api/mrs/${box.dataset.mr}/focus`, { focus: box.value });
+      if (data) { box.dataset.saved = box.value.trim(); if (state) state.textContent = box.value.trim() ? 'сохранено' : 'очищено'; }
+      else if (state) state.textContent = 'не сохранено';
+    };
+    box.addEventListener('input', () => { if (state) state.textContent = 'изменено'; clearTimeout(timer); timer = setTimeout(save, 1200); });
+    box.addEventListener('blur', save);
+  })();
+  const focusDirty = () => { const box = document.getElementById('review-focus'); return !!box && box.value.trim() !== (box.dataset.saved || '').trim(); };
+
+  // ---- findings: «Отправить в GitLab» with the edited text
+  window.postFinding = async function (id, button) {
+    const area = document.querySelector(`textarea[data-post-finding="${id}"]`);
+    if (!area || !area.value.trim()) { flash('Пустой комментарий', false); return; }
+    hold(button);
+    const data = await call('POST', `/api/findings/${id}/gitlab`, { body: area.value }, button);
+    if (!data) { release(button); return; }
+    flash(data.on_line ? 'Комментарий добавлен на строку в diff MR' : 'Комментарий добавлен в MR (строка вне diff — общим комментарием)', true);
+    area.dataset.sent = '1';
+    setTimeout(reload, 900);
+  };
+
+  // ---- findings: the code around each finding (lines the MR changed are marked), loaded after the page
+  (function findingCode() {
+    const boxes = Array.from(document.querySelectorAll('[data-finding-code]'));
+    if (!boxes.length) return;
+    const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const render = (box, code) => {
+      if (!code || !code.Lines || !code.Lines.length) return;
+      const rows = code.Lines.map((l) => `<div class="cl${l.Added ? ' add' : ''}${l.Target ? ' target' : ''}"><span class="ln">${l.N}</span><span class="mk">${l.Added ? '+' : ' '}</span><span class="tx">${esc(l.Text) || ' '}</span></div>`).join('');
+      const head = `<div class="snippet-head small muted"><span class="mono">${esc(code.File)}${code.Line ? ':' + code.Line : ''}</span> · коммит <span class="mono">${esc((code.SHA || '').slice(0, 8))}</span>` +
+        (code.InDiff ? ' · строка в изменениях MR' : (code.Line ? ' · строка вне изменений MR' : '')) + (code.Note ? ' · ' + esc(code.Note) : '') + '</div>';
+      box.innerHTML = head + `<div class="snippet mono">${rows}</div>`;
+      box.hidden = false;
+      const target = box.querySelector('.cl.target');
+      const scroller = box.querySelector('.snippet');
+      if (target && scroller) scroller.scrollTop = Math.max(0, target.offsetTop - scroller.clientHeight / 2);
+    };
+    let next = 0;
+    const worker = async () => {
+      while (next < boxes.length) {
+        const box = boxes[next++];
+        try {
+          const res = await fetch(`/api/findings/${box.dataset.findingCode}/code`);
+          const data = await res.json();
+          if (res.ok && data.ok !== false) render(box, data.code);
+          else { box.innerHTML = `<div class="small muted">код недоступен: ${esc(data.error || res.statusText)}</div>`; box.hidden = false; }
+        } catch (e) { /* server restarting */ }
+      }
+    };
+    for (let i = 0; i < 3; i++) worker();
+  })();
+
+  // ---- live refresh: the server syncs GitLab in the background; a page reloads itself once what it shows changed,
+  // but never under the developer's hands (typing, an open menu or editor, selected text, picked rows).
+  (function liveRefresh() {
+    const body = document.body;
+    if (!body.dataset.autorefresh) return;
+    const initial = body.dataset.version;
+    const query = body.dataset.scope ? `?scope=${body.dataset.scope}&id=${body.dataset.scopeId}` : '';
+    let banner = null;
+    const busyNow = () => {
+      const el = document.activeElement;
+      if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || (el.tagName === 'INPUT' && el.type !== 'checkbox'))) return true;
+      if (document.querySelector('details.menu[open], details.gl-post[open], .pick:checked, button.busy')) return true;
+      if (focusDirty()) return true;
+      const sel = window.getSelection && window.getSelection();
+      return !!(sel && String(sel).trim());
+    };
+    const showBanner = () => {
+      if (banner) return;
+      banner = document.createElement('button');
+      banner.className = 'refresh-banner';
+      banner.textContent = 'Данные в GitLab обновились — обновить страницу';
+      banner.addEventListener('click', () => reload());
+      document.body.appendChild(banner);
+    };
+    let changed = false;
+    const tick = async () => {
+      if (!changed && !document.hidden) {
+        try {
+          const data = await (await fetch('/api/version' + query)).json();
+          if (data.version && data.version !== initial) changed = true;
+        } catch (e) { /* server restarting */ }
+      }
+      if (changed) {
+        if (!busyNow() && !document.hidden) { reload(); return; }
+        showBanner();
+      }
+      setTimeout(tick, changed ? 3000 : 15000);
+    };
+    setTimeout(tick, 15000);
+  })();
 
   // ---- list filters: text input (input[data-filter="#table"]) plus facet chips (.filters[data-filter-target="#table"]).
   // Rows carry data-<facet> attributes (space separated values); a chip's data-value may list several values.
