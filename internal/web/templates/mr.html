@@ -79,6 +79,7 @@
   <div class="status-block tone-neutral">
     <div class="label">Агент для запусков</div>
     <div class="value">{{template "runner-picker" .Base.Runners}}</div>
+    {{template "offline-note" .Base}}
     {{if not .Closed}}{{template "context-picker" (dict "Sessions" .Sessions "Kinds" "quick full verify verify_finding")}}{{end}}
     <div class="detail">{{if .Base.Skill}}skill ревью проекта: <span class="mono">{{.Base.Skill.Identifier}}</span>{{else}}review-skill проекта не найден, работают правила CLAUDE.md{{end}} · <a href="/doctor#skills">все действия</a></div>
   </div>

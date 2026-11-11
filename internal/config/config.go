@@ -66,6 +66,8 @@ type Settings struct {
 	// AutoSyncSec is how often (seconds) the running dashboard re-syncs MRs and issues from GitLab by itself
 	// (GITLAB_AUTO_SYNC_SEC, default 60; 0 = only by the button). Values below 15 are raised to 15.
 	AutoSyncSec int
+	// GitLabReachCheck dials the git and API hosts before syncs and for the header chip (GITLAB_REACH_CHECK, default on).
+	GitLabReachCheck bool
 
 	// ReviewWorktree runs reviews in a read-only worktree at the MR head SHA (REVIEW_WORKTREE, default on).
 	ReviewWorktree bool
@@ -280,6 +282,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		BaseBranch:            str("BASE_BRANCH", "develop"),
 		RunConcurrency:        num("RUN_CONCURRENCY", 4),
 		AutoSyncSec:           num("GITLAB_AUTO_SYNC_SEC", 60),
+		GitLabReachCheck:      boolean("GITLAB_REACH_CHECK", true),
 		HighlightLabels:       ParseHighlightLabels(str("HIGHLIGHT_LABELS", DefaultHighlightLabels)),
 		TerminalCmd:           strings.TrimSpace(get("TERMINAL_CMD")),
 		StandSkill:            strings.TrimSpace(get("STAND_SKILL")),

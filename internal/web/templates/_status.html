@@ -54,3 +54,6 @@
 <span class="usage" data-usage hidden></span>
 </span>
 {{end}}
+
+{{/* Warning next to the launch buttons while GitLab does not answer. . is the pageBase. */}}
+{{define "offline-note"}}{{if .Offline}}<div class="alert alert-warning offline-note tip" data-offline data-tip="Проверка TCP до GitLab не прошла: {{.Offline}}">⚠ GitLab недоступен — включён ли VPN? Новый код не скачается: ревью нового коммита не начнётся, реализация стартует от локальной копии ветки.</div>{{end}}{{end}}

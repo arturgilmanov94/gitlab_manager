@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"mr-review/internal/usage"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1144,5 +1145,32 @@ func TestCrossSiteAndForeignHostRefused(t *testing.T) {
 	}
 	if c := do("POST", "localhost:8765", nil); c == 403 {
 		t.Fatal("curl-like POST refused")
+	}
+}
+
+// GitLab does not answer (VPN off): the header says so and the MR page warns next to the launch buttons.
+func TestOfflineChipAndLaunchWarning(t *testing.T) {
+	ts, svc, _ := newServer(t)
+	// The API host is a local port nobody listens on (set before the project is first resolved and cached).
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.Settings.GitLabHost = l.Addr().String()
+	l.Close()
+	mr, err := svc.AddMR("!42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, body := get(t, ts.URL+"/"); strings.Contains(body, "data-offline") {
+		t.Fatal("no offline chip while the check is off")
+	}
+	svc.Settings.GitLabReachCheck = true
+	if svc.CheckGitLab() == "" {
+		t.Fatal("closed port must be offline")
+	}
+	_, body := get(t, ts.URL+mrPath(mr.ID))
+	if !strings.Contains(body, "GitLab недоступен — VPN?") || !strings.Contains(body, "включён ли VPN? Новый код не скачается") {
+		t.Fatal("offline chip and launch warning expected")
 	}
 }

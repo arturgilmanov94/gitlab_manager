@@ -41,6 +41,13 @@ func (s *Service) autoSyncOnce() {
 	if host, _ := s.DefaultProject(); host == "" {
 		return
 	}
+	// VPN off: do not wait for glab to time out on every MR; the header shows the state.
+	if offline := s.CheckGitLab(); offline != "" {
+		s.mu.Lock()
+		s.lastSync = syncStamp{At: time.Now(), Error: OfflineHint + " (" + offline + ")"}
+		s.mu.Unlock()
+		return
+	}
 	msg := ""
 	if _, err := s.SyncMRs(); err != nil {
 		msg = "MR: " + err.Error()

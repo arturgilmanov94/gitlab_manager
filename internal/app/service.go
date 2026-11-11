@@ -49,6 +49,7 @@ type Service struct {
 	snippets  map[string][]string     // file lines per "ref sha path" (FindingCode)
 	versions  map[string]*diffVersion // MR diff version per "ref sha" (FindingCode, PostFinding)
 	lastSync  syncStamp               // last background sync (AutoSyncState)
+	reach     reachState              // is GitLab reachable (CheckGitLab)
 	mu        sync.Mutex
 	cancels   map[int64]context.CancelFunc
 	changes   map[string]gitlab.Changes       // compare results per "ref from..to" (Changes)

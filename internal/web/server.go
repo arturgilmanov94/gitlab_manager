@@ -64,6 +64,7 @@ type pageBase struct {
 	Queue       app.QueueInfo
 	AutoSyncSec int
 	SyncError   string // last background sync error ("" = fine)
+	Offline     string // why GitLab does not answer ("" = reachable)
 }
 
 // New builds the HTTP server.
@@ -433,6 +434,7 @@ func (s *Server) base(nav, title string) pageBase {
 		Queue:       s.svc.Queue(),
 		AutoSyncSec: s.svc.Settings.AutoSyncSec,
 		SyncError:   syncErr,
+		Offline:     s.svc.GitLabOffline(),
 	}
 }
 

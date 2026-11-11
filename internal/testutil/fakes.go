@@ -466,7 +466,7 @@ func Settings(t *testing.T) (*config.Settings, string) {
 	project := GitRepo(t, filepath.Join(tmp, "project"))
 	dash := filepath.Join(tmp, "dash")
 	_ = os.MkdirAll(dash, 0o755)
-	s := config.Load(dash, map[string]string{"PROJECT_ROOT": project, "RUN_TIMEOUT_SEC": "30", "REVIEW_WORKTREE": "0", "GITLAB_HOST": "gitlab.example.com", "GITLAB_PROJECT": "group/sub/project"}, false)
+	s := config.Load(dash, map[string]string{"PROJECT_ROOT": project, "RUN_TIMEOUT_SEC": "30", "REVIEW_WORKTREE": "0", "GITLAB_REACH_CHECK": "0", "GITLAB_HOST": "gitlab.example.com", "GITLAB_PROJECT": "group/sub/project"}, false)
 	if s.ProjectRoot == "" {
 		t.Fatalf("project root not resolved: %s", s.ProjectRootError)
 	}
