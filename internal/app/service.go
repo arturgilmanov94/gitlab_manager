@@ -56,6 +56,7 @@ type Service struct {
 	jobs      map[string][]prompts.FailedJob  // failed jobs with log tails per "ref pipeline" (FailedJobsFor)
 	contexts  map[string]*prompts.MRContext   // prefetched diff/discussions per "ref sha" (reviewContext)
 	decisions map[int64]chan approvalDecision // pending approval id → channel the run goroutine waits on
+	runRules  map[int64]map[string]bool       // «allow such calls until the end of the run»: run id → SimilarKey
 	username  string
 	userOnce  sync.Once
 	project   *[2]string
@@ -1728,7 +1729,6 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		MaxBudgetUSD: s.Settings.ClaudeMaxBudgetUSD,
 		Timeout:      time.Duration(s.Settings.RunTimeoutSec) * time.Second,
 		Log:          log,
-		Permission:   s.permissionFunc(runID, logln),
 		Progress: func(note string) {
 			_ = s.DB.UpdateRun(runID, map[string]any{"progress": note})
 		},
@@ -1752,6 +1752,9 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 				"cache_read_tokens": run.CacheReadTokens + u.CacheRead, "cache_write_tokens": run.CacheWriteTokens + u.CacheWrite})
 		},
 	}
+	// The mode is decided below per run kind; the permission callback reads it when the agent asks.
+	req.Permission = s.permissionFunc(runID, logln, func() runner.Mode { return req.Mode })
+	defer s.forgetRunRules(runID)
 	if sk != nil && sk.Kind == skill.KindAgent {
 		req.Agent = sk.Name
 	}
@@ -2106,8 +2109,12 @@ func (s *Service) policy() runner.Policy {
 
 // permissionFunc records the agent's permission prompt, switches the run to "waiting" and blocks until the
 // developer answers in the dashboard, the run is cancelled or the approval timeout passes (then: denied).
-func (s *Service) permissionFunc(runID int64, logln func(string)) runner.PermissionFunc {
+func (s *Service) permissionFunc(runID int64, logln func(string), mode func() runner.Mode) runner.PermissionFunc {
 	return func(ctx context.Context, req runner.PermissionRequest) runner.PermissionDecision {
+		if why := s.autoAllow(runID, mode(), req); why != "" {
+			logln(fmt.Sprintf("allowed without asking (%s): %s %s", why, req.ToolName, req.Description))
+			return runner.PermissionDecision{Allow: true}
+		}
 		approvalID, err := s.DB.CreateApproval(db.Approval{RunID: runID, ToolName: req.ToolName, Description: req.Description,
 			InputJSON: string(req.Input), SuggestionsJSON: string(req.Suggestions), Reason: req.Reason})
 		if err != nil {
@@ -2144,8 +2151,44 @@ func (s *Service) permissionFunc(runID int64, logln func(string)) runner.Permiss
 	}
 }
 
+// autoAllow decides a permission prompt without the developer: a read-only run may run read-only shell commands
+// (runner.ReadOnlyCommand), and any run may repeat calls of a kind the developer allowed until the end of the
+// run. It returns why the call is allowed, "" = ask the developer.
+func (s *Service) autoAllow(runID int64, mode runner.Mode, req runner.PermissionRequest) string {
+	if req.ToolName == "Bash" && mode == runner.ModeReadOnly && runner.ReadOnlyCommand(bashCommand(req.Input)) {
+		return "read-only command"
+	}
+	rule := runner.SimilarKey(req.ToolName, req.Input)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rule != "" && s.runRules[runID][rule] {
+		return "rule «" + rule + "» for this run"
+	}
+	return ""
+}
+
+// forgetRunRules drops the «until the end of the run» rules when the run's stage ends.
+func (s *Service) forgetRunRules(runID int64) {
+	s.mu.Lock()
+	delete(s.runRules, runID)
+	s.mu.Unlock()
+}
+
+// bashCommand is the command of a Bash tool input ("" for other inputs).
+func bashCommand(input []byte) string {
+	var in struct {
+		Command string `json:"command"`
+	}
+	_ = json.Unmarshal(input, &in)
+	return in.Command
+}
+
+// SimilarRule names the group of calls «allow such until the end of the run» would cover ("" = not offered).
+func SimilarRule(a db.Approval) string { return runner.SimilarKey(a.ToolName, []byte(a.InputJSON)) }
+
 // Decide answers a pending permission prompt: decision is allow | allow_always (allow and apply the agent's
-// suggested rules for the rest of the run) | deny (note is passed to the agent).
+// suggested rules for the rest of the run) | allow_run (allow this and calls of the same kind until the run ends)
+// | deny (note is passed to the agent).
 func (s *Service) Decide(approvalID int64, decision, note string) error {
 	approval, _ := s.DB.GetApproval(approvalID)
 	if approval == nil {
@@ -2156,23 +2199,39 @@ func (s *Service) Decide(approvalID int64, decision, note string) error {
 	}
 	var d approvalDecision
 	status := db.ApprovalDenied
+	rule := ""
 	switch decision {
 	case "allow":
 		d.allow, status = true, db.ApprovalAllowed
 	case "allow_always":
 		d.allow, d.remember, status = true, approval.SuggestionsJSON != "", db.ApprovalAllowed
+	case "allow_run":
+		if rule = SimilarRule(*approval); rule == "" {
+			return userErr("such calls cannot be allowed as a group: answer this one")
+		}
+		d.allow, status, d.note = true, db.ApprovalAllowed, "и такие («"+rule+"») до конца запуска"
 	case "deny":
 		d.note = strings.TrimSpace(note)
 	default:
-		return userErr("decision must be allow, allow_always or deny")
+		return userErr("decision must be allow, allow_always, allow_run or deny")
 	}
 	s.mu.Lock()
 	ch := s.decisions[approvalID]
+	if ch != nil && rule != "" {
+		if s.runRules == nil {
+			s.runRules = map[int64]map[string]bool{}
+		}
+		if s.runRules[approval.RunID] == nil {
+			s.runRules[approval.RunID] = map[string]bool{}
+		}
+		s.runRules[approval.RunID][rule] = true
+	}
 	s.mu.Unlock()
 	if ch == nil {
 		_ = s.DB.DecideApproval(approvalID, db.ApprovalExpired, false, "the run is no longer waiting")
 		return userErr("the run is no longer waiting for this answer (dashboard restarted or run stopped)")
 	}
+	// The note of an allowed prompt only shows in the approvals table: the runner passes messages on denials only.
 	if err := s.DB.DecideApproval(approvalID, status, d.remember, d.note); err != nil {
 		return err
 	}
@@ -3002,4 +3061,12 @@ func contains(list []string, v string) bool {
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// BashCommand is the shell command of a Bash permission prompt ("" for other tools), for showing it as text.
+func BashCommand(a db.Approval) string {
+	if a.ToolName != "Bash" {
+		return ""
+	}
+	return bashCommand([]byte(a.InputJSON))
 }

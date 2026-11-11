@@ -2,6 +2,7 @@
 package web
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -111,8 +112,13 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 			if json.Unmarshal([]byte(s), &v) != nil {
 				return s
 			}
-			b, _ := json.MarshalIndent(v, "", "  ")
-			return string(b)
+			// No HTML escaping in the JSON itself (&& stays &&); the template escapes the text for the page.
+			var buf bytes.Buffer
+			enc := json.NewEncoder(&buf)
+			enc.SetEscapeHTML(false)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(v)
+			return strings.TrimRight(buf.String(), "\n")
 		},
 		"lower":           strings.ToLower,
 		"divCents":        func(cents int64) float64 { return float64(cents) / 100 },
@@ -1046,7 +1052,12 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 	data["LogTail"] = tail(run.LogPath, 12000)
 	data["Approvals"], _ = s.svc.DB.ListApprovals(run.ID)
 	if run.Status == db.StatusWaiting {
-		data["Pending"], _ = s.svc.DB.PendingApproval(run.ID)
+		pending, _ := s.svc.DB.PendingApproval(run.ID)
+		data["Pending"] = pending
+		if pending != nil {
+			data["PendingCommand"] = app.BashCommand(*pending)
+			data["PendingRule"] = app.SimilarRule(*pending)
+		}
 		data["Questions"], _ = s.svc.DB.PendingQuestions(run.ID)
 	}
 	if all, _ := s.svc.DB.ListQuestions(run.ID); len(all) > 0 {
@@ -1401,7 +1412,7 @@ func kindTip(kind string) string {
 	case "plan-file":
 		return "Сохранить план как markdown-файл в каталог планов проекта (.claude/plans), чтобы работать с ним из терминала или IDE."
 	case "stop":
-		return "Остановить агента. Частичный результат не сохраняется; можно запустить снова."
+		return "Остановить агента. Сессия агента и потраченные токены сохраняются: работу можно продолжить в новом запуске или запустить заново."
 	case "remove":
 		return "Убрать MR из основного списка в «Историю» с пометкой «скрыт вами». Запуски сохраняются, вернуть можно оттуда. В GitLab ничего не меняется."
 	case "restore":

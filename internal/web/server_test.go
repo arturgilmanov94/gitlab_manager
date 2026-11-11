@@ -1174,3 +1174,25 @@ func TestOfflineChipAndLaunchWarning(t *testing.T) {
 		t.Fatal("offline chip and launch warning expected")
 	}
 }
+
+// A Bash prompt shows the command as text (&& not escaped) and offers «Разрешать такие до конца запуска».
+func TestBashPromptShowsCommand(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	mr, _ := svc.AddMR("!42")
+	input, _ := json.Marshal(map[string]string{"command": "make build && make test"})
+	fr.Ask = []runner.PermissionRequest{{ToolName: "Bash", Description: "build", Input: input}}
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	id, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(id); return r.Status == db.StatusWaiting })
+	_, body := get(t, ts.URL+fmt.Sprintf("/run/%d", id))
+	box := body[strings.Index(body, "approval-box"):]
+	box = box[:strings.Index(box, "deny-note")]
+	if !strings.Contains(box, `<pre class="call mono" data-command>make build &amp;&amp; make test</pre>`) || strings.Contains(box, `\`+"u0026") {
+		t.Fatalf("command must be shown as text: %s", box)
+	}
+	if strings.Contains(body, "allow_run") {
+		t.Fatal("compound commands are not offered as a group")
+	}
+	pending, _ := svc.DB.PendingApproval(id)
+	_ = svc.Decide(pending.ID, "allow", "")
+}

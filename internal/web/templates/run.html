@@ -71,10 +71,13 @@
   <h2>⚠ Нужен ваш ответ: агент просит разрешение</h2>
   <div>Инструмент <b>{{.Pending.ToolName}}</b>{{if .Pending.Description}} — <span class="mono">{{.Pending.Description}}</span>{{end}}</div>
   {{if .Pending.Reason}}<div class="small secondary">Почему спрашивает: {{.Pending.Reason}}</div>{{end}}
-  <div class="call">{{prettyJSON .Pending.InputJSON}}</div>
+  {{if .PendingCommand}}<pre class="call mono" data-command>{{.PendingCommand}}</pre>
+  <details class="section"><summary>Полный вызов (JSON)</summary><div class="call">{{prettyJSON .Pending.InputJSON}}</div></details>
+  {{else}}<div class="call">{{prettyJSON .Pending.InputJSON}}</div>{{end}}
   <div class="field"><label for="deny-note">Комментарий агенту</label><div style="flex:1"><textarea id="deny-note" rows="2" placeholder="Необязательно. Передаётся агенту при отказе: что сделать вместо этого."></textarea></div></div>
   <div class="actions">
     <button class="btn btn-primary tip" data-tip="{{kindTip "allow"}}" onclick="decide({{.Pending.ID}}, 'allow', this)">Разрешить</button>
+    {{if .PendingRule}}<button class="btn tip" data-tip="Разрешить этот вызов и все вызовы вида «{{.PendingRule}}» до конца этого запуска, не спрашивая. Правило живёт только в dashboard и пропадает, когда запуск закончится." onclick="decide({{.Pending.ID}}, 'allow_run', this)">Разрешать такие до конца запуска <span class="mono small">({{.PendingRule}})</span></button>{{end}}
     {{if .Pending.SuggestionsJSON}}<button class="btn tip" data-tip="{{kindTip "allow_always"}}" onclick="decide({{.Pending.ID}}, 'allow_always', this)">Разрешить и не спрашивать в этой сессии</button>{{end}}
     <button class="btn btn-danger tip" data-tip="{{kindTip "deny"}}" onclick="decide({{.Pending.ID}}, 'deny', this)">Отклонить</button>
     <span class="small muted">Без ответа запрос истечёт и будет считаться отклонённым.</span>

@@ -453,10 +453,11 @@ func (s *streamSession) handleControlRequest(ctx context.Context, event map[stri
 		s.send(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "error", "request_id": requestID, "error": "not supported by mr-review"}})
 		return
 	}
-	input, _ := json.Marshal(request["input"])
+	// Plain JSON (no \u0026 for &): the developer reads the command as it will run.
+	input := MarshalPlain(request["input"])
 	var suggestions json.RawMessage
 	if request["permission_suggestions"] != nil {
-		suggestions, _ = json.Marshal(request["permission_suggestions"])
+		suggestions = MarshalPlain(request["permission_suggestions"])
 	}
 	permission := PermissionRequest{
 		ToolName:    str(request["tool_name"]),
