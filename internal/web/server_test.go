@@ -1069,6 +1069,7 @@ func TestRemoteAccessNeedsKey(t *testing.T) {
 	do := func(target, remote, cookie string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("GET", target, nil)
 		r.RemoteAddr = remote
+		r.Host = "192.168.10.17:8765" // the browser addresses the dashboard by its IP
 		if cookie != "" {
 			r.AddCookie(&http.Cookie{Name: accessCookie, Value: cookie})
 		}
@@ -1110,5 +1111,38 @@ func TestPhonePageWhenRemoteAccessIsOff(t *testing.T) {
 	ts, _, _ := newServer(t)
 	if code, body := get(t, ts.URL+"/phone"); code != 200 || !strings.Contains(body, "REMOTE_ACCESS=1") {
 		t.Fatalf("%d", code)
+	}
+}
+
+// Another web site must not drive the dashboard through the browser (CSRF), nor reach it by a foreign host name
+// (DNS rebinding); the dashboard's own pages and curl keep working.
+func TestCrossSiteAndForeignHostRefused(t *testing.T) {
+	ts, _, _ := newServer(t)
+	h := ts.Config.Handler
+	do := func(method, host string, headers map[string]string) int {
+		r := httptest.NewRequest(method, "/api/mrs/sync", strings.NewReader(`{}`))
+		r.Host = host
+		r.RemoteAddr = "127.0.0.1:5000"
+		for k, v := range headers {
+			r.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+	if c := do("POST", "127.0.0.1:8765", map[string]string{"Origin": "https://evil.example", "Content-Type": "text/plain"}); c != 403 {
+		t.Fatalf("cross-site POST: %d", c)
+	}
+	if c := do("POST", "127.0.0.1:8765", map[string]string{"Sec-Fetch-Site": "cross-site"}); c != 403 {
+		t.Fatalf("sec-fetch cross-site: %d", c)
+	}
+	if c := do("GET", "evil.example:8765", nil); c != 403 {
+		t.Fatalf("rebinding host: %d", c)
+	}
+	if c := do("POST", "127.0.0.1:8765", map[string]string{"Origin": "http://127.0.0.1:8765", "Sec-Fetch-Site": "same-origin"}); c == 403 {
+		t.Fatal("same-origin POST refused")
+	}
+	if c := do("POST", "localhost:8765", nil); c == 403 {
+		t.Fatal("curl-like POST refused")
 	}
 }

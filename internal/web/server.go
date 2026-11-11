@@ -1031,7 +1031,14 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	data["Timeline"] = s.svc.DB.TimelineFor(run.ID)
+	timeline := s.svc.DB.TimelineFor(run.ID)
+	if !run.Active() {
+		// A finished run has no "current" step: its last tool call (often the raw result JSON) is not news.
+		for i := range timeline {
+			timeline[i].Current = false
+		}
+	}
+	data["Timeline"] = timeline
 	data["Messages"], _ = s.svc.DB.ListMessages(run.ID)
 	data["LogTail"] = tail(run.LogPath, 12000)
 	data["Approvals"], _ = s.svc.DB.ListApprovals(run.ID)

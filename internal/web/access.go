@@ -60,9 +60,43 @@ func isLocalRequest(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// guard lets this machine through and asks any other device for the access key.
+// trustedHost reports whether the Host header names this server by an address or "localhost" — never by some
+// other domain name, which is what a DNS-rebinding page would send.
+func trustedHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	return host == "localhost" || net.ParseIP(host) != nil
+}
+
+// crossSite reports a request another web site made the browser send (a form or fetch from a foreign page).
+func crossSite(r *http.Request) bool {
+	if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" || site == "same-site" {
+		return true
+	}
+	if origin := r.Header.Get("Origin"); origin != "" && origin != "null" {
+		u, err := url.Parse(origin)
+		return err != nil || u.Host != r.Host
+	} else if origin == "null" {
+		return true
+	}
+	return false
+}
+
+// guard lets this machine through and asks any other device for the access key. Requests addressed by a foreign
+// host name (DNS rebinding) and changes requested by another web site (CSRF) are refused for everyone.
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !trustedHost(r.Host) {
+			http.Error(w, "mr-review: open the dashboard by its address (127.0.0.1 or the IP shown on «С телефона»)", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && crossSite(r) {
+			http.Error(w, "mr-review: requests from other web sites are refused", http.StatusForbidden)
+			return
+		}
 		if s.accessKey == "" || isLocalRequest(r) || strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/favicon.ico" {
 			next.ServeHTTP(w, r)
 			return
