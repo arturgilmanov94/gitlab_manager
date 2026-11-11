@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -134,14 +135,22 @@ func (c *Claude) Run(ctx context.Context, req Request) (*Result, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	// The limit is a pausable clock, not a context deadline: waiting for the developer's permission decision
+	// does not eat into the agent's time.
+	parent := ctx
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	clock := newRunClock(timeout, func() { cancel(errRunTimeout) })
+	defer clock.stop()
 
 	args := c.BuildArgs(req)
 	bin := agentBin(c.Bin)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = req.Dir
 	cmd.Env = agentEnv(cleanEnv(), bin)
+	// Stopping the run stops everything the agent started (shell commands, subagents), not only the CLI itself.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 3 * time.Second
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -159,7 +168,7 @@ func (c *Claude) Run(ctx context.Context, req Request) (*Result, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	session := &streamSession{req: req, stdin: stdin, log: req.Log}
+	session := &streamSession{req: req, stdin: stdin, log: req.Log, clock: clock, usage: map[string]Usage{}}
 	session.send(map[string]any{"type": "control_request", "request_id": "init-1", "request": map[string]any{"subtype": "initialize", "hooks": map[string]any{}}})
 	session.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": req.Prompt}})
 	payload := session.consume(ctx, stdout)
@@ -171,11 +180,13 @@ func (c *Claude) Run(ctx context.Context, req Request) (*Result, error) {
 	}
 	logf(req.Log, "--- exit in %d ms ---\n", elapsed)
 
-	if ctx.Err() == context.DeadlineExceeded {
-		return nil, fmt.Errorf("claude timed out after %s", timeout)
+	// Stopped or failed before the result event: what the stream told so far (session, tokens) is still returned,
+	// so the run keeps its counters and can be continued.
+	if errors.Is(context.Cause(ctx), errRunTimeout) {
+		return session.partial(elapsed), fmt.Errorf("claude timed out after %s", timeout)
 	}
-	if ctx.Err() == context.Canceled {
-		return nil, ErrCancelled
+	if parent.Err() != nil {
+		return session.partial(elapsed), ErrCancelled
 	}
 	if payload == nil {
 		detail := lastNonEmpty(stderr.String())
@@ -185,11 +196,11 @@ func (c *Claude) Run(ctx context.Context, req Request) (*Result, error) {
 		if detail == "" {
 			detail = "claude produced no result event"
 		}
-		return nil, fmt.Errorf("claude did not finish: %s", detail)
+		return session.partial(elapsed), fmt.Errorf("claude did not finish: %s", detail)
 	}
 	raw, _ := json.Marshal(payload)
 	res := &Result{
-		SessionID:  str(payload["session_id"]),
+		SessionID:  firstNonEmpty(str(payload["session_id"]), session.sessionID),
 		Models:     ClaudeModels(payload),
 		CostUSD:    num(payload["total_cost_usd"]),
 		Usage:      ClaudeUsage(payload),
@@ -197,6 +208,9 @@ func (c *Claude) Run(ctx context.Context, req Request) (*Result, error) {
 		NumTurns:   int(num(payload["num_turns"])),
 		Context:    ContextUsage{Tokens: session.ctx, Window: ClaudeContextWindow(payload, session.model), Model: session.model},
 		Raw:        raw,
+	}
+	if res.Usage.Total() == 0 {
+		res.Usage = session.totalUsage() // a CLI that reports no usage in the result event
 	}
 	if denials, ok := payload["permission_denials"].([]any); ok && len(denials) > 0 {
 		res.Denials, _ = json.Marshal(denials)
@@ -235,6 +249,61 @@ type streamSession struct {
 	closed bool
 	model  string // model of the session from the init event
 	ctx    int64  // tokens in the context at the last turn of the main agent
+
+	clock     *runClock
+	sessionID string           // from the init event
+	usage     map[string]Usage // per API message id, main agent and subagents
+}
+
+// noteUsage records the token usage of one assistant message. Claude Code repeats a message's usage on every
+// content block of that message, so usage is kept per message id (largest values win) and summed over messages.
+func (s *streamSession) noteUsage(event map[string]any) {
+	message, _ := event["message"].(map[string]any)
+	usage, _ := message["usage"].(map[string]any)
+	if usage == nil {
+		return
+	}
+	id := str(message["id"])
+	if id == "" {
+		id = fmt.Sprintf("#%d", len(s.usage))
+	}
+	u := Usage{
+		Input:      int64(num(usage["input_tokens"])),
+		Output:     int64(num(usage["output_tokens"])),
+		CacheRead:  int64(num(usage["cache_read_input_tokens"])),
+		CacheWrite: int64(num(usage["cache_creation_input_tokens"])),
+	}
+	prev := s.usage[id]
+	merged := Usage{Input: max(prev.Input, u.Input), Output: max(prev.Output, u.Output),
+		CacheRead: max(prev.CacheRead, u.CacheRead), CacheWrite: max(prev.CacheWrite, u.CacheWrite)}
+	if merged == prev {
+		return
+	}
+	s.usage[id] = merged
+	if s.req.Usage != nil {
+		s.req.Usage(s.totalUsage())
+	}
+}
+
+func (s *streamSession) totalUsage() Usage {
+	var total Usage
+	for _, u := range s.usage {
+		total.Input += u.Input
+		total.Output += u.Output
+		total.CacheRead += u.CacheRead
+		total.CacheWrite += u.CacheWrite
+	}
+	return total
+}
+
+// partial is the result of a run that ended without the result event: session and tokens seen in the stream.
+func (s *streamSession) partial(elapsedMs int64) *Result {
+	res := &Result{SessionID: s.sessionID, Usage: s.totalUsage(), DurationMs: elapsedMs,
+		Context: ContextUsage{Tokens: s.ctx, Model: s.model}}
+	if s.model != "" {
+		res.Models = []string{s.model}
+	}
+	return res
 }
 
 func (s *streamSession) send(msg map[string]any) {
@@ -278,6 +347,7 @@ func (s *streamSession) consume(ctx context.Context, stdout io.Reader) map[strin
 		case "assistant":
 			s.noteToolUse(event)
 			s.noteContext(event)
+			s.noteUsage(event)
 		case "result":
 			result = event
 			logf(s.log, "--- result --- status=%s turns=%v duration=%vms cost=$%.2f (full JSON is stored with the run)\n%s\n",
@@ -287,6 +357,12 @@ func (s *streamSession) consume(ctx context.Context, stdout io.Reader) map[strin
 			switch str(event["subtype"]) {
 			case "init":
 				s.model = str(event["model"])
+				if id := str(event["session_id"]); id != "" && id != s.sessionID {
+					s.sessionID = id
+					if s.req.Session != nil {
+						s.req.Session(id)
+					}
+				}
 				logf(s.log, "[init] session=%s model=%s permissions=%s claude=%s cwd=%s\n",
 					str(event["session_id"]), str(event["model"]), str(event["permissionMode"]), str(event["claude_code_version"]), str(event["cwd"]))
 			case "permission_denied":
@@ -393,7 +469,13 @@ func (s *streamSession) handleControlRequest(ctx context.Context, event map[stri
 	logf(s.log, "[permission?] %s — %s (%s)\n", permission.ToolName, permission.Description, permission.Reason)
 	decision := PermissionDecision{Message: "mr-review: permission prompts are not answered for this run"}
 	if s.req.Permission != nil {
+		if s.clock != nil {
+			s.clock.pause()
+		}
 		decision = s.req.Permission(ctx, permission)
+		if s.clock != nil {
+			s.clock.resume()
+		}
 	}
 	var response map[string]any
 	if decision.Allow {

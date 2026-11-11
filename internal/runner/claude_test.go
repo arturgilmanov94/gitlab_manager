@@ -228,3 +228,64 @@ func TestClaudeUsageSumsModels(t *testing.T) {
 		t.Fatalf("%+v", fallback)
 	}
 }
+
+// slowStream reports the session and two blocks of one message (same usage repeated), then works forever.
+const slowStream = `#!/bin/sh
+read init
+read user
+printf '{"type":"system","subtype":"init","session_id":"s9","model":"m"}\n'
+printf '{"type":"assistant","message":{"id":"msg1","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100}}}\n'
+printf '{"type":"assistant","message":{"id":"msg1","content":[{"type":"tool_use","name":"Read","input":{"file_path":"x"}}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100}}}\n'
+printf '{"type":"assistant","message":{"id":"msg2","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":1,"output_tokens":2}}}\n'
+sleep 30
+`
+
+// The session id is known right after init; a cancelled or timed-out run still returns it with the tokens seen
+// in the stream (each message counted once).
+func TestRunSessionEarlyAndPartialResult(t *testing.T) {
+	bin := fakeClaude(t, slowStream)
+	sessions := make(chan string, 1)
+	var live []Usage
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-sessions; time.Sleep(300 * time.Millisecond); cancel() }()
+	res, err := (&Claude{Bin: bin}).Run(ctx, Request{Prompt: "p", Dir: t.TempDir(),
+		Session: func(id string) { sessions <- id },
+		Usage:   func(u Usage) { live = append(live, u) },
+	})
+	if err != ErrCancelled {
+		t.Fatalf("want ErrCancelled, got %v", err)
+	}
+	want := Usage{Input: 11, Output: 7, CacheRead: 100}
+	if res == nil || res.SessionID != "s9" || res.Usage != want {
+		t.Fatalf("partial result: %+v", res)
+	}
+	if len(live) != 2 || live[1] != want {
+		t.Fatalf("live usage: %+v", live)
+	}
+
+	res, err = (&Claude{Bin: bin}).Run(context.Background(), Request{Prompt: "p", Dir: t.TempDir(), Timeout: 700 * time.Millisecond})
+	if err == nil || !strings.Contains(err.Error(), "timed out") || res == nil || res.SessionID != "s9" || res.Usage.Total() == 0 {
+		t.Fatalf("timeout must keep session and tokens: %+v %v", res, err)
+	}
+}
+
+// Time spent waiting for the developer's permission decision does not count against the run limit.
+func TestRunTimeoutPausedWhileAskingPermission(t *testing.T) {
+	bin := fakeClaude(t, `#!/bin/sh
+read init
+read user
+printf '{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"/tmp/x"}}}\n'
+read resp
+printf '{"type":"result","is_error":false,"result":"done","session_id":"s1"}\n'
+cat >/dev/null
+`)
+	res, err := (&Claude{Bin: bin}).Run(context.Background(), Request{Prompt: "p", Dir: t.TempDir(), Timeout: 600 * time.Millisecond,
+		Permission: func(ctx context.Context, req PermissionRequest) PermissionDecision {
+			time.Sleep(1200 * time.Millisecond)
+			return PermissionDecision{Allow: true}
+		},
+	})
+	if err != nil || res.Text != "done" {
+		t.Fatalf("the wait for a decision must not time the run out: %v", err)
+	}
+}

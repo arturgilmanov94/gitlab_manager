@@ -47,7 +47,9 @@
     <div class="detail">
       {{if .ContinueFrom}}по вашему выбору агент продолжает контекст «{{kindLabel .ContinueFrom.Kind}}» ({{tokens .ContinueFrom.TotalTokens}} токенов, <a href="{{runPath .ContinueFrom.Kind .ContinueFrom.ID}}">сессия #{{.ContinueFrom.ID}}</a>){{if .Messages}} и помнит {{len .Messages}} сообщений диалога{{end}}
       {{else if .ContinuedFrom}}агент продолжил контекст «{{kindLabel .ContinuedFrom.Kind}}» ({{tokens .ContinuedFrom.TotalTokens}} токенов){{if .Messages}} и помнит {{len .Messages}} сообщений диалога{{end}}
+      {{else if and .Run.SessionID .Run.Active}}агент начал с пустого контекста; сессия сохранена, её можно будет продолжить даже после остановки
       {{else if .Run.SessionID}}агент начал с пустого контекста и помнит этот запуск{{if .Messages}} и {{len .Messages}} сообщений диалога{{end}}; можно продолжить ниже
+      {{else if .Run.Active}}сессия создаётся…
       {{else}}агент не вернул идентификатор сессии — продолжить нельзя{{end}}
       {{if .Chain}}<div class="small" style="margin-top:4px">цепочка: {{range $i, $r := .Chain}}{{if $i}} → {{end}}{{if eq $r.ID $.Run.ID}}<b>#{{$r.ID}} {{kindLabel $r.Kind}}</b>{{else}}<a href="{{runPath $r.Kind $r.ID}}">#{{$r.ID}} {{kindLabel $r.Kind}}</a>{{end}}{{end}}</div>{{end}}
     </div>

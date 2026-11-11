@@ -74,6 +74,8 @@ type Request struct {
 	Progress        func(note string)    // optional: short notes about what the agent is doing right now
 	Event           func(ev ToolEvent)   // optional: every tool call, for the structured timeline
 	Context         func(c ContextUsage) // optional: context window fill after every turn of the main agent
+	Session         func(id string)      // optional: the agent session id as soon as the agent reports it (before the end)
+	Usage           func(u Usage)        // optional: tokens used so far, after every turn (main agent and subagents)
 }
 
 // ContextUsage is how full the agent's context window is: tokens present in the context at the last turn of the

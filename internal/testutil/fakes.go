@@ -281,6 +281,21 @@ func (f *FakeRunner) Run(ctx context.Context, req runner.Request) (*runner.Resul
 	if req.Context != nil {
 		req.Context(runner.ContextUsage{Tokens: 15000, Model: "claude-opus-4-1"})
 	}
+	// Like Claude Code: the session id arrives with the init event, tokens with every turn.
+	session := f.Session
+	if session == "" {
+		session = "sess-1"
+	} else if session == "-" { // "-" = the agent reports no session id (Codex/Cursor may not)
+		session = ""
+	}
+	if req.Session != nil && session != "" {
+		req.Session(session)
+	}
+	streamed := runner.Usage{Input: 100, Output: 20}
+	if req.Usage != nil {
+		req.Usage(streamed)
+	}
+	partial := &runner.Result{SessionID: session, Usage: streamed}
 	if req.Event != nil {
 		req.Event(runner.ToolEvent{Tool: "Read", Detail: "src/A.php"})
 		req.Event(runner.ToolEvent{Tool: "Bash", Detail: "fake command"})
@@ -293,7 +308,7 @@ func (f *FakeRunner) Run(ctx context.Context, req runner.Request) (*runner.Resul
 		select {
 		case <-block:
 		case <-ctx.Done():
-			return nil, runner.ErrCancelled
+			return partial, runner.ErrCancelled
 		}
 	}
 	f.mu.Lock()
@@ -318,12 +333,6 @@ func (f *FakeRunner) Run(ctx context.Context, req runner.Request) (*runner.Resul
 	}
 	if f.FailWith != "" {
 		return nil, errors.New(f.FailWith)
-	}
-	session := f.Session
-	if session == "" {
-		session = "sess-1"
-	} else if session == "-" { // "-" = the agent reports no session id (Codex/Cursor may not)
-		session = ""
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -62,3 +62,30 @@ func TestCancelWhilePreparingCode(t *testing.T) {
 		t.Fatalf("agent must not start: %d requests, error %q", len(fr.Requests), run.Error)
 	}
 }
+
+// The session id reaches the run while the agent works; a stopped run keeps it and the tokens used so far, and
+// is offered for continuation.
+func TestCancelledRunKeepsSessionAndTokens(t *testing.T) {
+	svc, _, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	fr.Block = make(chan struct{})
+	defer close(fr.Block)
+	id, err := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool {
+		run, _ := svc.DB.GetRun(id)
+		return run.Status == db.StatusRunning && run.SessionID == "sess-1" && run.InputTokens == 100
+	})
+	svc.Cancel(id)
+	testutil.WaitFor(t, func() bool { return status(svc, id) == db.StatusCancelled })
+	run, _ := svc.DB.GetRun(id)
+	if run.SessionID != "sess-1" || run.TotalTokens() != 120 {
+		t.Fatalf("cancelled run must keep session and tokens: %+v", run)
+	}
+	runs, _ := svc.DB.ListRunsForMR(mr.ID)
+	if len(svc.Resumable(runs, svc.Settings.ProjectRoot)) != 1 {
+		t.Fatal("the stopped session must be resumable")
+	}
+}

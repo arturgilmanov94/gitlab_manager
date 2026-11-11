@@ -1742,6 +1742,15 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			}
 			_ = s.DB.UpdateRun(runID, fields)
 		},
+		// The session id is stored as soon as the agent has one: a run stopped halfway can still be continued.
+		Session: func(id string) {
+			_ = s.DB.UpdateRun(runID, map[string]any{"session_id": id})
+		},
+		// Tokens grow on the run page while the agent works; counters of earlier stages of the run are kept.
+		Usage: func(u runner.Usage) {
+			_ = s.DB.UpdateRun(runID, map[string]any{"input_tokens": run.InputTokens + u.Input, "output_tokens": run.OutputTokens + u.Output,
+				"cache_read_tokens": run.CacheReadTokens + u.CacheRead, "cache_write_tokens": run.CacheWriteTokens + u.CacheWrite})
+		},
 	}
 	if sk != nil && sk.Kind == skill.KindAgent {
 		req.Agent = sk.Name
