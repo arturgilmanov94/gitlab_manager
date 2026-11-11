@@ -10,6 +10,7 @@
       <a class="btn btn-primary" href="{{runPath .Active.Kind .Active.ID}}#approval">Ответить агенту</a>
     {{else if .Active}}
       <a class="btn btn-primary" href="{{runPath .Active.Kind .Active.ID}}">Открыть сессию</a>
+      <button class="btn btn-danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Active.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>
     {{else if eq .State "failed"}}
       <a class="btn" href="{{runPath .Failed.Kind .Failed.ID}}">Посмотреть ошибку</a>
       <button class="btn btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Failed.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Повторить</button>
@@ -118,12 +119,12 @@
 
 <section class="card" id="solve">
   <div class="card-head"><h2>Указания агенту</h2><span class="small muted">необязательно</span></div>
-  <div class="field"><label for="notes">Что учесть</label><div style="flex:1"><textarea id="notes" rows="3" placeholder="Как решать, что учесть, чего не трогать. Пусто — задача решается как есть."></textarea></div></div>
-  <div class="field"><label>Исследовать как</label><div class="segmented" id="plan-mode">
+  <div class="field"><label for="notes">Что учесть</label><div style="flex:1"><textarea id="notes" rows="3" maxlength="8000" data-issue="{{.Issue.ID}}" data-saved="{{.Issue.AgentNotes}}" placeholder="Как решать, что учесть, чего не трогать. Пусто — задача решается как есть. Сохраняется у задачи сама.">{{.Issue.AgentNotes}}</textarea><div class="small muted focus-state" id="notes-state">{{if .Issue.AgentNotes}}сохранено{{end}}</div></div></div>
+  <div class="field"><label>Исследовать как</label><div><div class="segmented" id="plan-mode">
     <label class="seg{{if not .LooksLikeBug}} checked{{end}} tip" data-tip="{{kindTip "plan"}}"><input type="radio" name="plan_mode" value=""{{if not .LooksLikeBug}} checked{{end}}> Задачу · план реализации</label>
     <label class="seg{{if .LooksLikeBug}} checked{{end}} tip" data-tip="{{kindTip "bug"}}"><input type="radio" name="plan_mode" value="bug"{{if .LooksLikeBug}} checked{{end}}> Баг · root cause и исправление</label>
-    <span class="hint">{{if .LooksLikeBug}}по меткам и названию похоже на баг{{else}}переключите, если это дефект{{end}}</span>
-  </div></div>
+  </div>
+  <div class="hint" id="plan-mode-hint">{{if .LooksLikeBug}}по меткам и названию похоже на баг{{else}}переключите, если это дефект{{end}}</div></div></div>
   <details class="section"><summary>Дополнительно: ветка</summary>
     <div class="field" style="margin-top:8px"><label for="branch">Ветка</label><div><input id="branch" type="text" size="44" value="{{.DefaultBranch}}" class="mono"><div class="hint">создаётся от origin/{{.BaseBranch}} в отдельном workspace; по умолчанию имя = ссылка на задачу, как принято в проекте</div></div></div>
   </details>

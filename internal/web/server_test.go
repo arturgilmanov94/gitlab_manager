@@ -1196,3 +1196,32 @@ func TestBashPromptShowsCommand(t *testing.T) {
 	pending, _ := svc.DB.PendingApproval(id)
 	_ = svc.Decide(pending.ID, "allow", "")
 }
+
+// Task page: saved «Указания агенту», «Остановить» next to an active run, the stand card folded; the run page
+// always has the «сейчас:» line for live updates.
+func TestTaskPageNotesStopAndRunNow(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	issue, _ := svc.AddIssue("#7")
+	if code, _ := postJSON(t, ts.URL+fmt.Sprintf("/api/issues/%d/notes", issue.ID), map[string]any{"notes": "без миграций"}); code != 200 {
+		t.Fatal(code)
+	}
+	fr.Block = make(chan struct{})
+	defer close(fr.Block)
+	fr.Outputs = []map[string]any{testutil.PlanOutput()}
+	id, err := svc.StartPlan(issue.ID, "", "", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(id); return r.Status == db.StatusRunning })
+	_, body := get(t, ts.URL+issuePath(issue.ID))
+	if !strings.Contains(body, `data-saved="без миграций"`) || !strings.Contains(body, ">без миграций</textarea>") {
+		t.Fatal("saved notes must be shown")
+	}
+	if !strings.Contains(body, fmt.Sprintf(`post('/api/runs/%d/cancel'`, id)) {
+		t.Fatal("an active run can be stopped from the task page")
+	}
+	_, body = get(t, ts.URL+fmt.Sprintf("/run/%d", id))
+	if !strings.Contains(body, `id="progress-now"`) {
+		t.Fatal("the «сейчас:» line is always there")
+	}
+}

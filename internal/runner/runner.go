@@ -96,8 +96,9 @@ func (c ContextUsage) Percent() int {
 
 // ToolEvent is one tool call of the agent.
 type ToolEvent struct {
-	Tool   string // Read, Edit, Bash, Agent, ...
-	Detail string // file, pattern, command description (already shortened)
+	Tool    string // Read, Edit, Bash, Agent, ...
+	Detail  string // file, pattern, command description (already shortened)
+	Command string // Bash: the command itself (Detail prefers its description); classifies the phase
 }
 
 // Usage is the token consumption of a run, summed over every model the agent used.

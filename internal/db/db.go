@@ -412,6 +412,7 @@ type Issue struct {
 	GitLabUpdatedAt string
 	SyncedAt        string
 	AddedAt         string
+	AgentNotes      string // «Указания агенту», saved on the task as the developer types
 }
 
 // Ref is "project#iid" — also the project's branch naming convention.
@@ -421,11 +422,11 @@ func (i Issue) Ref() string { return fmt.Sprintf("%s#%d", i.ProjectPath, i.IID) 
 // added by hand that has not been fetched yet — it stays in the list.
 func (i Issue) Closed() bool { return i.State != "" && i.State != "opened" }
 
-const issueColumns = "id, gitlab_host, project_path, iid, web_url, title, description, author, state, labels, gitlab_updated_at, synced_at, added_at"
+const issueColumns = "id, gitlab_host, project_path, iid, web_url, title, description, author, state, labels, gitlab_updated_at, synced_at, added_at, agent_notes"
 
 func scanIssue(s scanner) (*Issue, error) {
 	var i Issue
-	err := s.Scan(&i.ID, &i.GitLabHost, &i.ProjectPath, &i.IID, &i.WebURL, &i.Title, &i.Description, &i.Author, &i.State, &i.Labels, &i.GitLabUpdatedAt, &i.SyncedAt, &i.AddedAt)
+	err := s.Scan(&i.ID, &i.GitLabHost, &i.ProjectPath, &i.IID, &i.WebURL, &i.Title, &i.Description, &i.Author, &i.State, &i.Labels, &i.GitLabUpdatedAt, &i.SyncedAt, &i.AddedAt, &i.AgentNotes)
 	if err != nil {
 		return nil, err
 	}
@@ -495,7 +496,7 @@ func (d *DB) ListIssues() ([]IssueListItem, error) {
 		var item IssueListItem
 		var id sql.NullInt64
 		var kind, status, verdict, sha, runner, model, finished, created, session sql.NullString
-		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Description, &item.Author, &item.State, &item.Labels, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
+		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Description, &item.Author, &item.State, &item.Labels, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt, &item.AgentNotes,
 			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &session, &item.ContextRunID); err != nil {
 			return nil, err
 		}
@@ -1734,4 +1735,16 @@ func (d *DB) RejectedFindings(mrID int64) ([]Finding, error) {
 		}
 	}
 	return out, rows.Err()
+}
+
+// SetIssueAgentNotes stores the «Указания агенту» of a task.
+func (d *DB) SetIssueAgentNotes(id int64, notes string) error {
+	res, err := d.sql.Exec("UPDATE issues SET agent_notes = ? WHERE id = ?", notes, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("issue #%d not found", id)
+	}
+	return nil
 }

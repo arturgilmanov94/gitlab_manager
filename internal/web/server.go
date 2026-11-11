@@ -285,6 +285,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/mrs/{id}/focus", func(w http.ResponseWriter, r *http.Request) {
 		s.result(w, map[string]any{}, s.svc.SetReviewFocus(pathID(r), readBody(r)["focus"]))
 	})
+	s.mux.HandleFunc("POST /api/issues/{id}/notes", func(w http.ResponseWriter, r *http.Request) {
+		s.result(w, map[string]any{}, s.svc.SetIssueNotes(pathID(r), readBody(r)["notes"]))
+	})
 	s.mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, r *http.Request) {
 		var mrID int64
 		if r.URL.Query().Get("scope") == "mr" {

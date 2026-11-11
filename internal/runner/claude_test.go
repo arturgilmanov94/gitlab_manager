@@ -289,3 +289,18 @@ cat >/dev/null
 		t.Fatalf("the wait for a decision must not time the run out: %v", err)
 	}
 }
+
+// The timeline event of a Bash call carries the command itself: the phase is classified by it, not by the
+// agent's description of it.
+func TestToolEventCarriesCommand(t *testing.T) {
+	bin := fakeClaude(t, streamScript)
+	var events []ToolEvent
+	_, err := (&Claude{Bin: bin}).Run(context.Background(), Request{Prompt: "p", Schema: []byte(`{}`), Dir: t.TempDir(),
+		Event: func(ev ToolEvent) { events = append(events, ev) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Detail != "Show status" || events[0].Command != "git status --short" {
+		t.Fatalf("%+v", events)
+	}
+}

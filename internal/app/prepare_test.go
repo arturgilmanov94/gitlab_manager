@@ -89,3 +89,30 @@ func TestCancelledRunKeepsSessionAndTokens(t *testing.T) {
 		t.Fatal("the stopped session must be resumable")
 	}
 }
+
+func TestRelativePaths(t *testing.T) {
+	if got := relativePaths("Read: /w/tree/src/A.php and /w/tree/b", "/w/tree"); got != "Read: src/A.php and b" {
+		t.Fatal(got)
+	}
+	if got := relativePaths("x", ""); got != "x" {
+		t.Fatal(got)
+	}
+}
+
+// «Указания агенту» are saved on the task and survive a sync.
+func TestIssueAgentNotes(t *testing.T) {
+	svc, _, _ := newService(t)
+	issue, _ := svc.AddIssue("#7")
+	if err := svc.SetIssueNotes(issue.ID, "  не трогать миграции  "); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SyncIssues(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := svc.DB.GetIssue(issue.ID); got.AgentNotes != "не трогать миграции" {
+		t.Fatalf("%q", got.AgentNotes)
+	}
+	if err := svc.SetIssueNotes(issue.ID, strings.Repeat("x", maxAgentNotesChars+1)); err == nil {
+		t.Fatal("too long")
+	}
+}

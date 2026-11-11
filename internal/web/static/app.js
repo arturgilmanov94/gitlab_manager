@@ -241,6 +241,9 @@
     if (row) {
       row.classList.add('pending');
       row.querySelectorAll('button:not(:disabled)').forEach((other) => { if (other !== button) { other.disabled = true; locked.push(other); } });
+    } else {
+      // An object page (MR, task): every other start button waits too, so a second click does not start a duplicate.
+      document.querySelectorAll('button[onclick*="startRun("]:not(:disabled)').forEach((other) => { if (other !== button) { other.disabled = true; locked.push(other); } });
     }
     const before = box ? box.innerHTML : '';
     const beforeState = row ? row.dataset.ai : '';
@@ -266,24 +269,28 @@
     release(button);
   };
 
-  // ---- «На что обратить внимание» on the MR page: saved on the MR as you type (debounced) and on leaving the field.
-  (function reviewFocus() {
-    const box = document.getElementById('review-focus');
+  // ---- Text saved as you type (debounced) and on leaving the field: «На что обратить внимание» of an MR and
+  // «Указания агенту» of a task.
+  function autosave(boxId, stateId, url, field) {
+    const box = document.getElementById(boxId);
     if (!box) return;
-    const state = document.getElementById('focus-state');
+    const state = document.getElementById(stateId);
     let timer = null;
     const save = async () => {
       clearTimeout(timer);
       if (box.value.trim() === (box.dataset.saved || '').trim()) return;
       if (state) state.textContent = 'сохраняю…';
-      const data = await call('POST', `/api/mrs/${box.dataset.mr}/focus`, { focus: box.value });
+      const data = await call('POST', url(box), { [field]: box.value });
       if (data) { box.dataset.saved = box.value.trim(); if (state) state.textContent = box.value.trim() ? 'сохранено' : 'очищено'; }
       else if (state) state.textContent = 'не сохранено';
     };
     box.addEventListener('input', () => { if (state) state.textContent = 'изменено'; clearTimeout(timer); timer = setTimeout(save, 1200); });
     box.addEventListener('blur', save);
-  })();
-  const focusDirty = () => { const box = document.getElementById('review-focus'); return !!box && box.value.trim() !== (box.dataset.saved || '').trim(); };
+  }
+  autosave('review-focus', 'focus-state', (box) => `/api/mrs/${box.dataset.mr}/focus`, 'focus');
+  autosave('notes', 'notes-state', (box) => `/api/issues/${box.dataset.issue}/notes`, 'notes');
+  const dirty = (id) => { const box = document.getElementById(id); return !!box && box.dataset.saved !== undefined && box.value.trim() !== (box.dataset.saved || '').trim(); };
+  const focusDirty = () => dirty('review-focus') || dirty('notes');
 
   // ---- findings: «Отправить в GitLab» with the edited text
   window.postFinding = async function (id, button) {
@@ -668,7 +675,10 @@
           if (!response.ok) continue;
           const data = await response.json();
           if (data.status !== initial[id]) changed = true;
-          if (progressNow && ids.length === 1 && data.progress) progressNow.textContent = 'сейчас: ' + data.progress;
+          if (progressNow && ids.length === 1) {
+            progressNow.hidden = !data.progress || data.status === 'waiting';
+            if (data.progress) progressNow.textContent = 'сейчас: ' + data.progress;
+          }
           if (ids.length === 1) renderContext(data);
           if (ids.length === 1 && Array.isArray(data.timeline)) renderTimeline(data.timeline);
         } catch (error) { /* server restarting */ }
@@ -685,4 +695,18 @@
     };
     setTimeout(tick, 4000);
   }
+})();
+
+// A link to a collapsed card (#stand) opens it: the card is a <details> folded by default.
+(function openLinkedDetails() {
+  const open = () => {
+    const el = location.hash && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    if (el && el.tagName === 'DETAILS') { el.open = true; el.scrollIntoView({ block: 'start' }); }
+  };
+  window.addEventListener('hashchange', open);
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest && event.target.closest('a[href^="#"]');
+    if (link && link.getAttribute('href') === location.hash) setTimeout(open, 0); // same hash: no hashchange event
+  });
+  open();
 })();

@@ -440,7 +440,8 @@ func (s *streamSession) noteToolUse(event map[string]any) {
 			s.req.Progress(note)
 		}
 		if s.req.Event != nil {
-			s.req.Event(ToolEvent{Tool: name, Detail: strings.TrimPrefix(note, name+": ")})
+			in, _ := block["input"].(map[string]any)
+			s.req.Event(ToolEvent{Tool: name, Detail: strings.TrimPrefix(note, name+": "), Command: str(in["command"])})
 		}
 	}
 }

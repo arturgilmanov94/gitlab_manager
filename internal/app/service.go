@@ -1782,12 +1782,6 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		MaxBudgetUSD: s.Settings.ClaudeMaxBudgetUSD,
 		Timeout:      time.Duration(s.Settings.RunTimeoutSec) * time.Second,
 		Log:          log,
-		Progress: func(note string) {
-			_ = s.DB.UpdateRun(runID, map[string]any{"progress": note})
-		},
-		Event: func(ev runner.ToolEvent) {
-			_ = s.DB.AddRunEvent(runID, db.PhaseFor(ev.Tool, ev.Detail), ev.Tool, ev.Detail)
-		},
 		Context: func(c runner.ContextUsage) {
 			fields := map[string]any{"context_tokens": c.Tokens}
 			if w := firstPositive(c.Window, s.DB.KnownContextWindow(c.Model)); w > 0 {
@@ -1807,6 +1801,14 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 	}
 	// The mode is decided below per run kind; the permission callback reads it when the agent asks.
 	req.Permission = s.permissionFunc(runID, logln, func() runner.Mode { return req.Mode })
+	// Paths are shown relative to the directory the agent works in (a worktree path is long and the same everywhere).
+	req.Progress = func(note string) {
+		_ = s.DB.UpdateRun(runID, map[string]any{"progress": relativePaths(note, req.Dir)})
+	}
+	req.Event = func(ev runner.ToolEvent) {
+		detail := relativePaths(ev.Detail, req.Dir)
+		_ = s.DB.AddRunEvent(runID, db.PhaseFor(ev.Tool, firstOf(ev.Command, ev.Detail)), ev.Tool, detail)
+	}
 	defer s.forgetRunRules(runID)
 	if sk != nil && sk.Kind == skill.KindAgent {
 		req.Agent = sk.Name
@@ -3143,3 +3145,27 @@ func errText(err error) string {
 
 // rejected reports whether a finding status is the developer's rejection (kept out of re-checks and new reviews).
 func rejected(status string) bool { return status == "false_positive" || status == "ignored" }
+
+// maxAgentNotesChars caps the «Указания агенту» of a task.
+const maxAgentNotesChars = 8000
+
+// SetIssueNotes stores the «Указания агенту» of a task ("" clears them). Runs started from the task page send
+// the same text as their notes.
+func (s *Service) SetIssueNotes(issueID int64, notes string) error {
+	if issue, _ := s.DB.GetIssue(issueID); issue == nil {
+		return userErr("issue #%d not found", issueID)
+	}
+	notes = strings.TrimSpace(notes)
+	if len([]rune(notes)) > maxAgentNotesChars {
+		return userErr("слишком длинный текст: до %d символов", maxAgentNotesChars)
+	}
+	return s.DB.SetIssueAgentNotes(issueID, notes)
+}
+
+// relativePaths shortens absolute paths under dir to paths relative to it ("/…/worktrees/x/src/A.php" → "src/A.php").
+func relativePaths(text, dir string) string {
+	if dir == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, strings.TrimSuffix(dir, "/")+"/", "")
+}

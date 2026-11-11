@@ -117,7 +117,7 @@
 <div class="progress-box" data-started="{{.Run.StartedAt}}">
   <div class="progress-head">{{template "status" .Run.Status}} {{if eq .Run.Status "waiting"}}агент ждёт вашего решения выше{{else}}агент работает{{end}} · <span class="elapsed">—</span> · страница обновится сама</div>
   <div class="timeline" id="timeline">{{template "timeline" .Timeline}}</div>
-  {{if and .Run.Progress (ne .Run.Status "waiting")}}<div class="progress-now" id="progress-now">сейчас: {{.Run.Progress}}</div>{{end}}
+  <div class="progress-now" id="progress-now"{{if or (not .Run.Progress) (eq .Run.Status "waiting")}} hidden{{end}}>сейчас: {{.Run.Progress}}</div>
   <div class="progress"><div class="progress-bar indeterminate"></div></div>
 </div>
 

@@ -499,3 +499,11 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
 .phone-link .qr-box { width: 220px; max-width: 100%; }
 .phone-link .qr { width: 100%; height: auto; display: block; }
 .phone-link .phone-url { word-break: break-all; }
+
+/* collapsible card (stand): the head is the summary */
+details.card > summary.card-head { cursor: pointer; list-style: none; margin-bottom: 0; }
+details.card > summary.card-head::-webkit-details-marker { display: none; }
+details.card > summary.card-head::before { content: "▸"; color: var(--muted); margin-right: 6px; }
+details.card[open] > summary.card-head { margin-bottom: 10px; }
+details.card[open] > summary.card-head::before { content: "▾"; }
+#plan-mode-hint { margin-top: 4px; }
