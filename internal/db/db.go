@@ -1630,6 +1630,23 @@ func (d *DB) TimelineFor(runID int64) []PhaseSummary {
 	return Timeline(events)
 }
 
+// RunWarnings returns the warnings recorded for a run (tool "warning"), oldest first.
+func (d *DB) RunWarnings(runID int64) []string {
+	rows, err := d.sql.Query("SELECT detail FROM run_events WHERE run_id = ? AND tool = 'warning' ORDER BY id", runID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var detail string
+		if rows.Scan(&detail) == nil {
+			out = append(out, detail)
+		}
+	}
+	return out
+}
+
 // CurrentPhase is the label of the latest phase of a run ("" without events).
 func (d *DB) CurrentPhase(runID int64) string {
 	var phase, detail string

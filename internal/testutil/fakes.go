@@ -424,9 +424,40 @@ func GitRepo(t *testing.T, dir string) string {
 	return dir
 }
 
+// gitIn runs git in dir and fails the test on error.
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v %s", args, err, out)
+	}
+}
+
+// DeadRemote fetches origin/develop into the GitRepo checkout once, then points origin at a path that does not
+// exist: every later fetch fails at once, like GitLab with the VPN off and a refused connection.
+func DeadRemote(t *testing.T, root string) {
+	t.Helper()
+	gitIn(t, root, "fetch", "-q", "origin", "develop")
+	gitIn(t, root, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git"))
+}
+
+// HangingRemote fetches origin/develop once, then points origin at an ssh URL whose "ssh" never answers: every
+// later fetch hangs until it is killed, like GitLab behind a VPN that silently drops packets.
+func HangingRemote(t *testing.T, root string) {
+	t.Helper()
+	gitIn(t, root, "fetch", "-q", "origin", "develop")
+	script := filepath.Join(t.TempDir(), "fake-ssh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_SSH_COMMAND", script)
+	gitIn(t, root, "remote", "set-url", "origin", "ssh://git@gitlab.invalid/group/sub/project.git")
+}
+
 // Settings builds settings for a dashboard directory next to a project.
 func Settings(t *testing.T) (*config.Settings, string) {
 	t.Helper()
+	// Review runs work in the project root unless a test turns REVIEW_WORKTREE on: fixture MRs carry fake head SHAs,
+	// and a review never runs on code other than the MR head.
 	// CI runners have no git identity; the worktree commit step needs one.
 	for _, kv := range [][2]string{{"GIT_AUTHOR_NAME", "mr-review test"}, {"GIT_AUTHOR_EMAIL", "test@example.com"}, {"GIT_COMMITTER_NAME", "mr-review test"}, {"GIT_COMMITTER_EMAIL", "test@example.com"}} {
 		t.Setenv(kv[0], kv[1])
@@ -435,7 +466,7 @@ func Settings(t *testing.T) (*config.Settings, string) {
 	project := GitRepo(t, filepath.Join(tmp, "project"))
 	dash := filepath.Join(tmp, "dash")
 	_ = os.MkdirAll(dash, 0o755)
-	s := config.Load(dash, map[string]string{"PROJECT_ROOT": project, "RUN_TIMEOUT_SEC": "30", "GITLAB_HOST": "gitlab.example.com", "GITLAB_PROJECT": "group/sub/project"}, false)
+	s := config.Load(dash, map[string]string{"PROJECT_ROOT": project, "RUN_TIMEOUT_SEC": "30", "REVIEW_WORKTREE": "0", "GITLAB_HOST": "gitlab.example.com", "GITLAB_PROJECT": "group/sub/project"}, false)
 	if s.ProjectRoot == "" {
 		t.Fatalf("project root not resolved: %s", s.ProjectRootError)
 	}

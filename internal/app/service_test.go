@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -186,10 +185,9 @@ func TestParallelRunsOnDifferentMRs(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Both agents are running at the same time: two requests reached the runner while both are blocked.
-	testutil.WaitFor(t, func() bool { return status(svc, runA) == db.StatusRunning && status(svc, runB) == db.StatusRunning })
-	fr.Lock()
-	inFlight := len(fr.Requests)
-	fr.Unlock()
+	// "running" starts with the code preparation, so wait for the agent calls themselves.
+	inFlight := 0
+	testutil.WaitFor(t, func() bool { fr.Lock(); inFlight = len(fr.Requests); fr.Unlock(); return inFlight == 2 })
 	if inFlight != 2 {
 		t.Fatalf("expected 2 concurrent agent invocations, got %d", inFlight)
 	}
@@ -1418,6 +1416,7 @@ func TestFixSelectedFindings(t *testing.T) {
 // leaves the list, a follow-up question restores the one its session lived in, and active runs are never touched.
 func TestReviewWorktreeJanitor(t *testing.T) {
 	svc, gl, fr := newService(t)
+	svc.Settings.ReviewWorktree = true
 	out, err := exec.Command("git", "-C", svc.Settings.ProjectRoot, "rev-parse", "HEAD").Output()
 	if err != nil {
 		t.Fatal(err)
@@ -1500,6 +1499,7 @@ func TestReviewWorktreeJanitor(t *testing.T) {
 
 func TestReviewWorktreeAndPrefetch(t *testing.T) {
 	svc, gl, fr := newService(t)
+	svc.Settings.ReviewWorktree = true
 	out, err := exec.Command("git", "-C", svc.Settings.ProjectRoot, "rev-parse", "HEAD").Output()
 	if err != nil {
 		t.Fatal(err)
@@ -1539,25 +1539,21 @@ func TestReviewWorktreeAndPrefetch(t *testing.T) {
 	if n := strings.Count(strings.Join(gl.Calls, "|"), "diffs 42"); n != 1 {
 		t.Fatalf("prefetch must be cached per head: %d", n)
 	}
-	// Unknown head (the fixture's fake SHA): fall back to the project root, still with the prefetched context.
-	gl.MRs[43] = testutil.MRPayload(43, "sha-unknown")
+	// Unknown head (a commit neither local nor on origin): the run fails with a clear error instead of reviewing
+	// the project root, which holds other code. The agent is not started.
+	gl.MRs[43] = testutil.MRPayload(43, "0123456789abcdef0123456789abcdef01234567")
 	other, _ := svc.AddMR("!43")
-	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-unknown")}
+	asked := len(fr.Requests)
 	third, _ := svc.StartReview(other.ID, db.KindReviewFull, "", 0)
-	testutil.WaitFor(t, func() bool { return status(svc, third) == db.StatusDone })
-	req = fr.Requests[len(fr.Requests)-1]
-	if req.Dir != svc.Settings.ProjectRoot || len(req.ProtectDirs) != 1 || strings.Contains(req.Prompt, "READ-ONLY git worktree") || !strings.Contains(req.Prompt, "Changed files (1):") {
-		t.Fatalf("%+v", req)
-	}
-	logText, _ := os.ReadFile(filepath.Join(svc.Settings.RunLogDir(), fmt.Sprintf("run-%d.log", third)))
-	if !strings.Contains(string(logText), "falling back to the project root") {
-		t.Fatalf("log must explain the fallback: %s", logText)
+	testutil.WaitFor(t, func() bool { return status(svc, third) == db.StatusFailed })
+	if failed, _ := svc.DB.GetRun(third); !strings.Contains(failed.Error, "не удалось подготовить код MR") || len(fr.Requests) != asked {
+		t.Fatalf("unknown head must fail before the agent: %q, requests %d→%d", failed.Error, asked, len(fr.Requests))
 	}
 	// Large diffs are not inlined: the file list stays.
 	svc.Settings.PrefetchMaxDiffChars = 10
-	gl.MRs[44] = testutil.MRPayload(44, "sha-big")
+	gl.MRs[44] = testutil.MRPayload(44, sha)
 	big, _ := svc.AddMR("!44")
-	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-big")}
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput(sha)}
 	fourth, _ := svc.StartReview(big.ID, db.KindReviewFull, "", 0)
 	testutil.WaitFor(t, func() bool { return status(svc, fourth) == db.StatusDone })
 	req = fr.Requests[len(fr.Requests)-1]

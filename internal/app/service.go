@@ -952,21 +952,43 @@ func (s *Service) ReviewDir(mr *db.MergeRequest) string {
 	return s.Worktrees.ReviewPath(mr.Ref())
 }
 
-// prepareReviewDir materialises the review worktree at the MR head; on any failure the run falls back to the
-// project root (logged), so a review never fails because of the checkout.
-func (s *Service) prepareReviewDir(ctx context.Context, runID int64, mr *db.MergeRequest, logln func(string)) string {
+// prepareReviewDir materialises the review worktree at the MR head. A failure fails the run: the project root
+// holds other code than the MR head, and a review of the wrong code is worse than none.
+func (s *Service) prepareReviewDir(ctx context.Context, runID int64, mr *db.MergeRequest, logln func(string)) (string, error) {
 	dir := s.ReviewDir(mr)
 	if dir == s.Settings.ProjectRoot {
-		return dir
+		return dir, nil
 	}
 	// Claim the directory first: the janitor keeps a review worktree that an active run has claimed.
 	_ = s.DB.UpdateRun(runID, map[string]any{"work_dir": dir})
+	_ = s.DB.AddRunEvent(runID, "workspace", "worktree", "review "+shortSHA(mr.HeadSHA))
 	path, err := s.Worktrees.PrepareDetached(ctx, mr.Ref(), mr.SourceBranch, mr.HeadSHA, logln)
 	if err != nil {
-		logln("review worktree unavailable (" + err.Error() + "); falling back to the project root — the code there may differ from the MR head")
-		return s.Settings.ProjectRoot
+		return "", fmt.Errorf("не удалось подготовить код MR на %s: %w", shortSHA(mr.HeadSHA), err)
 	}
-	return path
+	return path, nil
+}
+
+// shortSHA is the 10-character prefix of a commit id.
+func shortSHA(sha string) string { return sha[:min(10, len(sha))] }
+
+// prepareFailed ends a run whose code could not be prepared: cancelled when the developer stopped it meanwhile.
+func (s *Service) prepareFailed(ctx context.Context, runID int64, err error) {
+	if ctx.Err() != nil {
+		s.cancelled(runID, "Cancelled while preparing the code")
+		return
+	}
+	s.fail(runID, err.Error())
+}
+
+// Progress notes of a run before the agent reports its own.
+const (
+	progressPreparing = "готовлю код"
+	progressStarting  = "запускаю агента"
+)
+
+func (s *Service) cancelled(runID int64, message string) {
+	_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusCancelled, "error": message, "finished_at": db.Now(), "progress": ""})
 }
 
 // reviewContext prefetches what a review needs from GitLab (changed files, diff, unresolved discussions),
@@ -1678,8 +1700,14 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		if log != nil {
 			fmt.Fprintf(log, "[%s] %s\n", time.Now().UTC().Format(time.RFC3339), msg)
 		}
+		// Warnings of the code preparation (stale base after a failed fetch) reach the timeline of the run.
+		if text, ok := strings.CutPrefix(msg, worktree.WarnPrefix); ok {
+			_ = s.DB.AddRunEvent(runID, "workspace", "warning", text)
+		}
 	}
 	logln(fmt.Sprintf("run #%d kind=%s runner=%s model=%s", runID, run.Kind, run.Runner, firstOf(run.RequestedModel, "default")))
+	// The run is under way from here: preparing the code (fetch, worktree) may take a while and is part of it.
+	_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusRunning, "started_at": db.Now(), "progress": progressPreparing, "log_path": logPath})
 
 	// Build the prompt and decide where to run. The project skill for this action is authoritative:
 	// an agent is selected with --agent, a command/skill is invoked as a slash command inside the prompt.
@@ -1726,7 +1754,12 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "merge request disappeared")
 			return
 		}
-		req.Dir = s.prepareReviewDir(ctx, runID, mr, logln)
+		dir, err := s.prepareReviewDir(ctx, runID, mr, logln)
+		if err != nil {
+			s.prepareFailed(ctx, runID, err)
+			return
+		}
+		req.Dir = dir
 		req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
 		pm := promptMR(mr)
 		pm.Context = s.reviewContext(mr, req.Dir)
@@ -1775,7 +1808,12 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "finding disappeared")
 			return
 		}
-		req.Dir = s.prepareReviewDir(ctx, runID, mr, logln)
+		dir, err := s.prepareReviewDir(ctx, runID, mr, logln)
+		if err != nil {
+			s.prepareFailed(ctx, runID, err)
+			return
+		}
+		req.Dir = dir
 		req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
 		pm := promptMR(mr)
 		pm.Context = s.reviewContext(mr, req.Dir)
@@ -1793,7 +1831,12 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "no failed jobs found for the head pipeline (GitLab API unavailable or the pipeline is no longer failed)")
 			return
 		}
-		req.Dir = s.prepareReviewDir(ctx, runID, mr, logln)
+		dir, err := s.prepareReviewDir(ctx, runID, mr, logln)
+		if err != nil {
+			s.prepareFailed(ctx, runID, err)
+			return
+		}
+		req.Dir = dir
 		req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
 		pm := promptMR(mr)
 		pm.Context = s.reviewContext(mr, req.Dir)
@@ -1821,7 +1864,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
 		path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
 		if err != nil {
-			s.fail(runID, "worktree: "+err.Error())
+			s.prepareFailed(ctx, runID, fmt.Errorf("worktree: %w", err))
 			return
 		}
 		req.Dir, req.Mode, req.ProtectDirs = path, runner.ModeEdit, nil
@@ -1847,7 +1890,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
 		path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
 		if err != nil {
-			s.fail(runID, "worktree: "+err.Error())
+			s.prepareFailed(ctx, runID, fmt.Errorf("worktree: %w", err))
 			return
 		}
 		req.Dir, req.Mode, req.ProtectDirs = path, runner.ModeEdit, nil
@@ -1868,7 +1911,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
 		path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
 		if err != nil {
-			s.fail(runID, "worktree: "+err.Error())
+			s.prepareFailed(ctx, runID, fmt.Errorf("worktree: %w", err))
 			return
 		}
 		stand := s.StandSkill()
@@ -1892,7 +1935,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
 		path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
 		if err != nil {
-			s.fail(runID, "worktree: "+err.Error())
+			s.prepareFailed(ctx, runID, fmt.Errorf("worktree: %w", err))
 			return
 		}
 		req.Dir, req.Mode, req.ProtectDirs = path, runner.ModeEdit, nil
@@ -1916,7 +1959,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
 			path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
 			if err != nil {
-				s.fail(runID, "worktree: "+err.Error())
+				s.prepareFailed(ctx, runID, fmt.Errorf("worktree: %w", err))
 				return
 			}
 			req.Dir, req.Mode, req.ProtectDirs = path, runner.ModeEdit, nil
@@ -1955,7 +1998,11 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		}
 	}
 
-	_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusRunning, "started_at": db.Now(), "prompt": req.Prompt, "log_path": logPath, "work_dir": req.Dir})
+	if ctx.Err() != nil {
+		s.cancelled(runID, "Cancelled while preparing the code")
+		return
+	}
+	_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusRunning, "progress": progressStarting, "prompt": req.Prompt, "work_dir": req.Dir})
 	result, runErr := r.Run(ctx, req)
 
 	// Counters accumulate over the stages of one run (a run that stopped with questions and continued).

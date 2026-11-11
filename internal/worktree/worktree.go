@@ -12,18 +12,35 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
-// Manager creates worktrees of Root under Dir. Operations that touch the shared .git of the main checkout
-// (fetch, worktree add/remove/prune) are serialised: runs on different branches may prepare in parallel.
+// Manager creates worktrees of Root under Dir. Only the operations that change the shared worktree registry of
+// the main checkout (worktree add/remove/prune) take the global lock, and only for their own duration; network
+// fetches run outside it, so a slow or unreachable remote never blocks the preparation of other runs. Runs on the
+// same worktree path are serialised by a per-path lock.
 type Manager struct {
 	Root       string // main project checkout (shares .git with the worktrees)
 	Dir        string // where worktrees live (inside the dashboard's runtime dir)
 	BaseBranch string // e.g. develop
 
-	mu sync.Mutex
+	mu     sync.Mutex             // worktree registry of the main checkout
+	pathMu sync.Mutex             // guards paths
+	paths  map[string]*sync.Mutex // per worktree path
 }
+
+// FetchTimeout bounds one `git fetch`: an unreachable GitLab (VPN off) must not hang a run for minutes.
+var FetchTimeout = 60 * time.Second
+
+// WarnPrefix marks log lines the UI should surface as warnings (the run continues).
+const WarnPrefix = "warning: "
+
+// ErrUnreachable means the remote could not be fetched and the code the run needs is not available locally.
+var ErrUnreachable = errors.New("GitLab недоступен — включён ли VPN?")
+
+// sshCommand fails fast instead of waiting for a dead host or prompting for a password nobody will type.
+const sshCommand = "ssh -o ConnectTimeout=10 -o BatchMode=yes"
 
 var unsafe = regexp.MustCompile(`[^A-Za-z0-9._#/-]+`)
 
@@ -62,17 +79,35 @@ func (m *Manager) ListReview(ctx context.Context) ([]Entry, error) {
 	return out, nil
 }
 
-// RemoveIf removes the worktree when keep() returns false, both under the manager lock, so a run that starts
+// lockPath serialises the work on one worktree path; it returns the unlock function.
+func (m *Manager) lockPath(path string) func() {
+	m.pathMu.Lock()
+	if m.paths == nil {
+		m.paths = map[string]*sync.Mutex{}
+	}
+	key := filepath.Clean(path)
+	l := m.paths[key]
+	if l == nil {
+		l = &sync.Mutex{}
+		m.paths[key] = l
+	}
+	m.pathMu.Unlock()
+	l.Lock()
+	return l.Unlock
+}
+
+// RemoveIf removes the worktree when keep() returns false, both under the path lock, so a run that starts
 // preparing the same worktree meanwhile is not raced: it either finds the worktree gone (and recreates it) or keeps it.
 func (m *Manager) RemoveIf(ctx context.Context, path string, keep func() bool) (bool, error) {
 	if !strings.HasPrefix(filepath.Clean(path), filepath.Clean(m.Dir)) {
 		return false, errors.New("refusing to remove a directory outside the worktree dir")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer m.lockPath(path)()
 	if keep != nil && keep() {
 		return false, nil
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	_, err := m.git(ctx, m.Root, "worktree", "remove", "--force", path)
 	_, _ = m.git(ctx, m.Root, "worktree", "prune")
 	if err != nil && !m.Exists(path) {
@@ -82,61 +117,119 @@ func (m *Manager) RemoveIf(ctx context.Context, path string, keep func() bool) (
 }
 
 // PrepareDetached creates (or moves) a detached worktree at exactly `sha` for read-only work on an MR head.
-// branch is fetched first so a commit never seen by this checkout is available; the main checkout is untouched.
+// branch is fetched first when the commit is not known locally; the main checkout is untouched. When the commit
+// cannot be obtained the error wraps ErrUnreachable (fetch failed) — the caller must not run elsewhere silently.
 func (m *Manager) PrepareDetached(ctx context.Context, name, branch, sha string, log func(string)) (string, error) {
 	if strings.TrimSpace(sha) == "" {
 		return "", errors.New("head SHA is empty")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	path := m.ReviewPath(name)
+	defer m.lockPath(path)()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
+	short := sha[:min(10, len(sha))]
 	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 		if head, err := m.git(ctx, path, "rev-parse", "HEAD"); err == nil && strings.TrimSpace(head) == sha {
-			log("reusing review worktree " + path + " at " + sha[:min(10, len(sha))])
+			log("reusing review worktree " + path + " at " + short)
 			m.linkClaudeConfig(path, log)
 			return path, nil
 		}
-		m.fetchHead(ctx, branch, sha, log)
+		if err := m.fetchHead(ctx, branch, sha, log); err != nil {
+			return "", err
+		}
 		if _, err := m.git(ctx, path, "checkout", "--quiet", "--detach", sha); err != nil {
 			return "", err
 		}
-		log("review worktree " + path + " moved to " + sha[:min(10, len(sha))])
+		log("review worktree " + path + " moved to " + short)
 		m.linkClaudeConfig(path, log)
 		return path, nil
 	}
-	_, _ = m.git(ctx, m.Root, "worktree", "prune")
-	m.fetchHead(ctx, branch, sha, log)
-	if _, err := m.git(ctx, m.Root, "worktree", "add", "--quiet", "--detach", path, sha); err != nil {
+	if err := m.fetchHead(ctx, branch, sha, log); err != nil {
 		return "", err
 	}
-	log("review worktree " + path + " at " + sha[:min(10, len(sha))])
+	m.mu.Lock()
+	_, _ = m.git(ctx, m.Root, "worktree", "prune")
+	_, err := m.git(ctx, m.Root, "worktree", "add", "--quiet", "--detach", path, sha)
+	m.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	log("review worktree " + path + " at " + short)
 	m.linkClaudeConfig(path, log)
 	return path, nil
 }
 
+// hasCommit reports whether the commit is in the local object store.
+func (m *Manager) hasCommit(ctx context.Context, sha string) bool {
+	_, err := m.git(ctx, m.Root, "cat-file", "-e", sha+"^{commit}")
+	return err == nil
+}
+
 // fetchHead makes sha available locally: fetch the branch, then the commit itself (servers may refuse the latter).
-func (m *Manager) fetchHead(ctx context.Context, branch, sha string, log func(string)) {
-	if _, err := m.git(ctx, m.Root, "cat-file", "-e", sha+"^{commit}"); err == nil {
-		return
+// An error means the commit is still missing; it wraps ErrUnreachable when the remote could not be reached.
+func (m *Manager) fetchHead(ctx context.Context, branch, sha string, log func(string)) error {
+	if m.hasCommit(ctx, sha) {
+		return nil
 	}
+	var fetchErr error
 	if branch != "" {
-		if _, err := m.git(ctx, m.Root, "fetch", "--quiet", "origin", branch); err != nil {
-			log("git fetch origin " + branch + ": " + err.Error())
+		if fetchErr = m.fetch(ctx, branch); fetchErr != nil {
+			log("git fetch origin " + branch + ": " + fetchErr.Error())
 		}
 	}
-	if _, err := m.git(ctx, m.Root, "cat-file", "-e", sha+"^{commit}"); err != nil {
-		if _, err := m.git(ctx, m.Root, "fetch", "--quiet", "origin", sha); err != nil {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if m.hasCommit(ctx, sha) {
+		return nil
+	}
+	// The remote answered (or no branch is known): ask for the commit itself — the branch may have moved on after a
+	// force push. Servers often refuse fetching by SHA; that refusal is not a connectivity problem.
+	if fetchErr == nil {
+		reached := branch != ""
+		if err := m.fetch(ctx, sha); err != nil {
 			log("git fetch origin " + sha + ": " + err.Error())
+			if !reached {
+				fetchErr = err
+			}
+		} else if m.hasCommit(ctx, sha) {
+			return nil
 		}
 	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	short := sha[:min(10, len(sha))]
+	if fetchErr != nil {
+		return fmt.Errorf("коммита %s нет в локальном репозитории, а git fetch не удался (%v): %w", short, fetchErr, ErrUnreachable)
+	}
+	return fmt.Errorf("коммит %s не найден ни локально, ни в origin (ветку перезаписали?)", short)
+}
+
+// fetch runs `git fetch origin <refs>` in the main checkout, bounded by FetchTimeout.
+func (m *Manager) fetch(ctx context.Context, refs ...string) error {
+	fctx, cancel := context.WithTimeout(ctx, FetchTimeout)
+	defer cancel()
+	_, err := m.git(fctx, m.Root, append([]string{"fetch", "--quiet", "origin"}, refs...)...)
+	if err != nil && ctx.Err() == nil && errors.Is(fctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("git fetch origin %s: нет ответа за %s", strings.Join(refs, " "), FetchTimeout)
+	}
+	return err
 }
 
 func (m *Manager) git(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if os.Getenv("GIT_SSH_COMMAND") == "" && os.Getenv("GIT_SSH") == "" {
+		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND="+sshCommand)
+	}
+	// On cancel/timeout kill git's whole process group: ssh (a child of git) would otherwise keep running and hold
+	// the output pipes. WaitDelay is the backstop for anything that escaped the group.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 3 * time.Second
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -149,16 +242,23 @@ func (m *Manager) git(ctx context.Context, dir string, args ...string) (string, 
 	return stdout.String(), nil
 }
 
+// hasRef reports whether the full ref exists in the main checkout.
+func (m *Manager) hasRef(ctx context.Context, ref string) bool {
+	_, err := m.git(ctx, m.Root, "rev-parse", "--verify", "--quiet", ref)
+	return err == nil
+}
+
 // Prepare creates (or reuses) a worktree on `branch`: an existing local branch, else the branch on origin
 // (fetched first, so an MR branch never seen by this checkout is still picked up), else a new branch from
 // origin/BaseBranch. The main checkout's branch is not changed. .claude/ is linked in when the project keeps it out of git.
+// When origin cannot be fetched the local origin/BaseBranch is used with a warning; without it the error wraps
+// ErrUnreachable.
 func (m *Manager) Prepare(ctx context.Context, branch string, log func(string)) (string, error) {
 	if strings.TrimSpace(branch) == "" {
 		return "", errors.New("branch name is empty")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	path := m.Path(branch)
+	defer m.lockPath(path)()
 	if err := os.MkdirAll(m.Dir, 0o755); err != nil {
 		return "", err
 	}
@@ -168,36 +268,62 @@ func (m *Manager) Prepare(ctx context.Context, branch string, log func(string)) 
 		return path, nil
 	}
 	log("git fetch origin " + m.BaseBranch)
-	if _, err := m.git(ctx, m.Root, "fetch", "--quiet", "origin", m.BaseBranch); err != nil {
-		return "", err
+	offline := false
+	if err := m.fetch(ctx, m.BaseBranch); err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if !m.hasRef(ctx, "refs/remotes/origin/"+m.BaseBranch) {
+			return "", fmt.Errorf("%v: %w", err, ErrUnreachable)
+		}
+		offline = true
+		log(WarnPrefix + fmt.Sprintf("не удалось обновить origin/%s (%v) — работаю от локальной копии origin/%s, она может отставать от GitLab",
+			m.BaseBranch, err, m.BaseBranch))
 	}
-	// Remove stale registrations (directory deleted by hand) before adding.
-	_, _ = m.git(ctx, m.Root, "worktree", "prune")
-	if _, err := m.git(ctx, m.Root, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+	if m.hasRef(ctx, "refs/heads/"+branch) {
 		log("branch exists locally; checking it out into " + path)
-		if _, err := m.git(ctx, m.Root, "worktree", "add", path, branch); err != nil {
+		if err := m.addWorktree(ctx, path, branch); err != nil {
 			return "", err
 		}
 		m.linkClaudeConfig(path, log)
 		return path, nil
 	}
 	// The branch may exist on origin without ever having been fetched here (an MR branch of a colleague).
-	if _, err := m.git(ctx, m.Root, "fetch", "--quiet", "origin", branch); err != nil {
-		log("git fetch origin " + branch + ": " + err.Error() + " (assuming the branch does not exist on origin)")
+	// Offline it is not retried: the base fetch has just failed, another attempt would only wait again.
+	if !offline {
+		if err := m.fetch(ctx, branch); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			log("git fetch origin " + branch + ": " + err.Error() + " (assuming the branch does not exist on origin)")
+		}
 	}
-	if _, err := m.git(ctx, m.Root, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch); err == nil {
+	if m.hasRef(ctx, "refs/remotes/origin/"+branch) {
 		log("branch exists on origin; tracking it in " + path)
-		if _, err := m.git(ctx, m.Root, "worktree", "add", "--track", "-b", branch, path, "origin/"+branch); err != nil {
+		if err := m.addWorktree(ctx, path, "--track", "-b", branch, path, "origin/"+branch); err != nil {
 			return "", err
 		}
 	} else {
 		log(fmt.Sprintf("creating branch %s from origin/%s in %s", branch, m.BaseBranch, path))
-		if _, err := m.git(ctx, m.Root, "worktree", "add", "-b", branch, path, "origin/"+m.BaseBranch); err != nil {
+		if err := m.addWorktree(ctx, path, "-b", branch, path, "origin/"+m.BaseBranch); err != nil {
 			return "", err
 		}
 	}
 	m.linkClaudeConfig(path, log)
 	return path, nil
+}
+
+// addWorktree prunes stale registrations (a directory deleted by hand) and runs `git worktree add`. With a single
+// argument it checks out that existing branch at path; otherwise args are passed through after "add".
+func (m *Manager) addWorktree(ctx context.Context, path string, args ...string) error {
+	if len(args) == 1 {
+		args = []string{path, args[0]}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, _ = m.git(ctx, m.Root, "worktree", "prune")
+	_, err := m.git(ctx, m.Root, append([]string{"worktree", "add"}, args...)...)
+	return err
 }
 
 // linkedNames are the instruction files that may be linked into a worktree from the main checkout.
@@ -308,6 +434,7 @@ func (m *Manager) Remove(ctx context.Context, path string) error {
 	if !strings.HasPrefix(filepath.Clean(path), filepath.Clean(m.Dir)) {
 		return errors.New("refusing to remove a directory outside the worktree dir")
 	}
+	defer m.lockPath(path)()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	_, err := m.git(ctx, m.Root, "worktree", "remove", "--force", path)

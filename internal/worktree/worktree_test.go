@@ -2,12 +2,14 @@ package worktree
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"mr-review/internal/testutil"
 )
@@ -226,5 +228,100 @@ func TestPrepareDetached(t *testing.T) {
 	}
 	if status := git(t, root, "status", "--short"); strings.TrimSpace(status) != "" {
 		t.Fatalf("main checkout untouched: %q", status)
+	}
+}
+
+// GitLab unreachable (VPN off): Prepare does not fail and does not wait — it starts from the local origin/develop
+// and says so with a warning.
+func TestPrepareOfflineUsesLocalBase(t *testing.T) {
+	m, root := newManager(t)
+	testutil.DeadRemote(t, root)
+	var lines []string
+	start := time.Now()
+	path, err := m.Prepare(context.Background(), "tn/project#1", func(s string) { lines = append(lines, s) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > 15*time.Second {
+		t.Fatalf("offline prepare took %s", time.Since(start))
+	}
+	if got, want := git(t, path, "rev-parse", "HEAD"), git(t, root, "rev-parse", "origin/develop"); got != want {
+		t.Fatalf("worktree must start at the local origin/develop: %s vs %s", got, want)
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), WarnPrefix+"не удалось обновить origin/develop") {
+		t.Fatalf("warning expected: %v", lines)
+	}
+}
+
+// Without a local origin/develop there is nothing to start from: a clear error, not a hang.
+func TestPrepareOfflineWithoutBase(t *testing.T) {
+	m, root := newManager(t)
+	git(t, root, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git"))
+	_, err := m.Prepare(context.Background(), "tn/project#1", func(string) {})
+	if !errors.Is(err, ErrUnreachable) || !strings.Contains(err.Error(), "VPN") {
+		t.Fatalf("want ErrUnreachable, got %v", err)
+	}
+}
+
+// A commit the checkout has never seen and a remote that cannot be reached: the error says why.
+func TestPrepareDetachedOffline(t *testing.T) {
+	m, root := newManager(t)
+	testutil.DeadRemote(t, root)
+	_, err := m.PrepareDetached(context.Background(), "p!1", "feature", strings.Repeat("ab", 20), func(string) {})
+	if !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("want ErrUnreachable, got %v", err)
+	}
+	// The remote answers but has no such commit: not a VPN problem.
+	m2, root2 := newManager(t)
+	_, err = m2.PrepareDetached(context.Background(), "p!1", "develop", strings.Repeat("cd", 20), func(string) {})
+	if err == nil || errors.Is(err, ErrUnreachable) || !strings.Contains(err.Error(), "не найден") {
+		t.Fatalf("want a missing-commit error, got %v (%s)", err, root2)
+	}
+}
+
+// A remote that never answers: each fetch is cut at FetchTimeout, and two runs prepare their code in parallel
+// instead of queueing behind one global lock.
+func TestPrepareHangingRemoteParallel(t *testing.T) {
+	m, root := newManager(t)
+	testutil.HangingRemote(t, root)
+	old := FetchTimeout
+	FetchTimeout = 1500 * time.Millisecond
+	t.Cleanup(func() { FetchTimeout = old })
+
+	start := time.Now()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, branch := range []string{"tn/project#1", "tn/project#2"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = m.Prepare(context.Background(), branch, func(string) {})
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Sequential would be ≥ 2 × FetchTimeout.
+	if elapsed := time.Since(start); elapsed >= 2*FetchTimeout+time.Second/2 {
+		t.Fatalf("prepare must not serialise on a hanging fetch: %s", elapsed)
+	}
+}
+
+// Cancelling the run while git hangs on the network stops the preparation right away.
+func TestPrepareCancelledWhileFetching(t *testing.T) {
+	m, root := newManager(t)
+	testutil.HangingRemote(t, root)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	start := time.Now()
+	_, err := m.Prepare(ctx, "tn/project#1", func(string) {})
+	if err == nil || ctx.Err() == nil {
+		t.Fatalf("want a cancelled prepare, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("cancel took %s", elapsed)
 	}
 }

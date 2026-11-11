@@ -61,6 +61,9 @@
   {{end}}
 </section>
 
+{{range .Warnings}}<div class="alert alert-warning" data-run-warning>⚠ {{.}}</div>
+{{end}}
+
 {{if .Pending}}
 <div class="approval-box" id="approval">
   <h2>⚠ Нужен ваш ответ: агент просит разрешение</h2>

@@ -1039,6 +1039,7 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	data["Timeline"] = timeline
+	data["Warnings"] = s.svc.DB.RunWarnings(run.ID)
 	data["Messages"], _ = s.svc.DB.ListMessages(run.ID)
 	data["LogTail"] = tail(run.LogPath, 12000)
 	data["Approvals"], _ = s.svc.DB.ListApprovals(run.ID)
