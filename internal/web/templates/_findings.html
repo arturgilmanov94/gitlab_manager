@@ -9,7 +9,7 @@
   {{$link := fileLink $.Blob $.SHA .File (deref .Line)}}
   {{$diff := mrDiffLink $mrURL .File}}
   <tr class="finding f-{{.Status}}" id="finding-{{.ID}}">
-    {{if $pick}}<td class="pick-col">{{if eq .Status "open"}}<input type="checkbox" class="pick" data-finding="{{.ID}}">{{end}}</td>{{end}}
+    {{if $pick}}<td class="pick-col">{{if and (eq .Status "open") (ne .CheckStatus "fixed")}}<input type="checkbox" class="pick" data-finding="{{.ID}}">{{end}}</td>{{end}}
     <td class="col-sev"><span class="sev sev-{{.Severity}}">{{.Severity}}</span><div class="muted small">{{.Category}}</div></td>
     <td class="col-status"><span class="fstatus fstatus-{{.Status}}">{{fstatusLabel .Status}}</span></td>
     <td class="mono small col-where">{{if .File}}{{if $link}}<a class="file-ref tip" data-tip="Открыть файл в GitLab на проверенном коммите, на этой строке" href="{{$link}}" target="_blank" rel="noopener">{{.File}}{{if .Line}}:{{deref .Line}}{{end}}</a>{{else}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{end}}{{if $diff}} <a class="diff-ref tip" data-tip="Открыть этот файл в «Изменениях» MR" href="{{$diff}}" target="_blank" rel="noopener">diff</a>{{end}}{{else}}—{{end}}</td>
@@ -40,7 +40,7 @@
           <button class="btn btn-sm btn-link" onclick="post('/api/findings/{{.ID}}/status', {status: 'open'}, this).then(r => r && reload())">Вернуть в открытые</button>
         {{end}}
       </div>
-      {{if .CheckStatus}}<div class="small check check-{{.CheckStatus}}"><b>{{checkLabel .CheckStatus}}</b>{{if .CheckRunID}} · <a href="{{runPath "verify_finding" (deref .CheckRunID)}}">проверка #{{deref .CheckRunID}}</a>{{end}}{{if .VerifyNote}}<div class="check-note">{{md .VerifyNote $.Blob $.SHA}}</div>{{end}}</div>
+      {{if .CheckStatus}}<div class="small check check-{{.CheckStatus}}"><b>{{checkLabel .CheckStatus}}</b>{{if .CheckRunID}} · {{if eq .CheckStatus "fixed" "not_confirmed"}}<a href="{{runPath "fix_findings" (deref .CheckRunID)}}">исправление #{{deref .CheckRunID}}</a>{{else}}<a href="{{runPath "verify_finding" (deref .CheckRunID)}}">проверка #{{deref .CheckRunID}}</a>{{end}}{{end}}{{if .VerifyNote}}<div class="check-note">{{md .VerifyNote $.Blob $.SHA}}</div>{{end}}</div>
       {{else if .VerifyNote}}<div class="small muted">проверка: {{.VerifyNote}}</div>{{end}}
     </td>
     <td class="actions-cell col-actions">

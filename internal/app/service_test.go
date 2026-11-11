@@ -1395,7 +1395,8 @@ func TestFixSelectedFindings(t *testing.T) {
 	}
 	f0, _ := svc.DB.GetFinding(findings[0].ID)
 	f1, _ := svc.DB.GetFinding(findings[1].ID)
-	if f0.Status != "fixed" || f0.CheckStatus != "fixed" || *f0.CheckRunID != runID || !strings.Contains(f0.VerifyNote, "guard added") {
+	// The fix is a claim: the finding stays open (marked «исправлено агентом») until a verify confirms it.
+	if f0.Status != "open" || f0.CheckStatus != "fixed" || *f0.CheckRunID != runID || !strings.Contains(f0.VerifyNote, "guard added") {
 		t.Fatalf("%+v", f0)
 	}
 	if f1.Status != "open" || f1.CheckStatus != "not_confirmed" {

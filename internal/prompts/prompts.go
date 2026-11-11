@@ -238,8 +238,40 @@ type MR struct {
 	IID                       int64
 	Title, SourceBranch       string
 	TargetBranch, HeadSHA     string
-	Context                   *MRContext // prefetched by the dashboard (nil = the agent fetches everything itself)
-	Focus                     string     // what the developer asked this review to pay special attention to ("" = nothing)
+	Context                   *MRContext        // prefetched by the dashboard (nil = the agent fetches everything itself)
+	Focus                     string            // what the developer asked this review to pay special attention to ("" = nothing)
+	Rejected                  []RejectedFinding // findings the developer rejected on this MR earlier (reviews only)
+}
+
+// RejectedFinding is an earlier finding the developer marked as a false positive or chose to ignore.
+type RejectedFinding struct {
+	Status   string // false_positive | ignored
+	Severity string
+	File     string
+	Line     *int64
+	Title    string
+}
+
+// rejectedBlock tells a review which findings the developer already rejected, so they are not raised again.
+func rejectedBlock(list []RejectedFinding) string {
+	if len(list) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nFindings the developer already REJECTED on this MR (do not report them again; report one only if the code it " +
+		"refers to changed so that it became valid, and then say so explicitly):\n")
+	for _, f := range list {
+		where := f.File
+		if f.Line != nil && *f.Line > 0 {
+			where = fmt.Sprintf("%s:%d", f.File, *f.Line)
+		}
+		why := "false positive"
+		if f.Status == "ignored" {
+			why = "ignored by decision"
+		}
+		fmt.Fprintf(&b, "  - [%s] %s at %s (%s)\n", f.Severity, f.Title, firstNonEmpty(where, "(general)"), why)
+	}
+	return b.String()
 }
 
 // MRContext is what the dashboard prefetched for a review so the agent skips the first round of tool calls.
@@ -348,7 +380,8 @@ func mrBlock(mr MR) string {
 		head = "(unknown, use current head)"
 	}
 	return fmt.Sprintf("Merge request: %s\nProject path: %s (GitLab host: %s)\nMR IID: %d\nTitle: %s\nSource branch: %s -> target branch: %s\nHead SHA to review: %s\n",
-		mr.WebURL, mr.ProjectPath, mr.Host, mr.IID, mr.Title, mr.SourceBranch, mr.TargetBranch, head) + contextBlock(mr.Context, head) + focusBlock(mr.Focus)
+		mr.WebURL, mr.ProjectPath, mr.Host, mr.IID, mr.Title, mr.SourceBranch, mr.TargetBranch, head) + contextBlock(mr.Context, head) + focusBlock(mr.Focus) +
+		rejectedBlock(mr.Rejected)
 }
 
 // focusBlock is the developer's note on what this review should look at first. It narrows the attention, it

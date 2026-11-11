@@ -1011,6 +1011,16 @@ func (s *Service) prepareReviewDir(ctx context.Context, runID int64, mr *db.Merg
 	return path, nil
 }
 
+// rejectedFor lists the findings the developer rejected on an MR for the review prompts.
+func (s *Service) rejectedFor(mrID int64) []prompts.RejectedFinding {
+	list, _ := s.DB.RejectedFindings(mrID)
+	var out []prompts.RejectedFinding
+	for _, f := range list {
+		out = append(out, prompts.RejectedFinding{Status: f.Status, Severity: f.Severity, File: f.File, Line: f.Line, Title: f.Title})
+	}
+	return out
+}
+
 // shortSHA is the 10-character prefix of a commit id.
 func shortSHA(sha string) string { return sha[:min(10, len(sha))] }
 
@@ -1234,6 +1244,9 @@ func (s *Service) StartFixFindings(mrID int64, runnerName, notes string, finding
 		}
 		if f.Status != "open" {
 			return 0, userErr("finding #%d is not open (%s)", id, f.Status)
+		}
+		if f.CheckStatus == "fixed" {
+			return 0, userErr("finding #%d is not open for fixing: the agent already fixed it, a verify of the MR confirms the fix", id)
 		}
 	}
 	for _, id := range discussionIDs {
@@ -1817,6 +1830,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		pm := promptMR(mr)
 		pm.Context = s.reviewContext(mr, req.Dir)
 		pm.Focus = run.Notes
+		pm.Rejected = s.rejectedFor(mr.ID)
 		req.SessionName = fmt.Sprintf("mr-review !%d #%d", mr.IID, runID)
 		switch run.Kind {
 		case db.KindReviewQuick:
@@ -1833,7 +1847,8 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 				baseSHA = base.HeadSHA
 				all, _ := s.DB.ListFindings(base.ID)
 				for _, f := range all {
-					if f.Status == "open" {
+					// Open findings are re-checked; rejected ones are carried over unchanged (see store).
+					if f.Status == "open" || rejected(f.Status) {
 						previous = append(previous, f)
 					}
 				}
@@ -2482,11 +2497,15 @@ func (s *Service) store(run *db.Run, structured json.RawMessage, previous []db.F
 		}
 		for _, prev := range previous {
 			status, note := "open", "Not addressed by the verify run"
-			if v, ok := verified[prev.ID]; ok {
+			if rejected(prev.Status) {
+				status, note = prev.Status, prev.VerifyNote // the developer's decision stands; the agent did not re-check it
+			} else if v, ok := verified[prev.ID]; ok {
 				status, note = firstOf(v.Status, "open"), v.Note
 			}
 			origin := prev.ID
-			findings = append(findings, db.Finding{OriginFindingID: &origin, Status: status, Severity: prev.Severity, Category: prev.Category, File: prev.File, Line: prev.Line, Title: prev.Title, Description: prev.Description, Suggestion: prev.Suggestion, VerifyNote: note})
+			findings = append(findings, db.Finding{OriginFindingID: &origin, Status: status, Severity: prev.Severity, Category: prev.Category, File: prev.File,
+				Line: prev.Line, Title: prev.Title, Description: prev.Description, Suggestion: prev.Suggestion, VerifyNote: note,
+				CheckStatus: prev.CheckStatus, CheckRunID: prev.CheckRunID, GitLabNoteURL: prev.GitLabNoteURL})
 		}
 		for _, f := range res.NewFindings {
 			findings = append(findings, db.Finding{Status: "open", Severity: f.Severity, Category: f.Category, File: f.File, Line: f.Line, Title: f.Title, Description: f.Description, Suggestion: f.Suggestion, VerifyNote: "New in this head"})
@@ -3068,6 +3087,9 @@ func promptMR(mr *db.MergeRequest) prompts.MR {
 func toPrev(findings []db.Finding) []prompts.PrevFinding {
 	out := make([]prompts.PrevFinding, 0, len(findings))
 	for _, f := range findings {
+		if f.Status != "open" {
+			continue // only open findings are re-checked by the agent
+		}
 		out = append(out, prompts.PrevFinding{ID: f.ID, Severity: f.Severity, File: f.File, Line: f.Line, Title: f.Title, Description: f.Description})
 	}
 	return out
@@ -3118,3 +3140,6 @@ func errText(err error) string {
 	}
 	return err.Error()
 }
+
+// rejected reports whether a finding status is the developer's rejection (kept out of re-checks and new reviews).
+func rejected(status string) bool { return status == "false_positive" || status == "ignored" }

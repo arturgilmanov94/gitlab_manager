@@ -1111,9 +1111,13 @@ func (d *DB) ReplaceFindings(runID int64, findings []Finding) error {
 		if title == "" {
 			title = "(untitled)"
 		}
-		if _, err := tx.Exec(`INSERT INTO findings (run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			runID, i+1, nullInt(f.OriginFindingID), status, severity, f.Category, f.File, nullInt(f.Line), title, f.Description, f.Suggestion, f.VerifyNote); err != nil {
+		// check_status, check_run_id and gitlab_note_url travel with a finding carried over by verify: a finding
+		// posted to GitLab or checked by an agent stays so on the newer head.
+		if _, err := tx.Exec(`INSERT INTO findings (run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note,
+			check_status, check_run_id, gitlab_note_url)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runID, i+1, nullInt(f.OriginFindingID), status, severity, f.Category, f.File, nullInt(f.Line), title, f.Description, f.Suggestion, f.VerifyNote,
+			f.CheckStatus, nullInt(f.CheckRunID), f.GitLabNoteURL); err != nil {
 			return err
 		}
 	}
@@ -1156,8 +1160,9 @@ func (d *DB) SetFindingCheck(id int64, checkStatus, note string, runID int64) er
 	if !CheckStatuses[checkStatus] {
 		return fmt.Errorf("unknown check status %q", checkStatus)
 	}
+	// "fixed" (by a fix_findings run) keeps the finding open: the fix is a claim until a verify confirms it.
 	status := "open"
-	if checkStatus == "false_positive" || checkStatus == "obsolete" || checkStatus == "fixed" {
+	if checkStatus == "false_positive" || checkStatus == "obsolete" {
 		status = checkStatus
 	}
 	res, err := d.sql.Exec("UPDATE findings SET status = ?, check_status = ?, verify_note = ?, check_run_id = ? WHERE id = ?", status, checkStatus, note, runID, id)
@@ -1700,4 +1705,33 @@ func (r Run) SelectionOf() Selection {
 	var sel Selection
 	_ = json.Unmarshal([]byte(r.SelectionJSON), &sel)
 	return sel
+}
+
+// RejectedFindings returns the findings of an MR the developer rejected (false_positive, ignored), newest first,
+// one per file+title: verify runs carry a rejected finding forward, so the same one appears in several runs.
+func (d *DB) RejectedFindings(mrID int64) ([]Finding, error) {
+	rows, err := d.sql.Query(`SELECT f.id, f.run_id, f.status, f.severity, f.file, f.line, f.title FROM findings f JOIN runs r ON r.id = f.run_id
+		WHERE r.mr_id = ? AND f.status IN ('false_positive', 'ignored') ORDER BY f.id DESC`, mrID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	var out []Finding
+	for rows.Next() {
+		var f Finding
+		var line sql.NullInt64
+		if err := rows.Scan(&f.ID, &f.RunID, &f.Status, &f.Severity, &f.File, &line, &f.Title); err != nil {
+			return nil, err
+		}
+		if line.Valid {
+			f.Line = &line.Int64
+		}
+		key := f.File + "\x00" + f.Title
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, f)
+		}
+	}
+	return out, rows.Err()
 }
