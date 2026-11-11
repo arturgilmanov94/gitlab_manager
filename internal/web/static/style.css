@@ -418,9 +418,74 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
 .gl-post[open] { display: block; width: 100%; }
 .gl-post > summary { list-style: none; display: inline-flex; }
 .gl-post > summary::-webkit-details-marker { display: none; }
+.gl-post[open] > summary { display: none; } /* the open editor has its own «Отправить» / «Отмена» */
 .gl-post-body { margin-top: 6px; }
 .gl-post-body textarea { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; padding: 8px; border: 1px solid var(--border-strong); border-radius: var(--radius); resize: vertical; background: var(--surface); color: var(--fg); }
 .gl-post-body .inline { display: flex; gap: 8px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
 
 /* live refresh: shown when data changed while the developer was busy on the page */
 .refresh-banner { position: fixed; left: 50%; transform: translateX(-50%); bottom: 20px; z-index: 90; background: var(--fg); color: var(--surface); border: 0; border-radius: 18px; padding: 8px 16px; font: inherit; font-size: 13px; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
+
+/* ---- phone (≤ 600px): one column, no horizontal page scroll, thumb-sized controls, menus as bottom sheets */
+@media (max-width: 600px) {
+  html, body { overflow-x: hidden; }
+  body { font-size: 14px; -webkit-text-size-adjust: 100%; }
+  .navbar-inner { padding: 0 10px; gap: 4px 10px; min-height: 0; }
+  .brand { padding: 8px 0; }
+  .tabs { order: 3; width: 100%; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs a { padding: 8px 10px; white-space: nowrap; flex: none; }
+  .nav-context { order: 2; width: auto; flex: 1; justify-content: flex-end; gap: 6px; margin: 0; overflow-x: auto; scrollbar-width: none; }
+  .nav-context::-webkit-scrollbar { display: none; }
+  .nav-context .chip { flex: none; }
+  .nav-context .chip.path, .nav-context a.chip[href="/doctor#skills"] { display: none; }
+  .container { padding: 10px 10px 40px; }
+  .card { padding: 12px; margin-bottom: 12px; }
+  .card-head { flex-wrap: wrap; gap: 6px; }
+  .card-head h2 { font-size: 15px; }
+  .card-head .badge, .badge { white-space: normal; }
+  h1 { font-size: 16px; overflow-wrap: anywhere; }
+  .page-head { gap: 10px; margin-bottom: 12px; }
+  .page-head .meta { overflow-wrap: anywhere; }
+  .page-head .actions, .actions { flex-wrap: wrap; justify-content: flex-start; gap: 6px; }
+  .toolbar { gap: 10px; }
+  .toolbar > * { max-width: 100%; }
+  .toolbar input[type=text], .toolbar textarea { width: 100%; box-sizing: border-box; }
+  input[type=text], textarea, select { font-size: 16px; max-width: 100%; box-sizing: border-box; } /* 16px: iOS does not zoom in on focus */
+  .inline { flex-wrap: wrap; }
+  .inline > input[type=text], .inline > textarea { flex: 1 1 100%; }
+  .btn { padding: 8px 12px; }
+  .btn-sm { padding: 6px 10px; }
+  .filters { gap: 8px; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; scrollbar-width: none; }
+  .filters::-webkit-scrollbar { display: none; }
+  .filters > * { flex: none; }
+  .segmented { max-width: 100%; overflow-x: auto; }
+  .status-panel { grid-template-columns: 1fr; gap: 10px; }
+  /* tables that stay tables scroll inside themselves instead of widening the page */
+  .table:not(.list):not(.findings) { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table.list tbody tr { padding: 12px 10px; }
+  .table.findings tbody tr { padding: 12px 8px; }
+  .table.findings td.col-where { word-break: break-all; }
+  .finding-actions .btn-link { padding: 6px 8px; }
+  .code-snippet .snippet { max-height: 260px; font-size: 11px; }
+  .code-snippet .cl .ln { min-width: 34px; padding: 0 4px; }
+  .action-bar .action-sep { display: none; }
+  .action-bar .btn { flex: 1 1 auto; justify-content: center; }
+  pre, pre.log { max-width: 100%; overflow-x: auto; }
+  /* overflow menus: a sheet at the bottom of the screen, never cut off at the edge */
+  details.menu[open] > .menu-items { position: fixed; left: 8px; right: 8px; bottom: 8px; top: auto; min-width: 0; max-height: 70vh; overflow-y: auto; z-index: 200; box-shadow: 0 -8px 32px rgba(16,24,40,0.28); }
+  details.menu[open] > summary::before { content: ""; position: fixed; inset: 0; background: rgba(16,24,40,0.25); z-index: 199; }
+  .menu-items .item { padding: 11px 12px; }
+  .pick-bar { position: sticky; bottom: 0; z-index: 40; }
+  .refresh-banner { left: 10px; right: 10px; transform: none; bottom: 12px; }
+  .toast { left: 10px; right: 10px; bottom: 10px; max-width: none; }
+  .tooltip { display: none !important; } /* hover hints do not work on touch and cover the content */
+  .footer { padding: 10px 10px 24px; gap: 8px 14px; }
+}
+
+/* «С телефона»: QR codes */
+.phone-links { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; margin: 12px 0; }
+.phone-link { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.phone-link .qr-box { width: 220px; max-width: 100%; }
+.phone-link .qr { width: 100%; height: auto; display: block; }
+.phone-link .phone-url { word-break: break-all; }

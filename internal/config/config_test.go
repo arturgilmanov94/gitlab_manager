@@ -77,3 +77,14 @@ func TestHighlightLabels(t *testing.T) {
 		t.Fatalf("defaults expected without .env: %v", s.HighlightLabels)
 	}
 }
+
+func TestLocalAddressAndLoopback(t *testing.T) {
+	for in, want := range map[string]string{"0.0.0.0:8765": "127.0.0.1:8765", "[::]:8765": "127.0.0.1:8765", ":8765": "127.0.0.1:8765", "192.168.1.2:80": "192.168.1.2:80"} {
+		if got := LocalAddress(in); got != want {
+			t.Fatalf("%s → %s, want %s", in, got, want)
+		}
+	}
+	if !IsLoopbackHost("127.0.0.1") || !IsLoopbackHost("localhost") || !IsLoopbackHost("[::1]") || IsLoopbackHost("0.0.0.0") || IsLoopbackHost("192.168.1.2") {
+		t.Fatal("loopback detection")
+	}
+}

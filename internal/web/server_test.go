@@ -1046,3 +1046,69 @@ func getJSON(t *testing.T, url string) (int, map[string]any) {
 	_ = json.Unmarshal([]byte(body), &out)
 	return code, out
 }
+
+// Remote access: this machine is always let in; another device needs the key once (link / QR), then the cookie.
+func TestRemoteAccessNeedsKey(t *testing.T) {
+	settings, _ := testutil.Settings(t)
+	settings.Host = "0.0.0.0"
+	database, err := db.Open(settings.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = database.Migrate()
+	svc := app.New(settings, database, testutil.NewFakeGitLab(), nil)
+	t.Cleanup(func() { svc.Shutdown(); database.Close() })
+	srv, err := New(svc, "test", nil)
+	if err != nil || srv.accessKey == "" {
+		t.Fatalf("key %q %v", srv.accessKey, err)
+	}
+	if again, _ := loadAccessKey(settings); again != srv.accessKey {
+		t.Fatal("the generated key must persist")
+	}
+	h := srv.Handler()
+	do := func(target, remote, cookie string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", target, nil)
+		r.RemoteAddr = remote
+		if cookie != "" {
+			r.AddCookie(&http.Cookie{Name: accessCookie, Value: cookie})
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	if w := do("/mrs", "127.0.0.1:5000", ""); w.Code != 200 {
+		t.Fatalf("local: %d", w.Code)
+	}
+	if w := do("/mrs", "192.168.10.20:5000", ""); w.Code != 401 || !strings.Contains(w.Body.String(), "ещё не подключено") {
+		t.Fatalf("phone without key: %d", w.Code)
+	}
+	if w := do("/api/version", "192.168.10.20:5000", ""); w.Code != 401 || !strings.Contains(w.Body.String(), `"ok":false`) {
+		t.Fatalf("api without key: %d %s", w.Code, w.Body.String())
+	}
+	if w := do("/mrs?key=wrong", "192.168.10.20:5000", ""); w.Code != 401 {
+		t.Fatalf("wrong key: %d", w.Code)
+	}
+	w := do("/mrs?key="+srv.accessKey+"&x=1", "192.168.10.20:5000", "")
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/mrs?x=1" || !strings.Contains(w.Header().Get("Set-Cookie"), accessCookie+"="+srv.accessKey) {
+		t.Fatalf("key link: %d %v", w.Code, w.Header())
+	}
+	if w := do("/mrs", "192.168.10.20:5000", srv.accessKey); w.Code != 200 {
+		t.Fatalf("phone with cookie: %d", w.Code)
+	}
+	if w := do("/static/style.css", "192.168.10.20:5000", ""); w.Code != 200 {
+		t.Fatalf("static: %d", w.Code)
+	}
+	if w := do("/phone", "127.0.0.1:5000", ""); w.Code != 200 || !strings.Contains(w.Body.String(), "/?key="+srv.accessKey) || !strings.Contains(w.Body.String(), `<svg class="qr"`) {
+		t.Fatal("phone page must show the link with the key and a QR code")
+	}
+	if w := do("/phone", "192.168.10.20:5000", srv.accessKey); strings.Contains(w.Body.String(), "key=") {
+		t.Fatal("the phone page must not show the key to another device")
+	}
+}
+
+func TestPhonePageWhenRemoteAccessIsOff(t *testing.T) {
+	ts, _, _ := newServer(t)
+	if code, body := get(t, ts.URL+"/phone"); code != 200 || !strings.Contains(body, "REMOTE_ACCESS=1") {
+		t.Fatalf("%d", code)
+	}
+}

@@ -25,6 +25,7 @@
           <div class="gl-post-body">
             <textarea rows="6" data-post-finding="{{.ID}}">{{findingComment .}}</textarea>
             <div class="inline"><button class="btn btn-primary btn-sm" onclick="postFinding('{{.ID}}', this)">Отправить</button>
+              <button class="btn btn-sm" onclick="cancelPost(this)">Отмена</button>
               <span class="small muted">{{if and .File .Line}}ляжет на строку <span class="mono">{{.File}}:{{deref .Line}}</span> в diff MR; если строка вне изменений MR — общим комментарием с указанием файла и строки{{else}}общим комментарием в MR{{end}}. Markdown GitLab.</span></div>
           </div>
         </details>{{end}}

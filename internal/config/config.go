@@ -4,6 +4,7 @@ package config
 
 import (
 	"bufio"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,6 +24,11 @@ type Settings struct {
 	Host        string
 	Port        int
 	OpenBrowser bool
+	// RemoteAccess opens the dashboard to other devices (a phone on the same Wi-Fi / VPN): it listens on every
+	// interface and lets a non-local client in only with the access key (REMOTE_ACCESS=1).
+	RemoteAccess bool
+	// AccessKey is the key other devices need (ACCESS_KEY); "" = generated once and kept in AccessKeyFile.
+	AccessKey string
 
 	DatabasePath string
 	LogDir       string
@@ -128,8 +134,35 @@ func (s *Settings) PidFile() string { return filepath.Join(s.RuntimeDir, "server
 // Address is host:port.
 func (s *Settings) Address() string { return s.Host + ":" + strconv.Itoa(s.Port) }
 
-// URL is the browser URL.
-func (s *Settings) URL() string { return "http://" + s.Address() }
+// URL is the browser URL on this machine (an "every interface" host is reached through 127.0.0.1).
+func (s *Settings) URL() string { return "http://" + LocalAddress(s.Address()) }
+
+// AccessKeyFile keeps the generated access key for other devices (next to the database).
+func (s *Settings) AccessKeyFile() string {
+	return filepath.Join(filepath.Dir(s.DatabasePath), "access-key")
+}
+
+// IsLoopbackHost reports whether host only accepts connections from this machine.
+func IsLoopbackHost(host string) bool {
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// LocalAddress turns a listen address into one this machine can connect to: 0.0.0.0 / [::] / "" become 127.0.0.1.
+func LocalAddress(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
+}
 
 // ParseEnvFile reads KEY=VALUE lines (comments, blank lines, quotes and `export` allowed).
 func ParseEnvFile(path string) map[string]string {
@@ -220,6 +253,8 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		Host:                  str("HOST", "127.0.0.1"),
 		Port:                  num("PORT", 8765),
 		OpenBrowser:           boolean("OPEN_BROWSER", true),
+		RemoteAccess:          boolean("REMOTE_ACCESS", false),
+		AccessKey:             strings.TrimSpace(get("ACCESS_KEY")),
 		DatabasePath:          path("DATABASE_PATH", "./data/reviews.sqlite"),
 		LogDir:                path("LOG_DIR", "./logs"),
 		RuntimeDir:            path("RUNTIME_DIR", "./runtime"),
@@ -255,6 +290,9 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 	}
 	if s.RunConcurrency < 1 {
 		s.RunConcurrency = 1
+	}
+	if s.RemoteAccess && IsLoopbackHost(s.Host) {
+		s.Host = "0.0.0.0" // reachable from the phone; HOST set to a specific address is kept
 	}
 	if s.AutoSyncSec < 0 {
 		s.AutoSyncSec = 0

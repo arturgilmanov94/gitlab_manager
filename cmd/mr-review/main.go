@@ -358,7 +358,7 @@ func serve(settings *config.Settings, openBrowser bool) int {
 		}
 		return fail("cannot listen on %s: %v\nSet another port in .env (PORT=8766) or free the address.", settings.Address(), err)
 	}
-	addr := listener.Addr().String()
+	addr := config.LocalAddress(listener.Addr().String()) // what this machine connects to (status, browser)
 	_ = os.WriteFile(settings.PidFile(), []byte(fmt.Sprintf("%d\n%s\n", os.Getpid(), addr)), 0o644)
 	defer func() {
 		if pid, _, ok := readPid(settings); ok && pid == os.Getpid() {

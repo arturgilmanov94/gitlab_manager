@@ -1,0 +1,35 @@
+{{define "content"}}
+<section class="page-head">
+  <div><div class="crumbs">Служебное</div><h1>Открыть с телефона</h1>
+    <div class="meta"><span>телефон и компьютер в одной Wi-Fi сети (или оба в VPN, если он пускает устройства друг к другу)</span></div></div>
+</section>
+{{if not .Enabled}}
+<section class="card">
+  <h2>Доступ с других устройств выключен</h2>
+  <p>Сейчас dashboard слушает только этот компьютер. Чтобы зайти с телефона, добавьте в <span class="mono">{{.EnvFile}}</span>:</p>
+  <pre class="log">REMOTE_ACCESS=1</pre>
+  <p class="small secondary">и перезапустите dashboard (<span class="mono">./mr-review stop && ./mr-review start</span>). Тогда здесь появятся ссылка и QR-код.
+    Чужие устройства в той же сети без ключа из ссылки не войдут; с этого компьютера ключ не нужен.</p>
+</section>
+{{else if not .Local}}
+<section class="card"><h2>Это устройство подключено</h2><p>Ключ сохранён в браузере на год. Добавьте страницу на главный экран, чтобы открывать её как приложение.</p></section>
+{{else}}
+<section class="card">
+  <h2>Отсканируйте камерой телефона</h2>
+  <p class="small secondary">Ссылка содержит ключ доступа: телефон запомнит его и дальше будет входить сам. Не пересылайте её другим.
+    Если ссылка не открывается — проверьте, что телефон в той же сети и что VPN/«изоляция клиентов» в Wi-Fi не блокирует устройства друг от друга.</p>
+  {{if not .Links}}<p class="muted">Не нашёл сетевых адресов этого компьютера, кроме локального.</p>{{end}}
+  <div class="phone-links">
+  {{range .Links}}
+    <div class="phone-link">
+      <div class="qr-box">{{.QR}}</div>
+      <div><b>{{.Label}}</b> <span class="muted small mono">{{.Iface}}</span></div>
+      <div class="mono small phone-url">{{.URL}}</div>
+      <button class="btn btn-sm" onclick="copyText({{.URL}})">Скопировать ссылку</button>
+    </div>
+  {{end}}
+  </div>
+  <p class="small muted">Порт {{.Port}}. Новый ключ: удалите <span class="mono">data/access-key</span> и перезапустите dashboard — подключённые устройства придётся подключить заново.</p>
+</section>
+{{end}}
+{{end}}

@@ -297,6 +297,20 @@
     setTimeout(reload, 900);
   };
 
+  // «Отмена»: closes the editor and puts the original text back (an edit is dropped, like closing a dialog).
+  window.cancelPost = function (button) {
+    const box = button.closest('details.gl-post');
+    if (!box) return;
+    const area = box.querySelector('textarea');
+    if (area && area.value !== area.defaultValue && !confirm('Отменить отправку? Правки текста пропадут.')) return;
+    if (area) area.value = area.defaultValue;
+    box.removeAttribute('open');
+  };
+  // Opening the editor puts the cursor into the text.
+  document.querySelectorAll('details.gl-post').forEach((box) => box.addEventListener('toggle', () => {
+    if (box.open) { const area = box.querySelector('textarea'); if (area) area.focus({ preventScroll: true }); }
+  }));
+
   // ---- findings: the code around each finding (lines the MR changed are marked), loaded after the page
   (function findingCode() {
     const boxes = Array.from(document.querySelectorAll('[data-finding-code]'));

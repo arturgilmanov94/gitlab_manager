@@ -37,6 +37,8 @@ type Server struct {
 	mux      *http.ServeMux
 	started  time.Time
 	basePage func() pageBase
+	// accessKey is what other devices need to get in ("" = the server listens on this machine only).
+	accessKey string
 }
 
 type pageBase struct {
@@ -167,7 +169,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 	if err != nil {
 		return nil, err
 	}
-	for _, page := range []string{"overview", "index", "history", "issues", "mr", "issue", "run", "runs", "workspaces", "ci", "doctor"} {
+	for _, page := range []string{"overview", "index", "history", "issues", "mr", "issue", "run", "runs", "workspaces", "ci", "doctor", "phone"} {
 		files := append([]string{"templates/layout.html", "templates/" + page + ".html"}, partials...)
 		t, err := template.New("layout").Funcs(funcs).ParseFS(assets, files...)
 		if err != nil {
@@ -175,12 +177,17 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 		}
 		s.pages[page] = t
 	}
+	key, err := loadAccessKey(svc.Settings)
+	if err != nil {
+		return nil, err
+	}
+	s.accessKey = key
 	s.routes()
 	return s, nil
 }
 
 // Handler returns the root handler.
-func (s *Server) Handler() http.Handler { return s.mux }
+func (s *Server) Handler() http.Handler { return s.guard(s.mux) }
 
 func (s *Server) routes() {
 	static, _ := fs.Sub(assets, "static")
@@ -208,6 +215,7 @@ func (s *Server) routes() {
 		s.result(w, map[string]any{"removed": len(removed)}, nil)
 	})
 	s.mux.HandleFunc("GET /ci", s.ci)
+	s.mux.HandleFunc("GET /phone", s.phonePage)
 	s.mux.HandleFunc("GET /doctor", s.doctorPage)
 	// Readable object URLs: /-/mr/1, /-/issue/2, /-/review/3, /-/task-implement/4 (+ /log).
 	s.mux.HandleFunc("GET /-/mr/{id}", s.mrPage)
