@@ -1,6 +1,8 @@
 package gitlab
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -134,5 +136,44 @@ func TestNewFileLines(t *testing.T) {
 		if got[n] != w {
 			t.Fatalf("line %d: %+v, want %+v", n, got[n], w)
 		}
+	}
+}
+
+// fakeGlab is a glab binary that answers every `glab api` list with pages of 100, 100 and 50 unresolved threads.
+const fakeGlab = `#!/bin/sh
+for a; do last=$a; done
+echo "$last" >> "$0.calls"
+page=$(echo "$last" | sed -n 's/.*[?&]page=\([0-9]*\).*/\1/p')
+count=0
+case "$page" in 1|2) count=100;; 3) count=50;; esac
+printf '['
+i=0
+while [ $i -lt $count ]; do
+  [ $i -gt 0 ] && printf ','
+  printf '{"id":"%s-%s","notes":[{"resolvable":true,"resolved":false}]}' "$page" "$i"
+  i=$((i+1))
+done
+printf ']'
+`
+
+// 250 discussions over three pages are all counted; the page loop stops at the short page.
+func TestPaginatedLists(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "glab")
+	if err := os.WriteFile(bin, []byte(fakeGlab), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := NewGlab(bin)
+	ref := Ref{Host: "gl", ProjectPath: "g/p", IID: 1}
+	n, err := g.CountUnresolved(ref)
+	if err != nil || n != 250 {
+		t.Fatalf("want 250 unresolved, got %d %v", n, err)
+	}
+	calls, _ := os.ReadFile(bin + ".calls")
+	if got := strings.Count(string(calls), "\n"); got != 3 {
+		t.Fatalf("three pages expected, got %d:\n%s", got, calls)
+	}
+	threads, err := g.UnresolvedThreads(ref)
+	if err != nil || len(threads) != 250 {
+		t.Fatalf("threads: %d %v", len(threads), err)
 	}
 }

@@ -60,6 +60,11 @@ type FakeGitLab struct {
 	// Discussions records CreateDiscussion calls ("body" or "body @path:line"); RejectPosition makes diff comments fail.
 	Discussions    []string
 	RejectPosition bool
+	// Fail* make the corresponding calls fail (GitLab hiccups); UserCalls counts CurrentUser lookups.
+	FailUnresolved bool
+	FailApprovals  bool
+	FailUser       bool
+	UserCalls      int
 }
 
 // NewFakeGitLab seeds one MR (!42, authored by alice = the current user) and one issue (#7).
@@ -91,7 +96,15 @@ func (f *FakeGitLab) Detect() (string, string, bool) { return "/fake/glab", "fak
 func (f *FakeGitLab) AuthStatus(host string) (bool, string) {
 	return true, "Logged in to gitlab.example.com as me"
 }
-func (f *FakeGitLab) CurrentUser(host string) (string, error) { return "alice", nil }
+func (f *FakeGitLab) CurrentUser(host string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.UserCalls++
+	if f.FailUser {
+		return "", errors.New("connection refused")
+	}
+	return "alice", nil
+}
 func (f *FakeGitLab) GetMR(ref gitlab.Ref) (map[string]any, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -104,11 +117,17 @@ func (f *FakeGitLab) GetMR(ref gitlab.Ref) (map[string]any, error) {
 func (f *FakeGitLab) CountUnresolved(ref gitlab.Ref) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.FailUnresolved {
+		return 0, errors.New("glab api discussions failed: 502")
+	}
 	return f.Unresolved[ref.IID], nil
 }
 func (f *FakeGitLab) GetApprovals(ref gitlab.Ref) (gitlab.Approvals, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.FailApprovals {
+		return gitlab.Approvals{}, errors.New("glab api approvals failed: 502")
+	}
 	if by, ok := f.ApprovedBy[ref.IID]; ok {
 		return gitlab.Approvals{Given: int64(len(by)), Required: 2, ApprovedBy: by}, nil
 	}

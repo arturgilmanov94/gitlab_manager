@@ -290,7 +290,34 @@ func (g *Glab) apiObject(host, path string) (map[string]any, error) {
 	return obj, nil
 }
 
+// maxPages caps a paginated listing (100 per page): beyond it the list is cut rather than read forever.
+const maxPages = 50
+
+// apiList GETs a list. A path with per_page=N is read page by page until a page comes back shorter than N:
+// GitLab returns at most 100 items per request, and an MR with 250 discussions must count all of them.
 func (g *Glab) apiList(host, path string) ([]map[string]any, error) {
+	perPage := 0
+	if u, err := url.Parse(path); err == nil {
+		perPage, _ = strconv.Atoi(u.Query().Get("per_page"))
+	}
+	if perPage <= 0 {
+		return g.apiPage(host, path)
+	}
+	var out []map[string]any
+	for page := 1; page <= maxPages; page++ {
+		items, err := g.apiPage(host, fmt.Sprintf("%s&page=%d", path, page))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, items...)
+		if len(items) < perPage {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (g *Glab) apiPage(host, path string) ([]map[string]any, error) {
 	data, err := g.API(host, path)
 	if err != nil {
 		return nil, err

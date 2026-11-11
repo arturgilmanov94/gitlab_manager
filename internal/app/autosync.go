@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -49,8 +51,10 @@ func (s *Service) autoSyncOnce() {
 		return
 	}
 	msg := ""
-	if _, err := s.SyncMRs(); err != nil {
+	if res, err := s.SyncMRs(); err != nil {
 		msg = "MR: " + err.Error()
+	} else if len(res.Problems) > 0 {
+		msg = fmt.Sprintf("не все MR обновились (%d): %s", len(res.Problems), strings.Join(res.Problems[:min(3, len(res.Problems))], "; "))
 	}
 	if _, err := s.SyncIssues(); err != nil {
 		if msg != "" {

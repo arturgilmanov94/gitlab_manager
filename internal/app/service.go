@@ -57,8 +57,9 @@ type Service struct {
 	contexts  map[string]*prompts.MRContext   // prefetched diff/discussions per "ref sha" (reviewContext)
 	decisions map[int64]chan approvalDecision // pending approval id → channel the run goroutine waits on
 	runRules  map[int64]map[string]bool       // «allow such calls until the end of the run»: run id → SimilarKey
-	username  string
-	userOnce  sync.Once
+	username  string                          // GitLab username, cached once known (CurrentUser)
+	userTried time.Time                       // last lookup attempt
+	userMu    sync.Mutex                      // guards username/userTried
 	project   *[2]string
 	wg        sync.WaitGroup
 }
@@ -138,14 +139,22 @@ func (s *Service) DefaultProject() (string, string) {
 	return s.project[0], s.project[1]
 }
 
-// CurrentUser returns the glab username (cached; "" if unavailable).
+// userRetry is how long a failed username lookup is not repeated (pages ask for it on every render).
+const userRetry = 30 * time.Second
+
+// CurrentUser returns the glab username ("" if unavailable). Only a successful answer is cached for good: a
+// dashboard started with the VPN off learns the username once GitLab answers.
 func (s *Service) CurrentUser() string {
-	s.userOnce.Do(func() {
-		host, _ := s.DefaultProject()
-		if name, err := s.GitLab.CurrentUser(host); err == nil {
-			s.username = name
-		}
-	})
+	s.userMu.Lock()
+	defer s.userMu.Unlock()
+	if s.username != "" || (!s.userTried.IsZero() && time.Since(s.userTried) < userRetry) {
+		return s.username
+	}
+	s.userTried = time.Now()
+	host, _ := s.DefaultProject()
+	if name, err := s.GitLab.CurrentUser(host); err == nil {
+		s.username = name
+	}
 	return s.username
 }
 
@@ -407,19 +416,42 @@ func (s *Service) mrFromPayload(payload map[string]any, ref gitlab.Ref) db.Merge
 // fetchMR reads an MR from GitLab with its discussions, approvals and my roles, and stores it.
 // manual marks MRs added by hand (they stay in the list regardless of roles).
 func (s *Service) fetchMR(ref gitlab.Ref, manual bool) (*db.MergeRequest, error) {
+	mr, _, err := s.fetchMRPartial(ref, manual)
+	return mr, err
+}
+
+// fetchMRPartial is fetchMR that also reports what could not be refreshed (discussions, approvals, username):
+// those values keep what was stored before instead of turning into zeros — a failed call is not "0 threads".
+func (s *Service) fetchMRPartial(ref gitlab.Ref, manual bool) (*db.MergeRequest, string, error) {
 	payload, err := s.GitLab.GetMR(ref)
 	if err != nil {
-		return nil, &UserError{err.Error()}
+		return nil, "", &UserError{err.Error()}
 	}
+	previous, _ := s.DB.FindMR(ref.Host, ref.ProjectPath, ref.IID)
+	var problems []string
 	row := s.mrFromPayload(payload, ref)
 	row.Manual = manual
 	if n, err := s.GitLab.CountUnresolved(ref); err == nil {
 		row.Unresolved = n
+	} else {
+		problems = append(problems, "обсуждения: "+err.Error())
+		if previous != nil {
+			row.Unresolved = previous.Unresolved
+		}
 	}
 	me := s.CurrentUser()
 	if approvals, err := s.GitLab.GetApprovals(ref); err == nil {
 		row.ApprovalsGiven, row.ApprovalsRequired = approvals.Given, approvals.Required
 		row.ApprovedByMe = me != "" && contains(approvals.ApprovedBy, me)
+	} else {
+		problems = append(problems, "одобрения: "+err.Error())
+		if previous != nil {
+			row.ApprovalsGiven, row.ApprovalsRequired, row.ApprovedByMe = previous.ApprovalsGiven, previous.ApprovalsRequired, previous.ApprovedByMe
+		}
+	}
+	if me == "" && previous != nil {
+		// Without the username my roles cannot be told: keep the stored ones (an empty set would drop the MR).
+		row.MyRoles, row.ApprovedByMe = previous.MyRoles, previous.ApprovedByMe
 	}
 	if me != "" {
 		var roles []string
@@ -434,7 +466,8 @@ func (s *Service) fetchMR(ref gitlab.Ref, manual bool) (*db.MergeRequest, error)
 		}
 		row.MyRoles = strings.Join(roles, ",")
 	}
-	return s.DB.UpsertMR(row)
+	mr, err := s.DB.UpsertMR(row)
+	return mr, strings.Join(problems, "; "), err
 }
 
 // AddMR adds a merge request by URL / short reference (kept in the list until removed by hand).
@@ -464,6 +497,8 @@ type SyncResult struct {
 	Archived int // MRs that no longer concern me but have runs: kept in the history
 	Project  string
 	Duration time.Duration
+	// Problems lists MRs that could not be refreshed fully (the stored values were kept), for the sync indicator.
+	Problems []string
 }
 
 // syncConcurrency is how many glab processes a sync runs at once (each MR costs three API calls of ~0.7 s).
@@ -522,7 +557,12 @@ func (s *Service) SyncMRs() (SyncResult, error) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			fresh, err := s.fetchMR(ref, false)
+			fresh, partial, err := s.fetchMRPartial(ref, false)
+			if err != nil || partial != "" {
+				mu.Lock()
+				result.Problems = append(result.Problems, fmt.Sprintf("!%d: %s", ref.IID, firstOf(partial, errText(err))))
+				mu.Unlock()
+			}
 			if err != nil {
 				return
 			}
@@ -3069,4 +3109,12 @@ func BashCommand(a db.Approval) string {
 		return ""
 	}
 	return bashCommand([]byte(a.InputJSON))
+}
+
+// errText is the message of err ("" for nil).
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

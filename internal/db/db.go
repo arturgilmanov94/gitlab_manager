@@ -269,6 +269,15 @@ func (d *DB) UpsertMR(m MergeRequest) (*MergeRequest, error) {
 	return scanMR(d.sql.QueryRow("SELECT "+mrColumns+" FROM merge_requests WHERE gitlab_host = ? AND project_path = ? AND iid = ?", m.GitLabHost, m.ProjectPath, m.IID))
 }
 
+// FindMR returns the stored merge request of a GitLab reference or nil.
+func (d *DB) FindMR(host, projectPath string, iid int64) (*MergeRequest, error) {
+	m, err := scanMR(d.sql.QueryRow("SELECT "+mrColumns+" FROM merge_requests WHERE gitlab_host = ? AND project_path = ? AND iid = ?", host, projectPath, iid))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return m, err
+}
+
 // GetMR returns a merge request or nil.
 func (d *DB) GetMR(id int64) (*MergeRequest, error) {
 	m, err := scanMR(d.sql.QueryRow("SELECT "+mrColumns+" FROM merge_requests WHERE id = ?", id))

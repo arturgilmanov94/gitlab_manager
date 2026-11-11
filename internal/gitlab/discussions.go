@@ -29,7 +29,7 @@ type Position struct {
 
 // MRVersions lists the diff versions of an MR, newest first.
 func (g *Glab) MRVersions(ref Ref) ([]Version, error) {
-	list, err := g.apiList(ref.Host, fmt.Sprintf("projects/%s/merge_requests/%d/versions", ref.EncodedProject(), ref.IID))
+	list, err := g.apiList(ref.Host, fmt.Sprintf("projects/%s/merge_requests/%d/versions?per_page=100", ref.EncodedProject(), ref.IID))
 	if err != nil {
 		return nil, err
 	}
