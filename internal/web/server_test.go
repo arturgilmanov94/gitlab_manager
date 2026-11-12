@@ -1225,3 +1225,25 @@ func TestTaskPageNotesStopAndRunNow(t *testing.T) {
 		t.Fatal("the «сейчас:» line is always there")
 	}
 }
+
+// Fix buttons follow the server rule: the author and an assignee see them, a reviewer does not.
+func TestFixButtonsFollowRights(t *testing.T) {
+	ts, svc, _ := newServer(t)
+	gl := svc.GitLab.(*testutil.FakeGitLab)
+	reviewing := testutil.MRPayload(44, "sha-44")
+	reviewing["author"] = map[string]any{"username": "bob"}
+	reviewing["assignees"] = []any{}
+	reviewing["reviewers"] = []any{map[string]any{"username": "alice"}}
+	gl.MRs[44] = reviewing
+	assigned := testutil.MRPayload(43, "sha-43")
+	assigned["author"] = map[string]any{"username": "bob"}
+	gl.MRs[43] = assigned
+	asReviewer, _ := svc.AddMR("!44")
+	asAssignee, _ := svc.AddMR("!43")
+	if _, body := get(t, ts.URL+mrPath(asReviewer.ID)); strings.Contains(body, "'ci_fix'") {
+		t.Fatal("a reviewer gets no «Исправить CI»")
+	}
+	if _, body := get(t, ts.URL+mrPath(asAssignee.ID)); !strings.Contains(body, "'ci_fix'") {
+		t.Fatal("an assignee gets «Исправить CI»")
+	}
+}

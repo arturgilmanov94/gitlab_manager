@@ -183,6 +183,23 @@ func (m MergeRequest) Relevant() bool {
 	return !m.Closed() && !m.Hidden && !m.ApprovedByMe && (m.MyRoles != "" || m.Manual)
 }
 
+// CanFix reports whether user may let an agent change the MR branch (fix comments, findings or CI): the author or
+// an assignee. A reviewer gives feedback, the branch is not theirs to change.
+func (m MergeRequest) CanFix(user string) bool {
+	if user == "" {
+		return false
+	}
+	if m.Author == user {
+		return true
+	}
+	for _, role := range strings.Split(m.MyRoles, ",") {
+		if role == "assignee" {
+			return true
+		}
+	}
+	return false
+}
+
 // relevantWhere is the SQL form of Relevant().
 const relevantWhere = "state NOT IN ('merged', 'closed') AND hidden = 0 AND approved_by_me = 0 AND (my_roles != '' OR manual = 1)"
 

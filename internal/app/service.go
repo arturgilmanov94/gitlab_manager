@@ -1184,6 +1184,9 @@ func (s *Service) StartCIFix(mrID int64, runnerName string, analysisRunID, conti
 	if err != nil {
 		return 0, err
 	}
+	if err := s.requireFixRights(mr); err != nil {
+		return 0, err
+	}
 	if mr.SourceBranch == "" {
 		return 0, userErr("the merge request has no source branch")
 	}
@@ -1228,8 +1231,8 @@ func (s *Service) StartFixFindings(mrID int64, runnerName, notes string, finding
 	if err != nil {
 		return 0, err
 	}
-	if me := s.CurrentUser(); me == "" || mr.Author != me {
-		return 0, userErr("only the author fixes findings in the MR branch (!%d is by %s); for others' MRs use the review results", mr.IID, mr.Author)
+	if err := s.requireFixRights(mr); err != nil {
+		return 0, err
 	}
 	if mr.SourceBranch == "" {
 		return 0, userErr("the merge request has no source branch")
@@ -1397,6 +1400,9 @@ func (s *Service) StartFixComments(mrID int64, runnerName, notes string, continu
 	}
 	mr, err := s.RefreshMR(mrID)
 	if err != nil {
+		return 0, err
+	}
+	if err := s.requireFixRights(mr); err != nil {
 		return 0, err
 	}
 	if mr.SourceBranch == "" {
@@ -3168,4 +3174,12 @@ func relativePaths(text, dir string) string {
 		return text
 	}
 	return strings.ReplaceAll(text, strings.TrimSuffix(dir, "/")+"/", "")
+}
+
+// requireFixRights refuses runs that change an MR branch for anyone but its author or an assignee.
+func (s *Service) requireFixRights(mr *db.MergeRequest) error {
+	if mr.CanFix(s.CurrentUser()) {
+		return nil
+	}
+	return userErr("only the author or an assignee lets an agent change the MR branch (!%d is by %s); for others' MRs use the review results", mr.IID, mr.Author)
 }

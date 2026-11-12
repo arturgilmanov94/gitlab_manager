@@ -709,7 +709,8 @@ type ciRow struct {
 	db.MRListItem
 	Jobs      []prompts.FailedJob
 	Analysis  *db.RunSummary // latest finished CI analysis of this head pipeline
-	IsMine    bool
+	IsMine    bool           // I am the author ("мой" badge)
+	CanFix    bool           // author or assignee: may let an agent fix the CI in the branch
 	JobsKnown bool
 }
 
@@ -727,7 +728,7 @@ func (s *Server) ci(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		mr := item.MergeRequest
-		row := ciRow{MRListItem: item, IsMine: username != "" && item.Author == username}
+		row := ciRow{MRListItem: item, IsMine: username != "" && item.Author == username, CanFix: item.CanFix(username)}
 		row.Jobs = s.svc.FailedJobsFor(&mr)
 		row.JobsKnown = row.Jobs != nil
 		if runs, _ := s.svc.DB.ListRunsForMR(item.ID); len(runs) > 0 {
@@ -877,7 +878,8 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 		"Findings": findings, "Discussions": discussions, "Active": active, "LastRun": lastRun,
 		"Stale": stale, "State": state, "OpenMajor": major, "OpenMinor": minor, "OpenInfo": info,
 		"IsMine":   username != "" && mr.Author == username,
-		"Pickable": username != "" && mr.Author == username && active == nil && mr.State != "merged" && mr.State != "closed",
+		"CanFix":   mr.CanFix(username),
+		"Pickable": mr.CanFix(username) && active == nil && mr.State != "merged" && mr.State != "closed",
 		"Closed":   mr.State == "merged" || mr.State == "closed",
 		"Blob":     blobBase(mr.WebURL), "SHA": sha,
 	})

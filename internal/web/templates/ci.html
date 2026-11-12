@@ -33,15 +33,15 @@
       <div class="actions">
         {{if $busy}}<a class="btn btn-sm btn-primary" href="{{runPath .Last.Kind .Last.ID}}">Открыть прогресс</a>
         {{else if .Analysis}}
-          {{if .IsMine}}<button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "ci_fix"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'ci_fix', this, {analysis_run: '{{.Analysis.ID}}'})">Исправить CI</button>{{end}}
-          <a class="btn btn-sm{{if not .IsMine}} btn-primary{{end}}" href="{{runPath .Analysis.Kind .Analysis.ID}}">Открыть разбор</a>
+          {{if .CanFix}}<button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "ci_fix"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'ci_fix', this, {analysis_run: '{{.Analysis.ID}}'})">Исправить CI</button>{{end}}
+          <a class="btn btn-sm{{if not .CanFix}} btn-primary{{end}}" href="{{runPath .Analysis.Kind .Analysis.ID}}">Открыть разбор</a>
         {{else}}<button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "ci_analyze"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'ci_analyze', this)">Разобрать ошибки</button>{{end}}
         <details class="menu">
           <summary title="Ещё действия">⋯</summary>
           <div class="menu-items">
             {{if not $busy}}
               <button class="item tip" data-tip="{{kindTip "ci_analyze"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'ci_analyze', this)">Разобрать ошибки{{if .Analysis}} заново{{end}}</button>
-              {{if .IsMine}}<button class="item tip" data-tip="{{kindTip "ci_fix"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'ci_fix', this, {analysis_run: '{{if .Analysis}}{{.Analysis.ID}}{{end}}'})">Исправить CI{{if not .Analysis}} без разбора{{end}}</button>
+              {{if .CanFix}}<button class="item tip" data-tip="{{kindTip "ci_fix"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'ci_fix', this, {analysis_run: '{{if .Analysis}}{{.Analysis.ID}}{{end}}'})">Исправить CI{{if not .Analysis}} без разбора{{end}}</button>
               {{else}}<span class="item tip" aria-disabled="true" data-tip="Исправлять CI можно только в своих MR: push в чужую ветку недопустим">Исправить CI</span>{{end}}
               <div class="divider"></div>
             {{end}}

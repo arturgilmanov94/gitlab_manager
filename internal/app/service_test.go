@@ -1364,6 +1364,7 @@ func TestFixSelectedFindings(t *testing.T) {
 	}
 	other := testutil.MRPayload(43, "sha-x")
 	other["author"] = map[string]any{"username": "bob"}
+	other["assignees"] = []any{} // an assignee may fix: this MR is bob's alone
 	gl.MRs[43] = other
 	bobs, _ := svc.AddMR("!43")
 	if _, err := svc.StartFixFindings(bobs.ID, "", "", []int64{findings[0].ID}, nil, 0); err == nil || !strings.Contains(err.Error(), "only the author") {
