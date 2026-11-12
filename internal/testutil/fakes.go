@@ -58,7 +58,7 @@ type FakeGitLab struct {
 	Listed     []int64                       // MRs returned by ListOpenMRs; nil = every MR in MRs
 	Calls      []string
 	CreatedMR  string
-	// Posted records CreateDiscussion calls ("body" or "body @path:line"); RejectPosition makes diff comments fail.
+	// Posted records CreateDiscussion calls ("body" or "body @path:line"; drafts start with "[draft] "); RejectPosition makes diff comments fail.
 	Posted         []string
 	RejectPosition bool
 	// Fail* make the corresponding calls fail (GitLab hiccups); UserCalls counts CurrentUser lookups.
@@ -406,6 +406,17 @@ func (f *FakeGitLab) CreateDiscussion(ref gitlab.Ref, body string, pos *gitlab.P
 	}
 	f.Posted = append(f.Posted, entry)
 	return int64(1000 + len(f.Posted)), nil
+}
+
+// CreateDraftNote records the draft comment as "[draft] " + what CreateDiscussion would record.
+func (f *FakeGitLab) CreateDraftNote(ref gitlab.Ref, body string, pos *gitlab.Position) (int64, error) {
+	id, err := f.CreateDiscussion(ref, body, pos)
+	if err == nil {
+		f.mu.Lock()
+		f.Posted[len(f.Posted)-1] = "[draft] " + f.Posted[len(f.Posted)-1]
+		f.mu.Unlock()
+	}
+	return id, err
 }
 
 func containsInt(list []int64, v int64) bool {

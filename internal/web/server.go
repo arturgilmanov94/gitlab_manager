@@ -79,6 +79,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 	s := &Server{svc: svc, version: version, runners: runners, pages: map[string]*template.Template{}, mux: http.NewServeMux(), started: time.Now()}
 	funcs := template.FuncMap{
 		"findingComment": app.FindingComment,
+		"draftNote":      app.IsDraftNote,
 		"shortSHA": func(sha string) string {
 			if len(sha) > 10 {
 				return sha[:10]
@@ -412,12 +413,13 @@ func (s *Server) routes() {
 		writeJSON(w, 200, map[string]any{"ok": true, "html": string(renderMarkdown(readBody(r)["text"], "", ""))})
 	})
 	s.mux.HandleFunc("POST /api/findings/{id}/gitlab", func(w http.ResponseWriter, r *http.Request) {
-		res, err := s.svc.PostFinding(pathID(r), readBody(r)["body"])
+		body := readBody(r)
+		res, err := s.svc.PostFinding(pathID(r), body["body"], body["draft"] == "1" || body["draft"] == "true")
 		if err != nil {
 			s.result(w, nil, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"ok": true, "url": res.URL, "on_line": res.OnLine})
+		writeJSON(w, 200, map[string]any{"ok": true, "url": res.URL, "on_line": res.OnLine, "draft": res.Draft})
 	})
 
 	s.mux.HandleFunc("POST /api/issues", s.apiAddIssue)

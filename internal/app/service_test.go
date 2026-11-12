@@ -529,24 +529,24 @@ func TestFindingCodeAndPostToGitLab(t *testing.T) {
 		}
 	}
 
-	res, err := svc.PostFinding(findings[0].ID, "  edited text  ")
+	res, err := svc.PostFinding(findings[0].ID, "  edited text  ", false)
 	if err != nil || !res.OnLine || !strings.HasSuffix(res.URL, "#note_1001") {
 		t.Fatalf("post on line: %+v %v", res, err)
 	}
 	if gl.Posted[0] != "edited text @src/A.php:10" {
 		t.Fatalf("discussion %q", gl.Posted[0])
 	}
-	if _, err := svc.PostFinding(findings[0].ID, "again"); err == nil {
+	if _, err := svc.PostFinding(findings[0].ID, "again", false); err == nil {
 		t.Fatal("posted twice")
 	}
 	if f, _ := svc.DB.GetFinding(findings[0].ID); f.GitLabNoteURL != res.URL {
 		t.Fatalf("note url %q", f.GitLabNoteURL)
 	}
 	// No line: a general MR comment naming the file.
-	if res, err := svc.PostFinding(findings[1].ID, "naming"); err != nil || res.OnLine || gl.Posted[1] != "`src/B.php`\n\nnaming" {
+	if res, err := svc.PostFinding(findings[1].ID, "naming", false); err != nil || res.OnLine || gl.Posted[1] != "`src/B.php`\n\nnaming" {
 		t.Fatalf("general: %+v %v %q", res, err, gl.Posted)
 	}
-	if _, err := svc.PostFinding(findings[1].ID, "   "); err == nil {
+	if _, err := svc.PostFinding(findings[1].ID, "   ", false); err == nil {
 		t.Fatal("empty body accepted")
 	}
 	if text := FindingComment(findings[0]); !strings.Contains(text, "**Null deref**") || !strings.Contains(text, "**Предложение:**\ns") {
@@ -562,9 +562,36 @@ func TestPostFindingFallsBackWhenGitLabRejectsTheLine(t *testing.T) {
 	testutil.WaitFor(t, func() bool { return status(svc, reviewID) == db.StatusDone })
 	findings, _ := svc.DB.ListFindings(reviewID)
 	gl.RejectPosition = true
-	res, err := svc.PostFinding(findings[0].ID, "text")
+	res, err := svc.PostFinding(findings[0].ID, "text", false)
 	if err != nil || res.OnLine || gl.Posted[0] != "`src/A.php:10`\n\ntext" {
 		t.Fatalf("%+v %v %q", res, err, gl.Posted)
+	}
+}
+
+func TestPostFindingAsDraft(t *testing.T) {
+	svc, gl, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	reviewID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, reviewID) == db.StatusDone })
+	findings, _ := svc.DB.ListFindings(reviewID)
+	res, err := svc.PostFinding(findings[0].ID, "draft text", true)
+	if err != nil || !res.Draft || !res.OnLine || gl.Posted[0] != "[draft] draft text @src/A.php:10" || !IsDraftNote(res.URL) {
+		t.Fatalf("%+v %v %q", res, err, gl.Posted)
+	}
+	if f, _ := svc.DB.GetFinding(findings[0].ID); !IsDraftNote(f.GitLabNoteURL) {
+		t.Fatalf("note url %q", f.GitLabNoteURL)
+	}
+	if _, err := svc.PostFinding(findings[0].ID, "again", false); err == nil {
+		t.Fatal("a finding sent as a draft was sent again")
+	}
+	// Line outside the MR diff: a general draft naming the file and line.
+	gl.RejectPosition = true
+	if res, err := svc.PostFinding(findings[1].ID, "naming", true); err != nil || res.OnLine || gl.Posted[1] != "[draft] `src/B.php`\n\nnaming" {
+		t.Fatalf("general draft: %+v %v %q", res, err, gl.Posted)
+	}
+	if IsDraftNote("https://gitlab.example.com/g/p/-/merge_requests/42#note_5") {
+		t.Fatal("a posted note taken for a draft")
 	}
 }
 

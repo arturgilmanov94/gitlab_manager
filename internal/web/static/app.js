@@ -293,13 +293,14 @@
   const focusDirty = () => dirty('review-focus') || dirty('notes');
 
   // ---- findings: «Отправить в GitLab» with the edited text
-  window.postFinding = async function (id, button) {
+  window.postFinding = async function (id, button, draft) {
     const area = document.querySelector(`textarea[data-post-finding="${id}"]`);
     if (!area || !area.value.trim()) { flash('Пустой комментарий', false); return; }
     hold(button);
-    const data = await call('POST', `/api/findings/${id}/gitlab`, { body: area.value }, button);
+    const data = await call('POST', `/api/findings/${id}/gitlab`, { body: area.value, draft: !!draft }, button);
     if (!data) { release(button); return; }
-    flash(data.on_line ? 'Комментарий добавлен на строку в diff MR' : 'Комментарий добавлен в MR (строка вне diff — общим комментарием)', true);
+    if (data.draft) flash(data.on_line ? 'Черновик добавлен на строку в diff MR — опубликуйте ревью в GitLab' : 'Черновик добавлен в MR (строка вне diff — общим) — опубликуйте ревью в GitLab', true);
+    else flash(data.on_line ? 'Комментарий добавлен на строку в diff MR' : 'Комментарий добавлен в MR (строка вне diff — общим комментарием)', true);
     area.dataset.sent = '1';
     setTimeout(reload, 900);
   };

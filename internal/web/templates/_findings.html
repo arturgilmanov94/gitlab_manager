@@ -19,12 +19,13 @@
       {{if .Suggestion}}<details class="fix"><summary>Предлагаемый фикс</summary>{{md .Suggestion $.Blob $.SHA}}</details>{{end}}
       {{if .File}}<div class="code-snippet" data-finding-code="{{.ID}}" hidden></div>{{end}}
       <div class="finding-actions">
-        {{if .GitLabNoteURL}}<a class="badge badge-success ext tip" data-tip="Замечание отправлено в MR комментарием" href="{{.GitLabNoteURL}}" target="_blank" rel="noopener">в GitLab</a>
+        {{if .GitLabNoteURL}}{{if draftNote .GitLabNoteURL}}<a class="badge badge-warning ext tip" data-tip="Замечание добавлено черновиком в ваше ревью в GitLab: его видите только вы, пока не нажмёте «Submit review» в MR" href="{{.GitLabNoteURL}}" target="_blank" rel="noopener">черновик в GitLab</a>{{else}}<a class="badge badge-success ext tip" data-tip="Замечание отправлено в MR комментарием" href="{{.GitLabNoteURL}}" target="_blank" rel="noopener">в GitLab</a>{{end}}
         {{else if and $.MR (not $.Closed)}}<details class="gl-post">
           <summary class="btn btn-sm tip" data-tip="Отправить замечание комментарием в MR — сначала можно отредактировать текст">Отправить в GitLab</summary>
           <div class="gl-post-body">
             <textarea rows="6" data-post-finding="{{.ID}}">{{findingComment .}}</textarea>
             <div class="inline"><button class="btn btn-primary btn-sm" onclick="postFinding('{{.ID}}', this)">Отправить</button>
+              <button class="btn btn-sm tip" data-tip="Добавить черновиком в ваше ревью в GitLab: никто не увидит и уведомлений не будет, пока вы не нажмёте «Submit review» в MR" onclick="postFinding('{{.ID}}', this, true)">Черновиком</button>
               <button class="btn btn-sm" onclick="cancelPost(this)">Отмена</button>
               <span class="small muted">{{if and .File .Line}}ляжет на строку <span class="mono">{{.File}}:{{deref .Line}}</span> в diff MR; если строка вне изменений MR — общим комментарием с указанием файла и строки{{else}}общим комментарием в MR{{end}}. Markdown GitLab.</span></div>
           </div>

@@ -153,6 +153,7 @@ type Client interface {
 	MRVersionDiffs(ref Ref, versionID int64) ([]FileDiff, error)
 	RawFile(ref Ref, path, sha string) (string, error)
 	CreateDiscussion(ref Ref, body string, pos *Position) (int64, error)
+	CreateDraftNote(ref Ref, body string, pos *Position) (int64, error)
 	ReplyDiscussion(ref Ref, discussionID, body string) (int64, error)
 	ResolveDiscussion(ref Ref, discussionID string, resolved bool) error
 	Approve(ref Ref, sha string) error

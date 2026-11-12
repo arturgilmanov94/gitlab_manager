@@ -102,13 +102,21 @@ func (s *Service) codeExcerpt(mr *db.MergeRequest, sha, file string, line int64)
 type PostResult struct {
 	URL    string
 	OnLine bool // posted as a diff comment on the finding's line (false = a general comment of the MR)
+	Draft  bool // a draft comment of the developer's pending GitLab review, not yet visible to others
 }
+
+// draftAnchor marks the stored link of a finding sent as a draft comment (GitLab has no page anchor for drafts).
+const draftAnchor = "#draft_note_"
+
+// IsDraftNote reports whether a stored GitLab link is the one of a draft comment.
+func IsDraftNote(url string) bool { return strings.Contains(url, draftAnchor) }
 
 // PostFinding posts the (edited) text of a finding to the MR in GitLab: as a diff comment on its line when the line is
 // part of the reviewed MR version, otherwise as an MR comment that names the file and line. The note link is stored.
-func (s *Service) PostFinding(findingID int64, body string) (*PostResult, error) {
+// With draft the comment goes to the developer's pending review in GitLab and stays hidden until it is submitted there.
+func (s *Service) PostFinding(findingID int64, body string, draft bool) (*PostResult, error) {
 	if v := s.forFinding(findingID); v != s {
-		return v.PostFinding(findingID, body)
+		return v.PostFinding(findingID, body, draft)
 	}
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -140,10 +148,14 @@ func (s *Service) PostFinding(findingID int64, body string) (*PostResult, error)
 			}
 		}
 	}
+	create := s.GitLab.CreateDiscussion
+	if draft {
+		create = s.GitLab.CreateDraftNote
+	}
 	var noteID int64
 	onLine := false
 	if pos != nil {
-		noteID, err = s.GitLab.CreateDiscussion(ref, body, pos)
+		noteID, err = create(ref, body, pos)
 		onLine = err == nil
 	}
 	if !onLine {
@@ -151,16 +163,19 @@ func (s *Service) PostFinding(findingID int64, body string) (*PostResult, error)
 		if where := findingWhere(f); where != "" {
 			general = where + "\n\n" + body
 		}
-		if noteID, err = s.GitLab.CreateDiscussion(ref, general, nil); err != nil {
+		if noteID, err = create(ref, general, nil); err != nil {
 			return nil, &UserError{err.Error()}
 		}
 	}
 	link := mr.WebURL
-	if noteID > 0 {
+	switch {
+	case draft:
+		link = fmt.Sprintf("%s%s%d", mr.WebURL, draftAnchor, noteID)
+	case noteID > 0:
 		link = fmt.Sprintf("%s#note_%d", mr.WebURL, noteID)
 	}
 	_ = s.DB.SetFindingGitLabNote(f.ID, link)
-	return &PostResult{URL: link, OnLine: onLine}, nil
+	return &PostResult{URL: link, OnLine: onLine, Draft: draft}, nil
 }
 
 // FindingComment is the default text of a finding posted to GitLab; the developer edits it before sending.

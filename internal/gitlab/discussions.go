@@ -72,15 +72,7 @@ func (g *Glab) RawFile(ref Ref, path, sha string) (string, error) {
 func (g *Glab) CreateDiscussion(ref Ref, body string, pos *Position) (int64, error) {
 	payload := map[string]any{"body": body}
 	if pos != nil {
-		p := map[string]any{"position_type": "text", "base_sha": pos.BaseSHA, "start_sha": pos.StartSHA, "head_sha": pos.HeadSHA,
-			"old_path": firstNonEmpty(pos.OldPath, pos.NewPath), "new_path": pos.NewPath}
-		if pos.NewLine > 0 {
-			p["new_line"] = pos.NewLine
-		}
-		if pos.OldLine > 0 {
-			p["old_line"] = pos.OldLine
-		}
-		payload["position"] = p
+		payload["position"] = pos.payload()
 	}
 	obj, err := g.apiWrite(ref.Host, "POST", fmt.Sprintf("projects/%s/merge_requests/%d/discussions", ref.EncodedProject(), ref.IID), payload)
 	if err != nil {
@@ -93,6 +85,33 @@ func (g *Glab) CreateDiscussion(ref Ref, body string, pos *Position) (int64, err
 		}
 	}
 	return 0, nil
+}
+
+// CreateDraftNote adds a draft (pending review) comment to an MR: only its author sees it until the review is
+// submitted in GitLab. On a diff line when pos is given, otherwise on the MR itself. It returns the draft note id.
+func (g *Glab) CreateDraftNote(ref Ref, body string, pos *Position) (int64, error) {
+	payload := map[string]any{"note": body}
+	if pos != nil {
+		payload["position"] = pos.payload()
+	}
+	obj, err := g.apiWrite(ref.Host, "POST", fmt.Sprintf("projects/%s/merge_requests/%d/draft_notes", ref.EncodedProject(), ref.IID), payload)
+	if err != nil {
+		return 0, fmt.Errorf("GitLab did not accept the draft comment: %w", err)
+	}
+	return Int(obj, "id"), nil
+}
+
+// payload is the GitLab "position" object of a diff comment.
+func (pos *Position) payload() map[string]any {
+	p := map[string]any{"position_type": "text", "base_sha": pos.BaseSHA, "start_sha": pos.StartSHA, "head_sha": pos.HeadSHA,
+		"old_path": firstNonEmpty(pos.OldPath, pos.NewPath), "new_path": pos.NewPath}
+	if pos.NewLine > 0 {
+		p["new_line"] = pos.NewLine
+	}
+	if pos.OldLine > 0 {
+		p["old_line"] = pos.OldLine
+	}
+	return p
 }
 
 // apiWrite sends a JSON payload with POST/PUT/DELETE and returns the response object. These are the only calls

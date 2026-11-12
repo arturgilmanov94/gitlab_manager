@@ -1262,7 +1262,7 @@ func TestReviewFocusFindingsAndLiveRefresh(t *testing.T) {
 		t.Fatal("version must change when a run finishes")
 	}
 	_, body := get(t, ts.URL+"/-/mr/1")
-	for _, want := range []string{`data-finding-code="1"`, `data-post-finding="1"`, "Отправить в GitLab", "ляжет на строку", "**Null deref**", ">Ложное</button>"} {
+	for _, want := range []string{`data-finding-code="1"`, `data-post-finding="1"`, "Отправить в GitLab", ">Черновиком</button>", "ляжет на строку", "**Null deref**", ">Ложное</button>"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("mr page lacks %q", want)
 		}
@@ -1276,6 +1276,13 @@ func TestReviewFocusFindingsAndLiveRefresh(t *testing.T) {
 	}
 	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, ">в GitLab</a>") || strings.Contains(body, `data-post-finding="1"`) {
 		t.Fatal("a posted finding links to its GitLab note instead of offering the editor")
+	}
+	code, out = postJSON(t, ts.URL+"/api/findings/2/gitlab", map[string]any{"body": "Черновик", "draft": true})
+	if code != 200 || out["draft"] != true {
+		t.Fatalf("draft: %d %v", code, out)
+	}
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, ">черновик в GitLab</a>") {
+		t.Fatal("a finding sent as a draft is not marked as a draft")
 	}
 }
 
