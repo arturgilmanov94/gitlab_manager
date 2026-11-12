@@ -434,6 +434,59 @@ func (m *Manager) Commit(ctx context.Context, path, message string) (string, err
 	return m.git(ctx, path, "commit", "--quiet", "-m", message)
 }
 
+// CommitPaths commits the given paths (relative to the worktree) with message; paths without changes are skipped.
+// It returns false when nothing of them had changed. Never touches files outside the list.
+func (m *Manager) CommitPaths(ctx context.Context, path, message string, paths []string) (bool, error) {
+	if strings.TrimSpace(message) == "" {
+		return false, errors.New("commit message is empty")
+	}
+	var clean []string
+	for _, p := range paths {
+		p = filepath.ToSlash(filepath.Clean(strings.TrimSpace(p)))
+		if p == "" || p == "." || strings.HasPrefix(p, "../") || filepath.IsAbs(p) {
+			continue
+		}
+		clean = append(clean, p)
+	}
+	if len(clean) == 0 {
+		return false, nil
+	}
+	if _, err := m.git(ctx, path, append([]string{"add", "--all", "--"}, clean...)...); err != nil {
+		return false, err
+	}
+	if _, err := m.git(ctx, path, "diff", "--cached", "--quiet"); err == nil {
+		return false, nil // nothing staged
+	}
+	if _, err := m.git(ctx, path, "commit", "--quiet", "-m", message); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// CommitLog returns the commits of the branch that origin/BaseBranch does not have, oldest first, with full messages.
+func (m *Manager) CommitLog(ctx context.Context, path string) []Commit {
+	out, err := m.git(ctx, path, "log", "--reverse", "--no-color", "--format=%H%x1f%s%x1f%b%x1e", "origin/"+m.BaseBranch+"..HEAD")
+	if err != nil {
+		return nil
+	}
+	var list []Commit
+	for _, rec := range strings.Split(out, "\x1e") {
+		parts := strings.SplitN(strings.TrimSpace(rec), "\x1f", 3)
+		if len(parts) < 2 || parts[0] == "" {
+			continue
+		}
+		c := Commit{SHA: parts[0], Subject: parts[1]}
+		if len(parts) == 3 {
+			c.Body = strings.TrimSpace(parts[2])
+		}
+		list = append(list, c)
+	}
+	return list
+}
+
+// Commit is one commit of a branch.
+type Commit struct{ SHA, Subject, Body string }
+
 // Push pushes the branch to origin with upstream tracking.
 func (m *Manager) Push(ctx context.Context, path, branch string) (string, error) {
 	return m.git(ctx, path, "push", "--set-upstream", "origin", branch)

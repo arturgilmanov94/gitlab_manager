@@ -2378,6 +2378,9 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		_ = s.DB.UpdateRun(runID, fields)
 		return
 	}
+	if run.Kind == db.KindImplement {
+		s.applyAgentCommits(ctx, run, result.Structured, logln) // the agent's steps become local commits (G4)
+	}
 	fields["status"] = db.StatusDone
 	_ = s.DB.UpdateRun(runID, fields)
 }

@@ -189,9 +189,12 @@ var ImplementSchema = []byte(`{
     "todo": {"type": "array", "items": {"type": "string"}, "description": "what is left or needs a human decision"},
     "self_review": {"type": "string", "description": "markdown: your own review of the final diff as a strict reviewer — what you checked, what you found and fixed, what remains a concern; never empty"},
     "commit_message": {"type": "string", "description": "suggested commit message following the project convention"},
+    "commits": {"type": "array", "description": "your work split into local commits, in order: each a logical step with a message in the project's convention and the paths it contains (relative to the worktree). Every changed file belongs to exactly one commit. The dashboard creates these commits locally after the run; nothing is pushed. Empty only when nothing changed.", "items": {"type": "object", "properties": {
+      "message": {"type": "string"}, "paths": {"type": "array", "items": {"type": "string"}}
+    }, "required": ["message", "paths"], "additionalProperties": false}},
     ` + questionsSchema + `
   },
-  "required": ["summary", "changes", "tests", "todo", "self_review", "commit_message", "ask"],
+  "required": ["summary", "changes", "tests", "todo", "self_review", "commit_message", "commits", "ask"],
   "additionalProperties": false
 }`)
 
@@ -554,7 +557,7 @@ func Implement(issue Issue, notes string, b Branch, s *skill.Skill) string {
 		"Work in phases, in this order: (1) PLAN — understand the task and the code, decide the change (briefly); (2) IMPLEMENT — follow the project's rules " +
 		"and conventions, keep the change focused on the task; (3) TESTS — add or update tests where the project covers the area and run the project's " +
 		"style/test checks that apply to the touched files; (4) SELF-REVIEW — read the whole diff as a strict reviewer (regressions, error handling, edge " +
-		"cases, naming, leftovers), fix what you find, and describe it in `self_review`; (5) REPORT — what you changed, what you ran, what is left.\n" + questionsRule + "\n" + editRules()
+		"cases, naming, leftovers), fix what you find, and describe it in `self_review`; (5) REPORT — what you changed, what you ran, what is left, and in `commits` how the change splits into local commits (logical steps, project's message convention; uncommitted work left from earlier runs belongs in them too). Do not run `git commit` yourself: the dashboard makes exactly these commits; pushing and the MR are the developer's.\n" + questionsRule + "\n" + editRules()
 }
 
 // readOnlyRules / editRules are the dashboard constraints plus the report-language rule.

@@ -866,28 +866,36 @@ func TestBugModeAndToMRPages(t *testing.T) {
 	if _, body := get(t, ts.URL+"/-/issue/1"); !strings.Contains(body, ">Исправить<") || !strings.Contains(body, "Открыть разбор") {
 		t.Fatal("task page must offer the fix")
 	}
-	// Implementation with the fix handed over; the run page offers «Довести до MR» with the checklist and the prefilled form.
+	// Implementation with the fix handed over. The agent's steps become local commits; the run page previews them
+	// with the draft MR and ships both with one confirmed button (G4).
 	fr.Outputs = []map[string]any{{"summary": "Guarded.", "changes": []any{map[string]any{"path": "src/Export.php", "description": "guard"}}, "tests": "none",
-		"todo": []any{}, "self_review": "ok", "commit_message": "fix", "ask": []any{}}}
+		"todo": []any{}, "self_review": "ok", "commit_message": "fix", "commits": []any{map[string]any{"message": "fix: guard the average against empty exports", "paths": []any{"CHANGED.txt"}}}, "ask": []any{}}}
 	code, out = postJSON(t, ts.URL+"/api/issues/1/runs", map[string]any{"kind": "implement", "plan_run": "1"})
 	if code != 200 {
 		t.Fatalf("%d %v", code, out)
 	}
 	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(2); return r != nil && r.Status == db.StatusDone })
-	if r, _ := svc.DB.GetRun(2); !strings.Contains(r.Prompt, "Root cause:") || !strings.Contains(r.Prompt, "division by zero") {
+	if r, _ := svc.DB.GetRun(2); !strings.Contains(r.Prompt, "Root cause:") || !strings.Contains(r.Prompt, "division by zero") || !strings.Contains(r.Prompt, "Do not run `git commit` yourself") {
 		t.Fatalf("bug analysis must be handed to the implementation: %s", r.Prompt)
 	}
 	_, body := get(t, ts.URL+"/-/task-implement/2")
-	for _, want := range []string{`id="to-mr"`, "Тесты · не запускались", "Self-review · сделан агентом", "Чистый diff · есть незакоммиченные", "ветки ещё нет на origin", `createMRForm(event, '2')`, "## Что сделано", "Guarded."} {
+	for _, want := range []string{`id="ship"`, "fix: guard the average against empty exports", `shipForm(event, '2')`, `value="Draft: group/sub/project#9 Bug: export crashes"`, "Closes #9", "## Что сделано", "Push и создать draft MR</button>"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("to-mr block missing %q", want)
+			t.Fatalf("ship block missing %q", want)
 		}
 	}
-	if strings.Contains(body, `<button type="submit" class="btn btn-primary tip"`) {
-		t.Fatal("MR creation must be disabled until the branch is pushed")
+	if strings.Contains(body, `id="to-mr"`) || strings.Contains(body, ">Commit</button>") {
+		t.Fatal("the three buttons Commit / Push / MR are replaced by «Push и draft MR»")
 	}
-	if code, out := postJSON(t, ts.URL+"/api/runs/2/mr", map[string]any{"title": "T", "description": "D"}); code != 200 || out["url"] == "" {
+	gl = svc.GitLab.(*testutil.FakeGitLab)
+	if code, out := postJSON(t, ts.URL+"/api/runs/2/ship", map[string]any{"title": "Guard exports", "description": "D\n\nCloses #9"}); code != 200 || out["url"] == "" {
 		t.Fatalf("%d %v", code, out)
+	}
+	if !strings.Contains(gl.CreatedMR, "|group/sub/project#9|develop|Draft: Guard exports|D\n\nCloses #9") {
+		t.Fatalf("draft MR: %q", gl.CreatedMR)
+	}
+	if _, body = get(t, ts.URL+"/-/task-implement/2"); !strings.Contains(body, "пушить нечего") {
+		t.Fatal("after the push there is nothing left to ship")
 	}
 }
 

@@ -494,6 +494,12 @@ func (s *Server) routes() {
 		out, err := s.svc.Push(pathID(r))
 		s.result(w, map[string]any{"output": out}, err)
 	})
+	// «Push и draft MR»: push the branch and create a draft MR with the text the developer confirmed (G4).
+	s.mux.HandleFunc("POST /api/runs/{id}/ship", func(w http.ResponseWriter, r *http.Request) {
+		body := readBody(r)
+		url, err := s.svc.PushAndDraftMR(pathID(r), body["title"], body["description"])
+		s.result(w, map[string]any{"url": url}, err)
+	})
 	s.mux.HandleFunc("POST /api/runs/{id}/mr", func(w http.ResponseWriter, r *http.Request) {
 		body := readBody(r)
 		url, err := s.svc.CreateMR(pathID(r), body["title"], body["description"])
@@ -1221,6 +1227,9 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 			if run.Kind == db.KindImplement && run.IssueID != nil {
 				issue, _ := svc.DB.GetIssue(*run.IssueID)
 				data["MRDraft"] = svc.MRDraftFor(run, issue)
+				if run.Kind == db.KindImplement {
+					data["Push"], _ = svc.PushPreviewFor(run.ID)
+				}
 				runs, _ := svc.DB.ListRunsForIssue(*run.IssueID)
 				data["StandSkill"], data["StandTestSkill"] = svc.StandSkill(), svc.SkillFor(db.KindStandTest)
 				data["Stand"] = app.LatestStandFor(runs, run.Branch)

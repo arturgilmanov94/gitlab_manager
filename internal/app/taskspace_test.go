@@ -149,3 +149,35 @@ func TestUpdateTaskWorkspace(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// The agent's `commits` become local commits: in order, only the listed paths; a step without changes or with a
+// path outside the worktree makes nothing; what no step covers stays uncommitted. Nothing is pushed.
+func TestAgentStepsBecomeLocalCommits(t *testing.T) {
+	svc, _, fr := newService(t)
+	issue, _ := svc.AddIssue("#7")
+	out := testutil.ImplementOutput()
+	out["commits"] = []any{
+		map[string]any{"message": "feat: first step", "paths": []any{"CHANGED.txt"}},
+		map[string]any{"message": "chore: nothing here", "paths": []any{"missing.txt", "../outside.txt"}},
+	}
+	fr.Outputs = []map[string]any{out}
+	id, _ := svc.StartImplement(issue.ID, "", "", "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, id) == db.StatusDone })
+	path := svc.Worktrees.Path(issue.Ref())
+	if log := gitT(t, path, "log", "--format=%s", "origin/develop..HEAD"); log != "feat: first step" {
+		t.Fatalf("%q", log)
+	}
+	p, err := svc.PushPreviewFor(id)
+	if err != nil || len(p.Commits) != 1 || !p.Ready || p.Title != "Draft: group/sub/project#7 Task 7" || p.HasUpstream {
+		t.Fatalf("%+v %v", p, err)
+	}
+
+	// A file nobody committed blocks the push until it is committed.
+	_ = os.WriteFile(filepath.Join(path, "left.txt"), []byte("x"), 0o644)
+	if p, _ = svc.PushPreviewFor(id); p.Ready || !strings.Contains(p.Why, "незакоммиченные") {
+		t.Fatalf("%+v", p)
+	}
+	if _, err := svc.PushAndDraftMR(id, "", ""); err == nil {
+		t.Fatal("no push with uncommitted files")
+	}
+}

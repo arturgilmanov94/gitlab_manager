@@ -408,6 +408,12 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
 .btn.danger, .btn-link.danger { color: var(--danger); }
 
 /* findings: code excerpt, inline actions, GitLab post editor */
+/* «Push и draft MR» */
+.commit-list { margin: 6px 0 10px; padding-left: 22px; }
+.commit-list li { margin: 2px 0; }
+.pre-wrap { white-space: pre-wrap; color: var(--fg-2); }
+.ship-dirty { margin: 8px 0; padding: 8px 10px; border-radius: var(--radius); background: var(--warning-soft); }
+.ship-dirty .inline { margin-top: 6px; display: flex; gap: 8px; flex-wrap: wrap; }
 /* new local task */
 .new-task > summary { list-style: none; display: inline-flex; }
 .new-task > summary::-webkit-details-marker { display: none; }

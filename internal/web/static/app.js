@@ -723,6 +723,19 @@
     return false;
   };
 
+  // «Push и draft MR»: one confirmation that says what goes out, then push + the draft MR.
+  window.shipForm = async function (event, runId) {
+    event.preventDefault();
+    const form = event.target;
+    const d = form.dataset;
+    const what = d.existing ? `Запушить ${d.count} коммит(ов) ветки ${d.branch} в origin — они появятся в MR !${d.existing}?`
+      : `Запушить ${d.count} коммит(ов) ветки ${d.branch} в origin и создать draft MR «${form.title.value}»?`;
+    if (!confirm(what)) return false;
+    const data = await call('POST', `/api/runs/${runId}/ship`, { title: form.title ? form.title.value : '', description: form.description ? form.description.value : '' }, event.submitter);
+    if (data && data.url) { flash((d.existing ? 'Ветка отправлена: ' : 'Draft MR создан: ') + data.url, true); window.open(data.url, '_blank'); setTimeout(reload, 800); }
+    return false;
+  };
+
   window.createMR = async function (runId, button) {
     const title = prompt('Заголовок MR (пусто = по задаче):', '');
     if (title === null) return;

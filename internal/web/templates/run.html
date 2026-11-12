@@ -261,11 +261,14 @@
     Ветка <span class="mono">{{.Run.Branch}}</span> — это ветка основного репозитория{{if .Worktree.Root}} <span class="mono">{{.Worktree.Root}}</span>{{end}}: workspace делит с ним <span class="mono">.git</span>, поэтому там она уже видна (<span class="mono">git branch</span>, <span class="mono">git log {{.Run.Branch}}</span>).
     Переключиться на неё в основной копии (<span class="mono">{{.Worktree.Checkout}}</span>) git не даст, пока ветка занята этим workspace, — нажмите «Забрать ветку в основную копию»: workspace удалится, ветка и коммиты останутся.
   </div>
-  <div class="field"><label for="commit-msg">Сообщение коммита</label><div style="flex:1"><input id="commit-msg" type="text" style="width:100%" class="mono" value="{{if .Report}}{{index .Report "commit_message"}}{{end}}" placeholder="Сообщение коммита"></div></div>
+{{if not .Push}}  <div class="field"><label for="commit-msg">Сообщение коммита</label><div style="flex:1"><input id="commit-msg" type="text" style="width:100%" class="mono" value="{{if .Report}}{{index .Report "commit_message"}}{{end}}" placeholder="Сообщение коммита"></div></div>
   <div class="actions left">
     <button class="btn tip" data-tip="git add -A и git commit в workspace с этим сообщением. Ветка остаётся локальной, пока не нажат Push." onclick="post('/api/runs/{{.Run.ID}}/commit', {message: document.getElementById('commit-msg').value}, this).then(r => r && reload())">Commit</button>
     <button class="btn btn-primary tip" data-tip="git push --set-upstream origin {{.Run.Branch}}. {{if .MR}}Обновит MR !{{.MR.IID}}: ревьюеры увидят новые коммиты.{{else}}Ветка появится на GitLab, после этого можно создать MR.{{end}}" onclick="confirm('Запушить ветку {{.Run.Branch}} в origin?') && post('/api/runs/{{.Run.ID}}/push', {}, this).then(r => r && (flash('Ветка отправлена в origin', true), reload()))">Push</button>
     {{if .MRDraft}}<a class="btn btn-primary" href="#to-mr">Довести до MR</a>{{end}}
+{{else}}
+  <div class="actions left">
+    <a class="btn btn-primary" href="#ship">{{if .Push.ExistingMR}}Push в MR !{{.Push.ExistingMR.IID}}{{else}}Push и draft MR{{end}}</a>{{end}}
     {{if and .Issue (or .StandSkill .StandTestSkill)}}<a class="btn tip" data-tip="{{kindTip "stand-issue"}}" href="#stand">Проверить на стенде</a>{{end}}
     {{if .Worktree.Clean}}<button class="btn tip" data-tip="Удалить workspace, оставив ветку {{.Run.Branch}} в основном репозитории, чтобы переключиться на неё там: {{.Worktree.Checkout}}. Ваша рабочая копия сама не переключается — команда будет показана и скопирована." onclick="releaseBranch('{{.Run.ID}}', '{{.Run.Branch}}', this)">Забрать ветку в основную копию</button>
     {{else}}<span class="disabled-wrap tip" data-tip="Сначала закоммитьте изменения (Commit): ветку можно забрать только из чистого workspace, иначе незакоммиченные правки пропали бы."><button class="btn" disabled>Забрать ветку в основную копию</button></span>{{end}}
@@ -279,7 +282,37 @@
       </div>
     </details>
   </div>
-  {{if .MRDraft}}
+  {{if .Push}}{{with .Push}}
+  <section id="ship" class="to-mr">
+    <h3>{{if .ExistingMR}}Push в MR !{{.ExistingMR.IID}}{{else}}Push и draft MR{{end}}</h3>
+    <p class="small muted">Агент закоммитил работу локально по шагам. Ниже — что уйдёт в origin/<span class="mono">{{.Branch}}</span>{{if not .ExistingMR}} и каким будет draft MR в {{.Base}}{{end}}. Ничего не отправляется, пока вы не подтвердите.</p>
+    <ul class="checklist">
+      {{$r := $.Report}}
+      {{$tests := ""}}{{if $r}}{{$tests = index $r "tests"}}{{end}}
+      <li class="{{if and $tests (ne $tests "none")}}ok{{else}}warn{{end}}"><span class="glyph">{{if and $tests (ne $tests "none")}}✓{{else}}⚠{{end}}</span> Тесты {{if and $tests (ne $tests "none")}}· выполнены{{else}}· не запускались{{end}}</li>
+      <li class="{{if and $r (index $r "self_review")}}ok{{else}}warn{{end}}"><span class="glyph">{{if and $r (index $r "self_review")}}✓{{else}}⚠{{end}}</span> Self-review {{if and $r (index $r "self_review")}}· сделан агентом{{else}}· отсутствует в отчёте{{end}}</li>
+      {{if or $.Stand $.StandSkill $.StandTestSkill}}{{$ok := and $.Stand (eq $.Stand.Status "done")}}<li class="{{if $ok}}ok{{else}}warn{{end}}"><span class="glyph">{{if $ok}}✓{{else}}⚠{{end}}</span> Стенд {{with $.Stand}}· <a href="{{runPath .Kind .ID}}">сессия #{{.ID}}</a> {{statusLabel .Status}}{{if .Summary}} · <span class="muted">{{.Summary}}</span>{{end}}{{else}}· не проверялось, <a href="#stand">запустить</a>{{end}}</li>{{end}}
+    </ul>
+    {{if .Commits}}<ol class="commit-list">{{range .Commits}}<li><span class="mono small muted">{{shortSHA .SHA}}</span> <b>{{.Subject}}</b>{{if .Body}}<div class="small pre-wrap">{{.Body}}</div>{{end}}</li>{{end}}</ol>
+    {{else}}<p class="muted">Коммитов относительно origin/{{.Base}} нет.</p>{{end}}
+    {{if .Dirty}}
+    <div class="ship-dirty small"><span class="text-warning">⚠ Незакоммиченных файлов: {{.Dirty}}</span> — сначала закоммитьте их (или продолжите сессию с агентом):
+      <div class="inline"><input id="commit-msg" type="text" class="mono" size="50" value="{{if $.Report}}{{index $.Report "commit_message"}}{{end}}" placeholder="Сообщение коммита">
+      <button class="btn btn-sm tip" data-tip="git add -A и git commit в workspace с этим сообщением. Ничего не пушится." onclick="post('/api/runs/{{$.Run.ID}}/commit', {message: document.getElementById('commit-msg').value}, this).then(r => r && reload())">Закоммитить всё</button></div>
+    </div>
+    {{end}}
+    <form class="mr-form" onsubmit="return shipForm(event, '{{$.Run.ID}}')" data-branch="{{.Branch}}" data-count="{{len .Commits}}" data-existing="{{if .ExistingMR}}{{.ExistingMR.IID}}{{end}}">
+      {{if not .ExistingMR}}
+      <div class="field"><label for="mr-title">Заголовок</label><div style="flex:1"><input id="mr-title" name="title" type="text" style="width:100%" value="{{.Title}}"></div></div>
+      <div class="field"><label for="mr-desc">Описание</label><div style="flex:1"><textarea id="mr-desc" name="description" rows="10" style="width:100%" class="mono">{{.Body}}</textarea><div class="hint">markdown; собрано из отчёта агента; «Closes …» закроет задачу при merge</div></div></div>
+      {{else}}<p class="small">MR <a href="{{mrPath .ExistingMR.ID}}">!{{.ExistingMR.IID}}</a> уже открыт из этой ветки: push добавит в него коммиты, ревьюеры их увидят.</p>{{end}}
+      <div class="actions left">
+        {{if .Ready}}<button type="submit" class="btn btn-primary tip" data-tip="git push --set-upstream origin {{.Branch}}{{if not .ExistingMR}}, затем создать draft MR в GitLab с этим текстом{{end}}. Спросит подтверждение.">{{if .ExistingMR}}Push{{else}}Push и создать draft MR{{end}}</button>
+        {{else}}<span class="disabled-wrap tip" data-tip="{{.Why}}"><button type="submit" class="btn btn-primary" disabled>{{if .ExistingMR}}Push{{else}}Push и создать draft MR{{end}}</button></span> <span class="small muted">{{.Why}}</span>{{end}}
+      </div>
+    </form>
+  </section>
+  {{end}}{{else if .MRDraft}}
   <section id="to-mr" class="to-mr">
     <h3>Довести до MR</h3>
     <ul class="checklist">
