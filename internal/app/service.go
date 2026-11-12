@@ -1657,7 +1657,19 @@ func (s *Service) StartPlan(issueID int64, runnerName, notes string, continueRun
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
-	prev, err := s.continuation(continueRunID, nil, &issueID, s.Settings.ProjectRoot)
+	if active, _ := s.DB.ActiveRunForIssue(issueID); active != nil {
+		return 0, userErr("a run for this issue is already queued or running (#%d)", active.ID)
+	}
+	issue, err := s.RefreshIssue(issueID)
+	if err != nil {
+		return 0, err
+	}
+	// One worktree per task for every stage (G1): the analysis reads the code there, not in the developer's copy.
+	branch := s.IssueBranch(issue)
+	if err := s.branchFree(branch); err != nil {
+		return 0, err
+	}
+	prev, err := s.continuation(continueRunID, nil, &issueID, s.Worktrees.Path(branch))
 	if err != nil {
 		return 0, err
 	}
@@ -1668,14 +1680,8 @@ func (s *Service) StartPlan(issueID int64, runnerName, notes string, continueRun
 	if err != nil {
 		return 0, err
 	}
-	if active, _ := s.DB.ActiveRunForIssue(issueID); active != nil {
-		return 0, userErr("a run for this issue is already queued or running (#%d)", active.ID)
-	}
-	issue, err := s.RefreshIssue(issueID)
-	if err != nil {
-		return 0, err
-	}
-	return s.enqueue(db.Run{Kind: db.KindPlan, IssueID: &issue.ID, Runner: r.Name(), RequestedModel: model, Notes: notes, Mode: mode, SkillIdentifier: skillID(s.SkillFor(db.KindPlan)), ContinueRunID: runIDPtr(prev)})
+	return s.enqueue(db.Run{Kind: db.KindPlan, IssueID: &issue.ID, Runner: r.Name(), RequestedModel: model, Notes: notes, Mode: mode, SkillIdentifier: skillID(s.SkillFor(db.KindPlan)), ContinueRunID: runIDPtr(prev),
+		Branch: branch, WorkDir: s.Worktrees.Path(branch)})
 }
 
 // StartImplement queues an edit run in a worktree on `branch` (default: the issue reference). continueRunID > 0
@@ -1696,10 +1702,13 @@ func (s *Service) StartImplement(issueID int64, runnerName, notes, branch string
 	}
 	branch = strings.TrimSpace(branch)
 	if branch == "" {
-		branch = issue.Ref()
+		branch = s.IssueBranch(issue)
 	}
 	if strings.ContainsAny(branch, " \t~^:?*[\\") || strings.HasPrefix(branch, "-") {
 		return 0, userErr("invalid branch name %q", branch)
+	}
+	if err := s.branchFree(branch); err != nil {
+		return 0, err
 	}
 	prev, err := s.continuation(continueRunID, nil, &issueID, s.Worktrees.Path(branch))
 	if err != nil {
@@ -2198,22 +2207,34 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			return
 		}
 		pi := promptIssue(issue)
+		// Every stage of a task works in the task's worktree (G1): created from a fresh origin/<base> by the first
+		// run of any kind, reused by the next ones. Runs from before 0.32 without a branch get the task's branch.
+		if run.Branch == "" {
+			run.Branch = s.IssueBranch(issue)
+			_ = s.DB.UpdateRun(runID, map[string]any{"branch": run.Branch, "work_dir": s.Worktrees.Path(run.Branch)})
+		}
+		fresh := !s.Worktrees.Exists(s.Worktrees.Path(run.Branch))
+		_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
+		path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
+		if err != nil {
+			s.prepareFailed(ctx, runID, fmt.Errorf("worktree: %w", err))
+			return
+		}
+		st := s.Worktrees.State(ctx, path)
+		branch := prompts.Branch{Name: run.Branch, Base: s.Settings.BaseBranch, Fresh: fresh && st.Ahead == 0 && st.Dirty == 0, Ahead: st.Ahead, Behind: st.Behind, Dirty: st.Dirty}
+		req.Dir = path
 		if run.Kind == db.KindPlan {
+			// Read-only in the worktree: neither it nor the developer's checkout may be written to.
+			req.Mode, req.ProtectDirs = runner.ModeReadOnly, protectDirs(s.Settings.ProjectRoot, path)
 			if run.Mode == "bug" {
-				req.Prompt, req.Schema = prompts.PlanBug(pi, run.Notes, sk), prompts.BugSchema
+				req.Prompt, req.Schema = prompts.PlanBug(pi, run.Notes, branch, sk), prompts.BugSchema
 			} else {
-				req.Prompt, req.Schema = prompts.Plan(pi, run.Notes, sk), prompts.PlanSchema
+				req.Prompt, req.Schema = prompts.Plan(pi, run.Notes, branch, sk), prompts.PlanSchema
 			}
 			req.SessionName = fmt.Sprintf("plan #%d run %d", issue.IID, runID)
 		} else {
-			_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
-			path, err := s.Worktrees.Prepare(ctx, run.Branch, logln)
-			if err != nil {
-				s.prepareFailed(ctx, runID, fmt.Errorf("worktree: %w", err))
-				return
-			}
-			req.Dir, req.Mode, req.ProtectDirs = path, runner.ModeEdit, nil
-			req.Prompt, req.Schema = prompts.Implement(pi, run.Notes, run.Branch, s.Settings.BaseBranch, sk), prompts.ImplementSchema
+			req.Mode, req.ProtectDirs = runner.ModeEdit, nil
+			req.Prompt, req.Schema = prompts.Implement(pi, run.Notes, branch, sk), prompts.ImplementSchema
 			req.SessionName = fmt.Sprintf("implement #%d run %d", issue.IID, runID)
 		}
 	case db.KindAsk:
@@ -3163,6 +3184,8 @@ type WorktreeState struct {
 	Log         string
 	Unpushed    int  // commits not yet on origin
 	HasUpstream bool // the branch exists on origin
+	Base        string
+	Behind      int // commits origin/<Base> has that the branch does not (as of the last fetch)
 }
 
 // Checkout is the command that switches the main checkout to the branch; possible once the worktree is gone,
@@ -3270,6 +3293,7 @@ func (s *Service) Worktree(run *db.Run) WorktreeState {
 	state.Diff, _ = s.Worktrees.Diff(ctx, run.WorkDir)
 	state.Log, _ = s.Worktrees.Log(ctx, run.WorkDir)
 	state.Unpushed, state.HasUpstream = s.Worktrees.Unpushed(ctx, run.WorkDir)
+	state.Base, state.Behind = s.Settings.BaseBranch, s.Worktrees.State(ctx, run.WorkDir).Behind
 	return state
 }
 

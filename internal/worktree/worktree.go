@@ -508,6 +508,85 @@ func (m *Manager) Unpushed(ctx context.Context, path string) (count int, hasUpst
 	return n, true
 }
 
+// CheckedOutAt returns the directory where branch is checked out right now ("" = nowhere): git lets a branch be
+// checked out in one worktree at a time, the main checkout included.
+func (m *Manager) CheckedOutAt(ctx context.Context, branch string) string {
+	out, err := m.git(ctx, m.Root, "worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	path := ""
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			path = strings.TrimPrefix(line, "worktree ")
+		case line == "branch refs/heads/"+branch:
+			return path
+		}
+	}
+	return ""
+}
+
+// BranchState is where a worktree's branch stands against origin/BaseBranch (as last fetched) and its own files.
+type BranchState struct {
+	Ahead  int // commits of the branch that origin/BaseBranch does not have
+	Behind int // commits of origin/BaseBranch the branch does not have
+	Dirty  int // files with uncommitted changes
+}
+
+// State reports the branch state of the worktree at path. No network: origin/BaseBranch is what the last fetch saw.
+func (m *Manager) State(ctx context.Context, path string) BranchState {
+	var st BranchState
+	if out, err := m.git(ctx, path, "rev-list", "--left-right", "--count", "origin/"+m.BaseBranch+"...HEAD"); err == nil {
+		fmt.Sscanf(strings.TrimSpace(out), "%d %d", &st.Behind, &st.Ahead)
+	}
+	if out, err := m.Status(ctx, path); err == nil {
+		for _, line := range strings.Split(out, "\n") {
+			if strings.TrimSpace(line) != "" {
+				st.Dirty++
+			}
+		}
+	}
+	return st
+}
+
+// Head returns the commit the worktree is on ("" when unknown).
+func (m *Manager) Head(ctx context.Context, path string) string {
+	out, err := m.git(ctx, path, "rev-parse", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// ErrConflict marks a rebase that stopped on conflicts and was rolled back.
+var ErrConflict = errors.New("rebase conflict")
+
+// Rebase brings the worktree's branch on top of a freshly fetched origin/BaseBranch. Uncommitted changes are
+// refused (nothing is stashed behind the developer's back); on a conflict the rebase is aborted — the branch stays
+// exactly as it was — and the error (wrapping ErrConflict) names the conflicting files.
+func (m *Manager) Rebase(ctx context.Context, path string, log func(string)) error {
+	defer m.lockPath(path)()
+	if st := m.State(ctx, path); st.Dirty > 0 {
+		return fmt.Errorf("в workspace есть незакоммиченные изменения (%d файлов): сначала закоммитьте их", st.Dirty)
+	}
+	log("git fetch origin " + m.BaseBranch)
+	if err := m.fetch(ctx, m.BaseBranch); err != nil {
+		return fmt.Errorf("%v: %w", err, ErrUnreachable)
+	}
+	log("git rebase origin/" + m.BaseBranch)
+	if _, err := m.git(ctx, path, "rebase", "origin/"+m.BaseBranch); err != nil {
+		files, _ := m.git(ctx, path, "diff", "--name-only", "--diff-filter=U")
+		_, _ = m.git(ctx, path, "rebase", "--abort")
+		files = strings.Join(strings.Fields(files), ", ")
+		if files == "" {
+			return fmt.Errorf("rebase не прошёл и отменён, ветка не изменена: %v", err)
+		}
+		return fmt.Errorf("конфликты в %s — rebase отменён, ветка не изменена: %w", files, ErrConflict)
+	}
+	return nil
+}
+
 // Exists reports whether the worktree directory is present.
 func (m *Manager) Exists(path string) bool {
 	_, err := os.Stat(filepath.Join(path, ".git"))

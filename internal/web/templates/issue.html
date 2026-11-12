@@ -83,14 +83,14 @@
 
 {{if .Workspaces}}
 <section class="card" id="workspaces">
-  <div class="card-head"><h2>Workspace и ветки решения</h2><span class="small muted">по одному worktree на ветку · ветки живут в основном репозитории{{with (index .Workspaces 0).Root}} <span class="mono">{{.}}</span>{{end}}</span></div>
+  <div class="card-head"><h2>Workspace и ветки решения</h2><span class="small muted">workspace задачи: исследование, план и реализация идут в нём, ваша рабочая копия не меняется · ветки живут в основном репозитории{{with (index .Workspaces 0).Root}} <span class="mono">{{.}}</span>{{end}}</span></div>
   <table class="table compact">
     <thead><tr><th>Ветка</th><th>Состояние</th><th>Сессия</th><th></th></tr></thead>
     <tbody>
     {{range .Workspaces}}
     <tr>
       <td class="mono small">{{.Branch}}</td>
-      <td class="small">{{if .Active}}<span class="spinner"></span> агент работает{{else if not .Exists}}workspace удалён · {{if .InRepo}}ветка в основном репозитории{{else}}ветки в репозитории нет{{end}}{{else if not .Clean}}<span class="state state-warning"><span class="glyph">⚠</span> незакоммиченные изменения</span>{{else if .Pushed}}<span class="state state-ok"><span class="glyph">✓</span> закоммичено, ветка на origin</span>{{else if .HasUpstream}}<span class="state state-warning"><span class="glyph">⚠</span> {{.Unpushed}} коммитов не отправлено</span>{{else}}<span class="state state-ok"><span class="glyph">✓</span> закоммичено, ветки нет на origin</span>{{end}}</td>
+      <td class="small">{{if .Active}}<span class="spinner"></span> агент работает{{else if not .Exists}}workspace удалён · {{if .InRepo}}ветка в основном репозитории{{else}}ветки в репозитории нет{{end}}{{else if not .Clean}}<span class="state state-warning"><span class="glyph">⚠</span> незакоммиченные изменения</span>{{else if .Pushed}}<span class="state state-ok"><span class="glyph">✓</span> закоммичено, ветка на origin</span>{{else if .HasUpstream}}<span class="state state-warning"><span class="glyph">⚠</span> {{.Unpushed}} коммитов не отправлено</span>{{else}}<span class="state state-ok"><span class="glyph">✓</span> закоммичено, ветки нет на origin</span>{{end}}{{if and .Exists .Behind}}<div class="small"><span class="text-warning tip" data-tip="Столько коммитов появилось в origin/{{.Base}} после того, как ветка задачи от него отошла (по последнему fetch).">отстаёт от {{.Base}} на {{.Behind}}</span>{{if not .Active}} <button class="btn btn-sm btn-link tip" data-tip="git fetch и rebase ветки {{.Branch}} на свежий origin/{{.Base}}. При конфликте rebase отменяется, ветка остаётся как была. Нужен чистый workspace." onclick="post('/api/runs/{{.Run.ID}}/workspace/update', {}, this).then(r => r && (flash(r.message, true), reload()))">Обновить</button>{{end}}</div>{{end}}</td>
       <td class="small">{{if .Run}}<a href="{{runPath .Run.Kind .Run.ID}}">#{{.Run.ID}} {{kindLabel .Run.Kind}}</a>{{end}}</td>
       <td class="nowrap">
         {{if .Active}}<a class="btn btn-sm" href="{{runPath .Run.Kind .Run.ID}}">Открыть сессию</a>
@@ -126,7 +126,7 @@
   </div>
   <div class="hint" id="plan-mode-hint">{{if .LooksLikeBug}}по меткам и названию похоже на баг{{else}}переключите, если это дефект{{end}}</div></div></div>
   <details class="section"><summary>Дополнительно: ветка</summary>
-    <div class="field" style="margin-top:8px"><label for="branch">Ветка</label><div><input id="branch" type="text" size="44" value="{{.DefaultBranch}}" class="mono"><div class="hint">создаётся от origin/{{.BaseBranch}} в отдельном workspace; по умолчанию имя = ссылка на задачу, как принято в проекте</div></div></div>
+    <div class="field" style="margin-top:8px"><label for="branch">Ветка</label><div><input id="branch" type="text" size="44" value="{{.DefaultBranch}}" class="mono"><div class="hint">workspace задачи: один на все этапы — исследование, план и реализация идут в нём. Создаётся от свежего origin/{{.BaseBranch}} при первом запуске; по умолчанию имя = ссылка на задачу, как принято в проекте</div></div></div>
   </details>
 </section>
 

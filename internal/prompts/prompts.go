@@ -170,9 +170,9 @@ var BugSchema = []byte(`{
 }`)
 
 // PlanBug builds the read-only bug analysis prompt («Разобрать баг»).
-func PlanBug(issue Issue, notes string, s *skill.Skill) string {
-	return SlashPrefix(s, issue.WebURL) + "Mode: BUG ANALYSIS (read-only: find the root cause, do not change code)\n\n" + issueBlock(issue, notes) + "\n" + skillLine(s) + "\n\n" +
-		"Treat the task as a bug report. Establish expected vs actual behaviour, follow the execution path through the code (you are in the project root), " +
+func PlanBug(issue Issue, notes string, b Branch, s *skill.Skill) string {
+	return SlashPrefix(s, issue.WebURL) + "Mode: BUG ANALYSIS (read-only: find the root cause, do not change code)\n\n" + issueBlock(issue, notes) + branchLine(b, true) + skillLine(s) + "\n\n" +
+		"Treat the task as a bug report. Establish expected vs actual behaviour, follow the execution path through the code in this worktree, " +
 		"find the root cause with evidence (exact files and lines, logs, existing tests), describe how to reproduce it, and propose the fix. " +
 		"Do not stop at the first plausible spot: confirm the cause against the code. You may fetch more context with read-only `glab api` calls.\n" + questionsRule + "\n" + readOnlyRules()
 }
@@ -465,17 +465,59 @@ func issueBlock(issue Issue, notes string) string {
 }
 
 // Plan builds the read-only task analysis prompt.
-func Plan(issue Issue, notes string, s *skill.Skill) string {
-	return SlashPrefix(s, issue.WebURL) + "Mode: PLAN (read-only analysis of a task)\n\n" + issueBlock(issue, notes) + "\n" + skillLine(s) + "\n\n" +
-		"Study the task and the relevant code in this repository (you are in the project root). Produce a concrete implementation plan: " +
+func Plan(issue Issue, notes string, b Branch, s *skill.Skill) string {
+	return SlashPrefix(s, issue.WebURL) + "Mode: PLAN (read-only analysis of a task)\n\n" + issueBlock(issue, notes) + branchLine(b, true) + skillLine(s) + "\n\n" +
+		"Study the task and the relevant code in this worktree. Produce a concrete implementation plan: " +
 		"ordered steps, files to change with what changes, risks/regressions to watch, open questions, and a rough size estimate. " +
 		"You may fetch more context from GitLab with read-only `glab api` calls (linked issues, related MRs).\n" + questionsRule + "\n" + readOnlyRules()
 }
 
+// Branch is the real state of the task's worktree at the start of a run: the prompt says what is there instead of
+// always claiming a fresh branch.
+type Branch struct {
+	Name, Base string
+	Fresh      bool // created for this run from origin/Base
+	Ahead      int  // commits of its own
+	Behind     int  // commits origin/Base has gained since
+	Dirty      int  // files with uncommitted changes left by earlier runs
+}
+
+// branchLine describes the worktree to the agent.
+func branchLine(b Branch, readOnly bool) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "\nYou are in the task's own git worktree on branch `%s`", b.Name)
+	switch {
+	case b.Fresh:
+		fmt.Fprintf(&out, ", created just now from the current `origin/%s`: it holds no work on this task yet.", b.Base)
+	case b.Ahead == 0 && b.Dirty == 0:
+		fmt.Fprintf(&out, ". The branch exists from an earlier run but has no commits or changes of its own against `origin/%s`.", b.Base)
+	default:
+		out.WriteString(". The branch already carries work from earlier runs:")
+		if b.Ahead > 0 {
+			fmt.Fprintf(&out, " %d commit(s) of its own (`git log origin/%s..HEAD`)", b.Ahead, b.Base)
+		}
+		if b.Dirty > 0 {
+			if b.Ahead > 0 {
+				out.WriteString(" and")
+			}
+			fmt.Fprintf(&out, " uncommitted changes in %d file(s) (`git status`, `git diff`)", b.Dirty)
+		}
+		out.WriteString(". Read that work first and continue from it; do not redo or silently discard it.")
+	}
+	if b.Behind > 0 {
+		fmt.Fprintf(&out, " `origin/%s` has moved %d commit(s) ahead since the branch started; do not rebase or merge yourself.", b.Base, b.Behind)
+	}
+	if readOnly {
+		out.WriteString(" This run is READ-ONLY: study the code here, change nothing.")
+	}
+	out.WriteString("\n")
+	return out.String()
+}
+
 // Implement builds the editing prompt for a worktree run.
-func Implement(issue Issue, notes, branch, baseBranch string, s *skill.Skill) string {
+func Implement(issue Issue, notes string, b Branch, s *skill.Skill) string {
 	return SlashPrefix(s, issue.WebURL) + "Mode: IMPLEMENT (edit files in a dedicated worktree)\n\n" + issueBlock(issue, notes) +
-		fmt.Sprintf("\nYou are in a git worktree on branch `%s` created from `origin/%s`. Implement the task here.\n", branch, baseBranch) +
+		branchLine(b, false) + "Implement the task here.\n" +
 		skillLine(s) + "\n\n" +
 		"Work in phases, in this order: (1) PLAN — understand the task and the code, decide the change (briefly); (2) IMPLEMENT — follow the project's rules " +
 		"and conventions, keep the change focused on the task; (3) TESTS — add or update tests where the project covers the area and run the project's " +

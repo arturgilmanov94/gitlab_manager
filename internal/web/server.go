@@ -486,6 +486,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/runs/{id}/worktree", func(w http.ResponseWriter, r *http.Request) {
 		s.result(w, map[string]any{}, s.svc.RemoveWorktree(pathID(r)))
 	})
+	// «Обновить»: rebase the task's worktree on a fresh origin/<base> (aborted on conflicts, the branch unchanged).
+	s.mux.HandleFunc("POST /api/runs/{id}/workspace/update", func(w http.ResponseWriter, r *http.Request) {
+		msg, err := s.svc.UpdateWorkspace(pathID(r))
+		s.result(w, map[string]any{"message": msg}, err)
+	})
 	s.mux.HandleFunc("POST /api/runs/{id}/release", func(w http.ResponseWriter, r *http.Request) {
 		cmd, err := s.svc.ReleaseBranch(pathID(r))
 		s.result(w, map[string]any{"checkout": cmd}, err)
@@ -1070,7 +1075,7 @@ func (s *Server) issuePage(w http.ResponseWriter, r *http.Request) {
 		"Base": s.base(r, "issues", fmt.Sprintf("#%d %s", issue.IID, issue.Title)), "Issue": issue, "Runs": runs, "Active": active,
 		"Plan": plan, "Impl": impl, "Failed": failed, "State": state, "LooksLikeBug": issue.LooksLikeBug(), "PlanIsBug": plan != nil && plan.Mode == "bug",
 		"PlanSessions": svc.Resumable(runs, svc.Settings.ProjectRoot), "ImplSessions": svc.Resumable(runs, svc.Worktrees.Path(issue.Ref())),
-		"DefaultBranch": issue.Ref(), "BaseBranch": svc.Settings.BaseBranch, "Workspaces": svc.IssueWorkspaces(runs),
+		"DefaultBranch": svc.IssueBranch(issue), "BaseBranch": svc.Settings.BaseBranch, "Workspaces": svc.IssueWorkspaces(runs),
 		"StandSkill": svc.StandSkill(), "StandTestSkill": svc.SkillFor(db.KindStandTest), "Stand": standFor(runs, impl),
 	})
 }
