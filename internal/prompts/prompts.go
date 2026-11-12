@@ -282,6 +282,9 @@ type MRContext struct {
 	Diff          string       // unified diff of the MR ("" when omitted)
 	DiffTruncated bool         // the diff was too large: only the file list is given
 	Threads       []ThreadNote // unresolved reviewer discussions
+	// Since is set for an incremental review (verify): Files and Diff then hold only what changed in the MR's files
+	// between the previously reviewed SHA and the head, not the whole MR.
+	Since string
 }
 
 // FileChange is one changed file with its change type.
@@ -316,7 +319,11 @@ func contextBlock(c *MRContext, head string) string {
 	if c.Worktree != "" {
 		b.WriteString("You are in a READ-ONLY git worktree checked out at exactly the head SHA (" + c.Worktree + "): read the MR's files directly with Read/Grep instead of fetching them from GitLab. Do not change anything here.\n")
 	}
-	fmt.Fprintf(&b, "Changed files (%d):\n", len(c.Files))
+	if c.Since != "" {
+		fmt.Fprintf(&b, "INCREMENTAL: the MR was reviewed at %s. Below is only what changed in the MR's files since then.\nFiles changed since %s (%d):\n", c.Since, c.Since, len(c.Files))
+	} else {
+		fmt.Fprintf(&b, "Changed files (%d):\n", len(c.Files))
+	}
 	for _, f := range c.Files {
 		fmt.Fprintf(&b, "  %s %s\n", f.Change, f.Path)
 	}
@@ -337,10 +344,17 @@ func contextBlock(c *MRContext, head string) string {
 		b.WriteString("Unresolved reviewer discussions: none.\n")
 	}
 	switch {
+	case c.Diff != "" && c.Since != "":
+		b.WriteString("Diff " + c.Since + ".." + head + " (files of the MR only):\n```diff\n" + c.Diff + "\n```\n")
 	case c.Diff != "":
 		b.WriteString("MR diff:\n```diff\n" + c.Diff + "\n```\n")
+	case c.DiffTruncated && c.Since != "":
+		b.WriteString("The incremental diff is too large to inline; read the listed files and compare with `git diff " + c.Since + " " + head + " -- <file>` where needed.\n")
 	case c.DiffTruncated:
 		b.WriteString("The diff is too large to inline; fetch it per file with `glab api` only where needed.\n")
+	}
+	if c.Since != "" {
+		b.WriteString("The rest of the MR was reviewed before and did not change: do not review it again and do not fetch the whole MR diff. Look outside the increment only to check a previous finding or the effect of a new change.\n")
 	}
 	b.WriteString("Use this instead of re-fetching the MR metadata, file list, diff or discussions; fetch more only when something is missing.\n--- end prefetched ---\n")
 	return b.String()
@@ -428,7 +442,8 @@ func Verify(mr MR, s *skill.Skill, previousSHA string, previous []PrevFinding) s
 	return SlashPrefix(s, mr.WebURL) + "Mode: VERIFY (re-check previous findings on a newer head)\n\n" + mrBlock(mr) +
 		"Previously reviewed SHA: " + previousSHA + "\n\n" + skillLine(s) + "\n\nPrevious open findings (JSON):\n" + string(list) + "\n\n" +
 		"For EACH previous finding decide whether at the current head it is `fixed`, still `open`, or `obsolete` (the code no longer exists / the concern no longer applies), with a short evidence note. " +
-		"Compare the diff between the previously reviewed SHA and the current head where helpful. Report only genuinely new problems introduced by the newer commits in `new_findings`. " +
+		"Work from the changes made after the previously reviewed SHA (prefetched above when available, otherwise compare the two SHAs yourself): that increment is the whole scope of this run. " +
+		"Report only genuinely new problems introduced by the newer commits in `new_findings`; never repeat a finding the developer rejected. " +
 		"Re-assess unresolved reviewer discussions. Set `reviewed_sha` to the SHA you actually reviewed.\n" + summaryRule + readOnlyRules()
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"mr-review/internal/db"
 	"mr-review/internal/gitlab"
+	"mr-review/internal/prompts"
 )
 
 // The «Изменения» tab (T14): the diff of an MR inside the dashboard, whole or only what arrived since the
@@ -319,4 +320,49 @@ func (s *Service) MRDiffFile(mrID int64, mode string, index int) (*DiffBody, err
 		}
 	}
 	return body, nil
+}
+
+// incrementalContext builds the prefetched context of a verify run: what changed between the previously reviewed
+// SHA and the head, limited to the files of the MR (after a rebase the raw range also carries the target
+// branch's commits — those are not the MR's changes). nil = not applicable, the full context is used.
+func (s *Service) incrementalContext(mr *db.MergeRequest, baseSHA string, full *prompts.MRContext) *prompts.MRContext {
+	if full == nil || baseSHA == "" || mr.HeadSHA == "" || baseSHA == mr.HeadSHA {
+		return nil
+	}
+	increment, err := s.mrDiffs(mr, baseSHA)
+	if err != nil {
+		return nil
+	}
+	whole, err := s.mrDiffs(mr, "")
+	if err != nil {
+		return nil
+	}
+	inMR := map[string]bool{}
+	for _, d := range whole {
+		inMR[d.NewPath], inMR[d.OldPath] = true, true
+	}
+	ctx := &prompts.MRContext{Worktree: full.Worktree, Threads: full.Threads, Since: baseSHA}
+	var text strings.Builder
+	for _, d := range increment {
+		if !inMR[d.NewPath] && !inMR[d.OldPath] {
+			continue
+		}
+		change := "M"
+		switch {
+		case d.New:
+			change = "A"
+		case d.Deleted:
+			change = "D"
+		case d.Renamed:
+			change = "R " + d.OldPath + " ->"
+		}
+		ctx.Files = append(ctx.Files, prompts.FileChange{Path: d.NewPath, Change: change})
+		fmt.Fprintf(&text, "--- a/%s\n+++ b/%s\n%s\n", d.OldPath, d.NewPath, strings.TrimRight(d.Diff, "\n"))
+	}
+	if max := s.Settings.PrefetchMaxDiffChars; max > 0 && text.Len() <= max {
+		ctx.Diff = strings.TrimSpace(text.String())
+	} else {
+		ctx.DiffTruncated = true
+	}
+	return ctx
 }

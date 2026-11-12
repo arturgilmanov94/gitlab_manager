@@ -2024,6 +2024,11 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 					logln(fmt.Sprintf("continuing agent session of run #%d in %s", base.ID, req.Dir))
 				}
 			}
+			// Incremental review: the agent gets what changed since the reviewed SHA instead of the whole MR diff.
+			if inc := s.incrementalContext(mr, baseSHA, pm.Context); inc != nil {
+				pm.Context = inc
+				logln(fmt.Sprintf("incremental review: %d file(s) changed since %s", len(inc.Files), shortID(baseSHA)))
+			}
 			req.Prompt, req.Schema = prompts.Verify(pm, sk, baseSHA, toPrev(previous)), prompts.VerifySchema
 		}
 	case db.KindVerifyFinding:

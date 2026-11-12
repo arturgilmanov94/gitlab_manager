@@ -55,7 +55,7 @@ func TestMRDiffModesAndMarks(t *testing.T) {
 	gl.MRs[42] = testutil.MRPayload(42, "sha-2")
 	mr, _ = svc.RefreshMR(mr.ID)
 	view, _ = svc.MRDiff(mr.ID, DiffSeen)
-	if view.From != "sha-1" || view.To != "sha-2" || len(view.Files) != 1 || view.Files[0].Path != "src/B.php" || !view.Modes[2].Available {
+	if view.From != "sha-1" || view.To != "sha-2" || len(view.Files) != 2 || view.Files[0].Path != "src/B.php" || !view.Modes[2].Available {
 		t.Fatalf("%+v", view)
 	}
 	if body, err = svc.MRDiffFile(mr.ID, DiffReview, 0); err != nil || body.Rows[2].Text != "since sha-1" || body.Rows[2].New != 11 {
@@ -66,5 +66,45 @@ func TestMRDiffModesAndMarks(t *testing.T) {
 	}
 	if n := countCalls(gl, "compare-diffs sha-1..sha-2"); n != 1 {
 		t.Fatalf("a range is fetched once and cached: %d", n)
+	}
+}
+
+// Verify is incremental: the prompt carries the diff since the reviewed SHA, only for the MR's own files, with the
+// open findings to re-check and the rejected ones not to repeat — and not the whole MR diff.
+func TestVerifyIsIncremental(t *testing.T) {
+	svc, gl, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	id, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, id) == db.StatusDone })
+	findings, _ := svc.DB.ListFindings(id)
+	if err := svc.SetFindingStatus(findings[len(findings)-1].ID, "false_positive"); err != nil {
+		t.Fatal(err)
+	}
+	gl.MRs[42] = testutil.MRPayload(42, "sha-2")
+	fr.Outputs = []map[string]any{testutil.VerifyOutput(findings[0].ID, findings[0].ID, "sha-2")}
+	vid, err := svc.StartReview(mr.ID, db.KindReviewVerify, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, vid) == db.StatusDone })
+	prompt := fr.Requests[len(fr.Requests)-1].Prompt
+	for _, want := range []string{"INCREMENTAL: the MR was reviewed at sha-1", "Files changed since sha-1 (1):", "  M src/A.php", "Diff sha-1..sha-2 (files of the MR only)",
+		"+fixed after sha-1", "do not review it again", "Previously reviewed SHA: sha-1", "rejected"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("verify prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+	for _, not := range []string{"+since sha-1", "M src/B.php", "+new line", "MR diff:"} {
+		if strings.Contains(prompt, not) {
+			t.Fatalf("verify prompt must not carry %q (the whole MR or the target branch's changes)", not)
+		}
+	}
+	// The full review of the same head still gets the whole MR.
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-2")}
+	fid, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, fid) == db.StatusDone })
+	if prompt := fr.Requests[len(fr.Requests)-1].Prompt; !strings.Contains(prompt, "MR diff:") || strings.Contains(prompt, "INCREMENTAL") {
+		t.Fatal("a full review is not incremental")
 	}
 }

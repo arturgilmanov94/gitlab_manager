@@ -343,12 +343,14 @@ func (f *FakeGitLab) Compare(ref gitlab.Ref, from, to string) (gitlab.Changes, e
 	return gitlab.Changes{Commits: 2, Files: 1, Additions: 10, Deletions: 3}, nil
 }
 
-// CompareDiffs returns a canned one-file diff of what arrived between two commits.
+// CompareDiffs returns what arrived between two commits: a change in src/B.php (not a file of the MR — the target
+// branch moved) and one in src/A.php (the MR's own file).
 func (f *FakeGitLab) CompareDiffs(ref gitlab.Ref, from, to string) ([]gitlab.FileDiff, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, "compare-diffs "+from+".."+to)
-	return []gitlab.FileDiff{{OldPath: "src/B.php", NewPath: "src/B.php", Diff: "@@ -10,2 +10,3 @@ class B\n ctx\n+since " + from + "\n ctx2\n"}}, nil
+	return []gitlab.FileDiff{{OldPath: "src/B.php", NewPath: "src/B.php", Diff: "@@ -10,2 +10,3 @@ class B\n ctx\n+since " + from + "\n ctx2\n"},
+		{OldPath: "src/A.php", NewPath: "src/A.php", Diff: "@@ -20,2 +20,3 @@ class A\n keep\n+fixed after " + from + "\n keep2\n"}}, nil
 }
 
 func (f *FakeGitLab) CreateMR(host, projectPath, sourceBranch, targetBranch, title, description string) (string, error) {

@@ -21,7 +21,7 @@
       <a class="btn" href="{{runPath .LastRun.Kind .LastRun.ID}}">Посмотреть ошибку</a>
       <button class="btn btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.LastRun.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Повторить</button>
     {{else if eq .State "stale"}}
-      <button class="btn btn-primary tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'verify', this)">Проверить изменения</button>
+      <button class="btn btn-primary tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'verify', this)">Перепроверить только новое</button>
     {{else if eq .State "current"}}
       <a class="btn btn-primary" href="#results">{{if .Findings}}Открыть замечания{{else}}Открыть результаты{{end}}</a>
     {{else}}
@@ -35,7 +35,7 @@
         {{if and (not .Active) (not .Closed)}}
           <button class="item tip" data-tip="{{kindTip "quick"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'quick', this)">Быстрое ревью<span class="sub">только diff · экономит токены</span></button>
           <button class="item tip" data-tip="{{kindTip "full"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'full', this)">Полное ревью{{if .Latest}} заново{{end}}<span class="sub">заново весь MR на текущем HEAD</span></button>
-          {{if .Latest}}{{if .Stale}}<button class="item tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'verify', this)">Проверить изменения</button>{{else}}<span class="item tip" aria-disabled="true" data-tip="Нет изменений после последнего ревью">Проверить изменения</span>{{end}}{{end}}
+          {{if .Latest}}{{if .Stale}}<button class="item tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'verify', this)">Перепроверить только новое</button>{{else}}<span class="item tip" aria-disabled="true" data-tip="Нет изменений после последнего ревью">Перепроверить только новое</span>{{end}}{{end}}
           {{if .CanFix}}{{if .MR.Unresolved}}<a class="item tip" data-tip="{{kindTip "fix"}}" href="#fix">Исправить замечания ревьюеров ({{.MR.Unresolved}})</a>{{else}}<span class="item tip" aria-disabled="true" data-tip="Нет нерешённых обсуждений ревьюеров">Исправить замечания ревьюеров</span>{{end}}{{end}}
           {{if eq .MR.PipelineStatus "failed"}}<a class="item tip" data-tip="{{kindTip "ci_analyze"}}" href="#ci">Разобрать ошибки CI<span class="sub">почему упал head pipeline</span></a>{{end}}
           {{if or .StandSkill .StandTestSkill}}<a class="item tip" data-tip="{{kindTip "stand"}}" href="#stand">Проверить на стенде<span class="sub">залить MR, прогнать тесты и скрипт-эмуляцию</span></a>{{else}}<span class="item tip" aria-disabled="true" data-tip="В проекте не найден skill доступа к стенду (.claude/skills/*, упоминающий стенд) — задайте STAND_SKILL или добавьте skill">Проверить на стенде</span>{{end}}
@@ -138,7 +138,7 @@
     {{else}}
       <button class="btn {{if not .Latest}}btn-primary {{end}}tip" data-tip="{{kindTip "full"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'full', this)">Полное ревью{{if .Latest}} заново{{end}}</button>
       <button class="btn tip" data-tip="{{kindTip "quick"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'quick', this)">Быстрое ревью</button>
-      {{if .Latest}}{{if .Stale}}<button class="btn btn-primary tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'verify', this)">Проверить изменения</button>{{else}}<span class="disabled-wrap tip" data-tip="Нет новых коммитов после последнего ревью"><button class="btn" disabled>Проверить изменения</button></span>{{end}}{{end}}
+      {{if .Latest}}{{if .Stale}}<button class="btn btn-primary tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.MR.ID}}/runs', 'verify', this)">Перепроверить только новое</button>{{else}}<span class="disabled-wrap tip" data-tip="Нет новых коммитов после последнего ревью"><button class="btn" disabled>Перепроверить только новое</button></span>{{end}}{{end}}
     {{end}}
     <span class="action-sep"></span>
     {{if .CanFix}}{{if and .MR.Unresolved (not .Active)}}<a class="btn tip" data-tip="{{kindTip "fix"}}" href="#fix">Исправить замечания ревьюеров ({{.MR.Unresolved}})</a>{{else}}<span class="disabled-wrap tip" data-tip="{{if .Active}}Идёт запуск{{else}}Нет нерешённых обсуждений ревьюеров{{end}}"><button class="btn" disabled>Исправить замечания ревьюеров</button></span>{{end}}{{end}}
@@ -184,7 +184,7 @@
 <section class="card" id="results">
   <div class="card-head">
     <h2>Результат AI review · <a href="{{runPath .Latest.Kind .Latest.ID}}">сессия #{{.Latest.ID}}</a> · {{kindLabel .Latest.Kind}}</h2>
-    <div>{{if .Stale}}<span class="badge badge-warning tip" data-tip="Результат относится к коммиту {{shortSHA .Latest.HeadSHA}}; с тех пор появились новые коммиты. Нажмите «Проверить изменения».">по коммиту {{shortSHA .Latest.HeadSHA}} · есть новые изменения{{with .Changes}}: {{.Commits}} коммитов, {{.Files}} файлов, <span class="text-success">+{{.Additions}}</span> <span class="text-danger">−{{.Deletions}}</span>{{end}}</span>{{else}}<span class="badge badge-success">актуально для HEAD {{shortSHA .Latest.HeadSHA}}</span>{{end}}</div>
+    <div>{{if .Stale}}<span class="badge badge-warning tip" data-tip="Результат относится к коммиту {{shortSHA .Latest.HeadSHA}}; с тех пор появились новые коммиты. Нажмите «Перепроверить только новое».">по коммиту {{shortSHA .Latest.HeadSHA}} · есть новые изменения{{with .Changes}}: {{.Commits}} коммитов, {{.Files}} файлов, <span class="text-success">+{{.Additions}}</span> <span class="text-danger">−{{.Deletions}}</span>{{end}}</span>{{else}}<span class="badge badge-success">актуально для HEAD {{shortSHA .Latest.HeadSHA}}</span>{{end}}</div>
   </div>
   <div class="summary"><span class="verdict-{{.Latest.Verdict}}">{{verdict .Latest.Verdict}}.</span> {{md .Latest.Summary .Blob .SHA}}</div>
   {{template "findings" .}}

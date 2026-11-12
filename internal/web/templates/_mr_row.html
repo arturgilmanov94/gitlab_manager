@@ -44,7 +44,7 @@
         <a class="btn btn-sm" href="{{runPath .Last.Kind .Last.ID}}">Посмотреть ошибку</a>
         <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Last.ID}}/retry', {}, this).then(r => r && reload())">Повторить</button>
       {{else if eq $st "stale"}}
-        <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'verify', this)">Проверить изменения</button>
+        <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'verify', this)">Перепроверить только новое</button>
       {{else if eq $st "current"}}
         <a class="btn btn-sm btn-primary" href="{{mrPath .ID}}">{{if .Done.Open}}Открыть замечания{{else}}Открыть результаты{{end}}</a>
       {{else}}
@@ -58,7 +58,7 @@
           {{if and (not $busy) (not $closed)}}
             <button class="item tip" data-tip="{{kindTip "quick"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'quick', this)">Быстрое ревью<span class="sub">только diff · экономит токены</span></button>
             <button class="item tip" data-tip="{{kindTip "full"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'full', this)">Полное ревью{{if .Done}} заново{{end}}<span class="sub">заново весь MR на текущем HEAD</span></button>
-            {{if .Done}}{{if eq $st "current"}}<span class="item tip" aria-disabled="true" data-tip="Нет изменений после последнего ревью">Проверить изменения</span>{{else}}<button class="item tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'verify', this)">Проверить изменения</button>{{end}}{{end}}
+            {{if .Done}}{{if eq $st "current"}}<span class="item tip" aria-disabled="true" data-tip="Нет изменений после последнего ревью">Перепроверить только новое</span>{{else}}<button class="item tip" data-tip="{{kindTip "verify"}}" onclick="startRun('/api/mrs/{{.ID}}/runs', 'verify', this)">Перепроверить только новое</button>{{end}}{{end}}
             <div class="divider"></div>
           {{end}}
           <a class="item" href="{{mrPath .ID}}#history">История AI review</a>

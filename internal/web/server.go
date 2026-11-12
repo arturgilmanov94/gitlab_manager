@@ -724,7 +724,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		case "stale":
 			mine.Stale++
 			inbox = append(inbox, inboxItem{Tone: "warning", Glyph: "⚠", Title: fmt.Sprintf("!%d · есть новые коммиты после ревью", mr.IID), Detail: mr.Title,
-				Action: "Проверить изменения", Onclick: fmt.Sprintf("startRun('/api/mrs/%d/runs', 'verify', this)", mr.ID)})
+				Action: "Перепроверить только новое", Onclick: fmt.Sprintf("startRun('/api/mrs/%d/runs', 'verify', this)", mr.ID)})
 		case "failed":
 			inbox = append(inbox, inboxItem{Tone: "danger", Glyph: "✕", Title: fmt.Sprintf("!%d · ревью не удалось", mr.IID), Detail: mr.Title,
 				Action: "Повторить", Onclick: fmt.Sprintf("post('/api/runs/%d/retry', {}, this).then(r => r && reload())", mr.Last.ID)})
@@ -1529,7 +1529,7 @@ func kindTip(kind string) string {
 	case "full":
 		return "AI заново проверит весь MR на текущем HEAD по правилам проекта: контекст кода, регрессии, безопасность, все уровни замечаний."
 	case "verify":
-		return "AI проверит только изменения после последнего ревью и обновит статусы прежних замечаний: исправлено / открыто / неактуально."
+		return "Инкрементальное ревью: агент получает только diff с последнего ревью и прежние замечания (открытые и отклонённые вами), а не весь MR заново. Обновит статусы замечаний: исправлено / открыто / неактуально — и добавит новые, если их внесли свежие коммиты."
 	case "verify_finding":
 		return "AI перепроверит только это замечание, не считая его верным априори: подтверждено / ложное срабатывание / неактуально / недостаточно данных, с доказательством из кода. Только чтение, остальной MR не трогается."
 	case "fix_findings":
