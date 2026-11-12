@@ -3,7 +3,6 @@ package app
 import (
 	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,12 +19,17 @@ const (
 // OfflineHint is the short message shown wherever GitLab is unreachable.
 const OfflineHint = "GitLab недоступен — VPN?"
 
+// GitOfflineHint is shown when the API answers but git (fetch over ssh/https) does not: syncs work, new code
+// cannot be fetched.
+const GitOfflineHint = "git недоступен — новый код не скачается"
+
 type reachState struct {
-	mu       sync.Mutex
-	checked  time.Time
-	offline  string // "" = reachable; otherwise which endpoint failed and why
-	checking bool
-	dial     func(addr string, timeout time.Duration) error // replaced in tests
+	mu         sync.Mutex
+	checked    time.Time
+	offline    string // the API does not answer: why ("" = it does)
+	gitOffline string // the git endpoint of origin does not answer: why ("" = it does, or it is the API host itself)
+	checking   bool
+	dial       func(addr string, timeout time.Duration) error // replaced in tests
 }
 
 func tcpDial(addr string, timeout time.Duration) error {
@@ -36,23 +40,22 @@ func tcpDial(addr string, timeout time.Duration) error {
 	return conn.Close()
 }
 
-// gitLabEndpoints are the host:port pairs that must answer: git (from the origin remote) and the API.
-func (s *Service) gitLabEndpoints() []string {
-	var out []string
+// gitLabEndpoints are the host:port of the API and of git (from the origin remote; "" when it is the API one or
+// a local path).
+func (s *Service) gitLabEndpoints() (api, git string) {
+	host, _ := s.DefaultProject()
+	api = gitlab.APIEndpoint(host)
 	if s.Settings.ProjectRoot != "" {
-		if ep, ok := gitlab.GitEndpoint(gitlab.OriginURL(s.Settings.ProjectRoot)); ok {
-			out = append(out, ep)
+		if ep, ok := gitlab.GitEndpoint(gitlab.OriginURL(s.Settings.ProjectRoot)); ok && ep != api {
+			git = ep
 		}
 	}
-	host, _ := s.DefaultProject()
-	if ep := gitlab.APIEndpoint(host); ep != "" && !containsStr(out, ep) {
-		out = append(out, ep)
-	}
-	return out
+	return api, git
 }
 
-// CheckGitLab dials the GitLab endpoints now (cached for reachTTL) and returns "" when they answer, otherwise
-// why not. With GITLAB_REACH_CHECK=0 GitLab is always considered reachable.
+// CheckGitLab dials the GitLab endpoints now (cached for reachTTL) and returns "" when the API answers, otherwise
+// why not: that is what syncs need. Whether git answers is kept for the pages (GitOffline). With
+// GITLAB_REACH_CHECK=0 everything is considered reachable.
 func (s *Service) CheckGitLab() string {
 	if !s.Settings.GitLabReachCheck {
 		return ""
@@ -67,24 +70,43 @@ func (s *Service) CheckGitLab() string {
 	if dial == nil {
 		dial = tcpDial
 	}
-	var failed []string
-	for _, ep := range s.gitLabEndpoints() {
-		if err := dial(ep, reachDialTimeout); err != nil {
-			failed = append(failed, fmt.Sprintf("%s: %v", ep, err))
+	api, git := s.gitLabEndpoints()
+	probe := func(ep string) string {
+		if ep == "" {
+			return ""
 		}
+		if err := dial(ep, reachDialTimeout); err != nil {
+			return fmt.Sprintf("%s: %v", ep, err)
+		}
+		return ""
 	}
-	offline := strings.Join(failed, "; ")
+	offline, gitOffline := probe(api), probe(git)
 	s.reach.mu.Lock()
-	s.reach.checked, s.reach.offline = time.Now(), offline
+	s.reach.checked, s.reach.offline, s.reach.gitOffline = time.Now(), offline, gitOffline
 	s.reach.mu.Unlock()
 	return offline
 }
 
-// GitLabOffline is the last known reachability for pages ("" = reachable or not checked yet). It never blocks:
-// when the result is stale a check starts in the background and the next page shows it.
+// GitLabOffline is the last known reachability of the API for pages ("" = reachable or not checked yet). It
+// never blocks: when the result is stale a check starts in the background and the next page shows it.
 func (s *Service) GitLabOffline() string {
-	if !s.Settings.GitLabReachCheck {
+	offline, _ := s.reachability()
+	return offline
+}
+
+// GitOffline is the last known reachability of git for pages ("" = reachable, not checked, or the API is down —
+// then GitLabOffline says it all).
+func (s *Service) GitOffline() string {
+	offline, git := s.reachability()
+	if offline != "" {
 		return ""
+	}
+	return git
+}
+
+func (s *Service) reachability() (api, git string) {
+	if !s.Settings.GitLabReachCheck {
+		return "", ""
 	}
 	s.reach.mu.Lock()
 	defer s.reach.mu.Unlock()
@@ -97,5 +119,5 @@ func (s *Service) GitLabOffline() string {
 			s.reach.mu.Unlock()
 		}()
 	}
-	return s.reach.offline
+	return s.reach.offline, s.reach.gitOffline
 }

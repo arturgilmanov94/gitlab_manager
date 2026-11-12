@@ -2,6 +2,7 @@ package app
 
 import (
 	"net"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -94,5 +95,32 @@ func TestGitEndpoint(t *testing.T) {
 	}
 	if gitlab.APIEndpoint("gitlab.example.com") != "gitlab.example.com:443" || gitlab.APIEndpoint("h:8443") != "h:8443" {
 		t.Fatal("api endpoint")
+	}
+}
+
+// The API answers but git does not (an ssh port closed by the network): syncs go on, pages warn about git only.
+func TestGitClosedAPIOpen(t *testing.T) {
+	api, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer api.Close()
+	settings, _ := testutil.Settings(t)
+	settings.GitLabReachCheck = true
+	settings.GitLabHost = api.Addr().String()
+	svc, _, _ := newServiceWith(t, settings)
+	gitAddr := closedPort(t)
+	if out, err := exec.Command("git", "-C", settings.ProjectRoot, "remote", "set-url", "origin", "ssh://git@"+gitAddr+"/group/sub/project.git").CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if off := svc.CheckGitLab(); off != "" {
+		t.Fatalf("the API answers: syncs must go on (%q)", off)
+	}
+	if svc.GitLabOffline() != "" || !strings.Contains(svc.GitOffline(), gitAddr) {
+		t.Fatalf("api %q git %q", svc.GitLabOffline(), svc.GitOffline())
+	}
+	svc.autoSyncOnce()
+	if _, msg := svc.AutoSyncState(); strings.HasPrefix(msg, OfflineHint) {
+		t.Fatalf("sync must not pause for git: %q", msg)
 	}
 }

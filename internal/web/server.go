@@ -66,6 +66,7 @@ type pageBase struct {
 	AutoSyncSec int
 	SyncError   string // last background sync error ("" = fine)
 	Offline     string // why GitLab does not answer ("" = reachable)
+	GitOffline  string // why git (fetch) does not answer while the API does ("" = fine)
 	// Projects (repositories): the header switcher. Project = the chosen one (0 = all); ProjectNames is set only in
 	// «all» mode with several projects, for the project badge on list rows.
 	Projects     []db.Project
@@ -466,6 +467,7 @@ func (s *Server) base(r *http.Request, nav, title string) pageBase {
 		AutoSyncSec:  s.svc.Settings.AutoSyncSec,
 		SyncError:    syncErr,
 		Offline:      s.svc.GitLabOffline(),
+		GitOffline:   s.svc.GitOffline(),
 		Projects:     projects,
 		Project:      current,
 		ProjectNames: names,
