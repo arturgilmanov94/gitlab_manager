@@ -174,3 +174,15 @@ func (d *DB) projectOf(table string, id int64) int64 {
 	_ = d.sql.QueryRow("SELECT project_id FROM "+table+" WHERE id = ?", id).Scan(&pid)
 	return pid.Int64
 }
+
+// intOrNull scans a nullable INTEGER column into an int64 (NULL = 0).
+type intOrNull int64
+
+func (v *intOrNull) Scan(src any) error {
+	var n sql.NullInt64
+	if err := n.Scan(src); err != nil {
+		return err
+	}
+	*v = intOrNull(n.Int64)
+	return nil
+}

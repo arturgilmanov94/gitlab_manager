@@ -710,3 +710,19 @@
   });
   open();
 })();
+
+// Header project switcher: remembered in a cookie for a year; «Настроить проекты…» opens the settings page.
+window.switchProject = function (select) {
+  if (select.value === 'settings') { location.href = '/projects'; return; }
+  document.cookie = 'project=' + encodeURIComponent(select.value) + '; path=/; max-age=31536000; SameSite=Lax';
+  location.reload();
+};
+
+// Projects page: save the fields of one project card.
+window.saveProject = async function (id, button) {
+  const card = document.getElementById('project-' + id);
+  const body = {};
+  card.querySelectorAll('[data-field]').forEach((input) => { body[input.dataset.field] = input.value; });
+  const data = await call('POST', '/api/projects/' + id, body, button);
+  if (data) flash('Сохранено', true);
+};

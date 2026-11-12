@@ -2,10 +2,12 @@ package app
 
 import (
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"mr-review/internal/db"
+	"mr-review/internal/gitlab"
 	"mr-review/internal/worktree"
 )
 
@@ -26,9 +28,10 @@ func (s *Service) ensureProjects() {
 	}
 	if len(projects) == 0 && s.Settings.ProjectRoot != "" {
 		host, path := s.DefaultProject()
+		// Only the identity is stored: branch, stand skill and issue trackers stay empty and keep following .env until
+		// they are set on the projects page (a later .env edit must still take effect).
 		p, err := s.DB.CreateProject(db.Project{Name: filepath.Base(s.Settings.ProjectRoot), GitLabHost: host, ProjectPath: path,
-			RepoRoot: s.Settings.ProjectRoot, BaseBranch: s.Settings.BaseBranch, StandSkill: s.Settings.StandSkill,
-			IssueProjects: strings.Join(s.Settings.GitLabIssueProjects, ",")})
+			RepoRoot: s.Settings.ProjectRoot})
 		if err != nil {
 			return
 		}
@@ -38,7 +41,13 @@ func (s *Service) ensureProjects() {
 		return
 	}
 	s.ProjectID = projects[0].ID
-	_, _, _, _ = s.DB.AssignProjects(projects)
+	s.applyDefaultProject(projects[0])
+	// Tasks of the default project come from its trackers, else GITLAB_ISSUE_PROJECTS.
+	assign := append([]db.Project(nil), projects...)
+	if assign[0].IssueProjects == "" {
+		assign[0].IssueProjects = strings.Join(s.Settings.GitLabIssueProjects, ",")
+	}
+	_, _, _, _ = s.DB.AssignProjects(assign)
 }
 
 // Projects lists the projects (the default one first).
@@ -114,7 +123,11 @@ func (s *Service) projectForMRRef(host, path string) int64 {
 func (s *Service) projectForIssuePath(path string) int64 {
 	projects := s.Projects()
 	for _, p := range projects {
-		for _, tracker := range p.IssueProjectList() {
+		trackers := p.IssueProjectList()
+		if len(trackers) == 0 && p.ID == s.root.ProjectID {
+			trackers = s.root.Settings.GitLabIssueProjects // the default project follows .env until set
+		}
+		for _, tracker := range trackers {
 			if strings.EqualFold(tracker, path) {
 				return p.ID
 			}
@@ -172,3 +185,102 @@ func (s *Service) otherViews() []*Service {
 func (s *Service) ForMR(id int64) *Service    { return s.forMR(id) }
 func (s *Service) ForIssue(id int64) *Service { return s.forIssue(id) }
 func (s *Service) ForRun(id int64) *Service   { return s.forRun(id) }
+
+// AddProject adds a repository by the path of its checkout: the top of the git work tree, its origin remote gives
+// the GitLab project, the remote's default branch (else BASE_BRANCH) the base branch.
+func (s *Service) AddProject(repoPath string) (*db.Project, error) {
+	repoPath = strings.TrimSpace(repoPath)
+	if repoPath == "" || !filepath.IsAbs(repoPath) {
+		return nil, userErr("укажите абсолютный путь к рабочей копии репозитория")
+	}
+	top, err := gitOutput(repoPath, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return nil, userErr("%s — не git-репозиторий: %v", repoPath, err)
+	}
+	for _, p := range s.Projects() {
+		if filepath.Clean(p.RepoRoot) == filepath.Clean(top) {
+			return nil, userErr("репозиторий %s уже добавлен как «%s»", top, p.Name)
+		}
+	}
+	host, path, ok := gitlab.ProjectFromGitRemote(top)
+	if !ok {
+		return nil, userErr("у %s нет remote origin на GitLab: проект не связать с MR и задачами", top)
+	}
+	base := s.root.Settings.BaseBranch
+	if head, err := gitOutput(top, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		base = strings.TrimPrefix(head, "origin/")
+	}
+	return s.DB.CreateProject(db.Project{Name: filepath.Base(top), GitLabHost: host, ProjectPath: path, RepoRoot: top, BaseBranch: base})
+}
+
+// UpdateProject stores the editable settings of a project (the checkout path is fixed: add another project
+// instead). The default project's changes apply to the running dashboard at once.
+func (s *Service) UpdateProject(id int64, fields map[string]string) error {
+	p, _ := s.DB.GetProject(id)
+	if p == nil {
+		return userErr("project #%d not found", id)
+	}
+	if name := strings.TrimSpace(fields["name"]); name != "" {
+		p.Name = name
+	}
+	for key, dst := range map[string]*string{"gitlab_host": &p.GitLabHost, "project_path": &p.ProjectPath, "base_branch": &p.BaseBranch,
+		"stand_skill": &p.StandSkill, "issue_projects": &p.IssueProjects} {
+		if v, ok := fields[key]; ok {
+			*dst = strings.Trim(strings.TrimSpace(v), "/")
+		}
+	}
+	if err := s.DB.UpdateProject(*p); err != nil {
+		return err
+	}
+	if id == s.root.ProjectID {
+		s.root.applyDefaultProject(*p)
+	}
+	return nil
+}
+
+// DeleteProject removes a project that has no MRs, tasks or runs; the default project stays.
+func (s *Service) DeleteProject(id int64) error {
+	if id == s.root.ProjectID {
+		return userErr("проект по умолчанию (из .env) удалить нельзя")
+	}
+	if err := s.DB.DeleteProject(id); err != nil {
+		return &UserError{err.Error()}
+	}
+	return nil
+}
+
+// applyDefaultProject puts the stored settings of the default project over .env in the running root service.
+func (s *Service) applyDefaultProject(p db.Project) {
+	if p.BaseBranch != "" {
+		s.Settings.BaseBranch = p.BaseBranch
+		if s.Worktrees != nil {
+			s.Worktrees.BaseBranch = p.BaseBranch
+		}
+	}
+	if p.StandSkill != "" {
+		s.Settings.StandSkill = p.StandSkill
+	}
+	if list := p.IssueProjectList(); len(list) > 0 {
+		s.Settings.GitLabIssueProjects = list
+	}
+	if p.GitLabHost != "" {
+		s.Settings.GitLabHost = p.GitLabHost
+	}
+	if p.ProjectPath != "" {
+		s.Settings.GitLabProject = p.ProjectPath
+	}
+	s.project = nil // DefaultProject re-reads them
+}
+
+func gitOutput(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}

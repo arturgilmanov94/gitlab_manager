@@ -166,6 +166,8 @@ type MergeRequest struct {
 	SeenAt string
 	// ReviewFocus is what the developer asked reviews of this MR to pay attention to ("" = nothing special).
 	ReviewFocus string
+	// ProjectID is the project (repository) of the MR; 0 = a GitLab project without a repository here.
+	ProjectID int64
 }
 
 // Seen reports whether the developer marked the MR as seen (and nothing new arrived since).
@@ -203,12 +205,12 @@ func (m MergeRequest) CanFix(user string) bool {
 // relevantWhere is the SQL form of Relevant().
 const relevantWhere = "state NOT IN ('merged', 'closed') AND hidden = 0 AND approved_by_me = 0 AND (my_roles != '' OR manual = 1)"
 
-const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, hidden, labels, pipeline_id, pipeline_url, notes_count, seen_at, review_focus"
+const mrColumns = "id, gitlab_host, project_path, iid, web_url, title, author, source_branch, target_branch, state, head_sha, unresolved, gitlab_updated_at, synced_at, added_at, pipeline_status, approvals_given, approvals_required, diverged, draft, changes_count, my_roles, approved_by_me, manual, hidden, labels, pipeline_id, pipeline_url, notes_count, seen_at, review_focus, project_id"
 
 func scanMRInto(m *MergeRequest, s scanner) error {
 	var draft, approved, manual, hidden int
 	if err := s.Scan(&m.ID, &m.GitLabHost, &m.ProjectPath, &m.IID, &m.WebURL, &m.Title, &m.Author, &m.SourceBranch, &m.TargetBranch, &m.State, &m.HeadSHA, &m.Unresolved, &m.GitLabUpdatedAt, &m.SyncedAt, &m.AddedAt,
-		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount, &m.MyRoles, &approved, &manual, &hidden, &m.Labels, &m.PipelineID, &m.PipelineURL, &m.NotesCount, &m.SeenAt, &m.ReviewFocus); err != nil {
+		&m.PipelineStatus, &m.ApprovalsGiven, &m.ApprovalsRequired, &m.Diverged, &draft, &m.ChangesCount, &m.MyRoles, &approved, &manual, &hidden, &m.Labels, &m.PipelineID, &m.PipelineURL, &m.NotesCount, &m.SeenAt, &m.ReviewFocus, (*intOrNull)(&m.ProjectID)); err != nil {
 		return err
 	}
 	m.Draft, m.ApprovedByMe, m.Manual, m.Hidden = draft == 1, approved == 1, manual == 1, hidden == 1
@@ -393,7 +395,7 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 		var kind, status, verdict, sha, runner, model, finished, created, session, dKind, dVerdict, dSHA, dFinished sql.NullString
 		var draft, approved, manual, hidden int
 		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Author, &item.SourceBranch, &item.TargetBranch, &item.State, &item.HeadSHA, &item.Unresolved, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt,
-			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual, &hidden, &item.Labels, &item.PipelineID, &item.PipelineURL, &item.NotesCount, &item.SeenAt, &item.ReviewFocus,
+			&item.PipelineStatus, &item.ApprovalsGiven, &item.ApprovalsRequired, &item.Diverged, &draft, &item.ChangesCount, &item.MyRoles, &approved, &manual, &hidden, &item.Labels, &item.PipelineID, &item.PipelineURL, &item.NotesCount, &item.SeenAt, &item.ReviewFocus, (*intOrNull)(&item.ProjectID),
 			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &session, &open, &tokens,
 			&dID, &dKind, &dVerdict, &dSHA, &dFinished, &dMajor, &dMinor, &dInfo, &item.ContextRunID); err != nil {
 			return nil, err
@@ -430,6 +432,7 @@ type Issue struct {
 	SyncedAt        string
 	AddedAt         string
 	AgentNotes      string // «Указания агенту», saved on the task as the developer types
+	ProjectID       int64  // project (repository) the task is worked in
 }
 
 // Ref is "project#iid" — also the project's branch naming convention.
@@ -439,11 +442,11 @@ func (i Issue) Ref() string { return fmt.Sprintf("%s#%d", i.ProjectPath, i.IID) 
 // added by hand that has not been fetched yet — it stays in the list.
 func (i Issue) Closed() bool { return i.State != "" && i.State != "opened" }
 
-const issueColumns = "id, gitlab_host, project_path, iid, web_url, title, description, author, state, labels, gitlab_updated_at, synced_at, added_at, agent_notes"
+const issueColumns = "id, gitlab_host, project_path, iid, web_url, title, description, author, state, labels, gitlab_updated_at, synced_at, added_at, agent_notes, project_id"
 
 func scanIssue(s scanner) (*Issue, error) {
 	var i Issue
-	err := s.Scan(&i.ID, &i.GitLabHost, &i.ProjectPath, &i.IID, &i.WebURL, &i.Title, &i.Description, &i.Author, &i.State, &i.Labels, &i.GitLabUpdatedAt, &i.SyncedAt, &i.AddedAt, &i.AgentNotes)
+	err := s.Scan(&i.ID, &i.GitLabHost, &i.ProjectPath, &i.IID, &i.WebURL, &i.Title, &i.Description, &i.Author, &i.State, &i.Labels, &i.GitLabUpdatedAt, &i.SyncedAt, &i.AddedAt, &i.AgentNotes, (*intOrNull)(&i.ProjectID))
 	if err != nil {
 		return nil, err
 	}
@@ -513,7 +516,7 @@ func (d *DB) ListIssues() ([]IssueListItem, error) {
 		var item IssueListItem
 		var id sql.NullInt64
 		var kind, status, verdict, sha, runner, model, finished, created, session sql.NullString
-		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Description, &item.Author, &item.State, &item.Labels, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt, &item.AgentNotes,
+		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Description, &item.Author, &item.State, &item.Labels, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt, &item.AgentNotes, (*intOrNull)(&item.ProjectID),
 			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &session, &item.ContextRunID); err != nil {
 			return nil, err
 		}
@@ -543,6 +546,7 @@ type Run struct {
 	Runner           string
 	Model            string // models the agent actually used, filled after the run
 	RequestedModel   string // model picked by the developer at start ("" = the agent's default)
+	ProjectID        int64  // project (repository) the run worked in
 	SkillIdentifier  string
 	Notes            string
 	Prompt           string
@@ -612,12 +616,12 @@ func (r Run) IsEdit() bool {
 	return r.Kind == KindImplement || r.Kind == KindFixComments || r.Kind == KindStandTest || r.Kind == KindCIFix || r.Kind == KindFixFindings
 }
 
-const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path, continue_run_id, finding_id, mode, selection_json, context_tokens, context_window, requested_model"
+const runColumns = "id, kind, mr_id, issue_id, base_run_id, head_sha, status, runner, model, skill_identifier, notes, prompt, summary, verdict, result_json, raw_result, error, log_path, session_id, work_dir, branch, cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, started_at, finished_at, progress, denials_json, plan_path, continue_run_id, finding_id, mode, selection_json, context_tokens, context_window, requested_model, project_id"
 
 func scanRun(s scanner) (*Run, error) {
 	var r Run
 	var mrID, issueID, baseID, contID, findingID sql.NullInt64
-	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.CreatedAt, &r.StartedAt, &r.FinishedAt, &r.Progress, &r.DenialsJSON, &r.PlanPath, &contID, &findingID, &r.Mode, &r.SelectionJSON, &r.ContextTokens, &r.ContextWindow, &r.RequestedModel)
+	err := s.Scan(&r.ID, &r.Kind, &mrID, &issueID, &baseID, &r.HeadSHA, &r.Status, &r.Runner, &r.Model, &r.SkillIdentifier, &r.Notes, &r.Prompt, &r.Summary, &r.Verdict, &r.ResultJSON, &r.RawResult, &r.Error, &r.LogPath, &r.SessionID, &r.WorkDir, &r.Branch, &r.CostUSD, &r.DurationMs, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.CreatedAt, &r.StartedAt, &r.FinishedAt, &r.Progress, &r.DenialsJSON, &r.PlanPath, &contID, &findingID, &r.Mode, &r.SelectionJSON, &r.ContextTokens, &r.ContextWindow, &r.RequestedModel, (*intOrNull)(&r.ProjectID))
 	if err != nil {
 		return nil, err
 	}
@@ -708,7 +712,7 @@ func (d *DB) listRuns(where string, arg any) ([]RunSummary, error) {
 	for rows.Next() {
 		var s RunSummary
 		var mrID, issueID, baseID, contID, findingID sql.NullInt64
-		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.Mode, &s.SelectionJSON, &s.ContextTokens, &s.ContextWindow, &s.RequestedModel, &s.OpenFindings, &s.TotalFindings); err != nil {
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.Mode, &s.SelectionJSON, &s.ContextTokens, &s.ContextWindow, &s.RequestedModel, (*intOrNull)(&s.ProjectID), &s.OpenFindings, &s.TotalFindings); err != nil {
 			return nil, err
 		}
 		if contID.Valid {
@@ -819,7 +823,7 @@ func (d *DB) ListRuns(limit int) ([]RunListItem, error) {
 		var s RunListItem
 		var mrID, issueID, baseID, contID, findingID sql.NullInt64
 		var mrProject, issueProject string
-		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.Mode, &s.SelectionJSON, &s.ContextTokens, &s.ContextWindow, &s.RequestedModel, &s.OpenFindings, &s.TotalFindings,
+		if err := rows.Scan(&s.ID, &s.Kind, &mrID, &issueID, &baseID, &s.HeadSHA, &s.Status, &s.Runner, &s.Model, &s.SkillIdentifier, &s.Notes, &s.Prompt, &s.Summary, &s.Verdict, &s.ResultJSON, &s.RawResult, &s.Error, &s.LogPath, &s.SessionID, &s.WorkDir, &s.Branch, &s.CostUSD, &s.DurationMs, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CreatedAt, &s.StartedAt, &s.FinishedAt, &s.Progress, &s.DenialsJSON, &s.PlanPath, &contID, &findingID, &s.Mode, &s.SelectionJSON, &s.ContextTokens, &s.ContextWindow, &s.RequestedModel, (*intOrNull)(&s.ProjectID), &s.OpenFindings, &s.TotalFindings,
 			&s.MRIID, &s.MRTitle, &s.MRWebURL, &mrProject, &s.IssueIID, &s.IssueTitle, &s.IssueWebURL, &issueProject); err != nil {
 			return nil, err
 		}

@@ -214,7 +214,7 @@ func qrSVG(text string) template.HTML {
 }
 
 func (s *Server) phonePage(w http.ResponseWriter, r *http.Request) {
-	data := map[string]any{"Base": s.base("phone", "С телефона"), "Enabled": s.accessKey != "", "Local": isLocalRequest(r),
+	data := map[string]any{"Base": s.base(r, "phone", "С телефона"), "Enabled": s.accessKey != "", "Local": isLocalRequest(r),
 		"Port": s.svc.Settings.Port, "EnvFile": s.svc.Settings.EnvFile()}
 	if s.accessKey != "" && isLocalRequest(r) {
 		data["Links"] = s.phoneLinks()

@@ -17,7 +17,7 @@
 <table class="table list" id="history-table">
   <thead><tr><th>MR</th><th>Название</th><th class="hide-lg">Ветка</th><th>GitLab</th><th>AI review</th><th class="right"></th></tr></thead>
   <tbody>
-  {{range .MRs}}{{template "mr-row" (dict "MR" . "Username" $.Base.Username)}}{{end}}
+  {{range .MRs}}{{template "mr-row" (dict "MR" . "Username" $.Base.Username "Projects" $.Base.ProjectNames)}}{{end}}
   </tbody>
 </table>
 <div class="empty filter-empty" hidden>Под фильтр ничего не подходит. <a href="#" data-reset-link>Сбросить фильтры</a></div>

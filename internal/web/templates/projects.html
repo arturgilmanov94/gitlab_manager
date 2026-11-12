@@ -1,0 +1,32 @@
+{{define "content"}}
+<section class="page-head">
+  <div>
+    <h1>Проекты</h1>
+    <div class="meta"><span>репозитории, с которыми работает dashboard: их MR, задачи и запуски агентов</span></div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Добавить проект</h2></div>
+  <p class="secondary small">Укажите путь к рабочей копии репозитория на этом компьютере. GitLab-проект берётся из remote <span class="mono">origin</span>, базовая ветка — из ветки по умолчанию на origin. Агенты работают в отдельных worktree этого репозитория; саму рабочую копию dashboard не меняет.</p>
+  <div class="inline">
+    <input id="project-path" type="text" size="60" class="mono" placeholder="/home/me/projects/another-repo">
+    <button class="btn btn-primary" onclick="post('/api/projects', {repo_root: document.getElementById('project-path').value}, this).then(r => r && reload())">Добавить</button>
+  </div>
+</section>
+
+{{range .Projects}}
+<section class="card" id="project-{{.ID}}">
+  <div class="card-head"><h2>{{.Name}}{{if eq .ID $.Default}} <span class="badge badge-info tip" data-tip="Создан из .env при первом запуске. Пустые поля берутся из .env.">по умолчанию</span>{{end}}</h2><span class="small muted mono">{{.RepoRoot}}</span></div>
+  <div class="field"><label>Название</label><div><input type="text" size="40" data-field="name" value="{{.Name}}"></div></div>
+  <div class="field"><label>GitLab</label><div><input type="text" size="24" class="mono" data-field="gitlab_host" value="{{.GitLabHost}}" placeholder="gitlab.example.com"> <input type="text" size="32" class="mono" data-field="project_path" value="{{.ProjectPath}}" placeholder="group/project"><div class="hint">MR этого GitLab-проекта открываются и проверяются в этом репозитории</div></div></div>
+  <div class="field"><label>Базовая ветка</label><div><input type="text" size="20" class="mono" data-field="base_branch" value="{{.BaseBranch}}" placeholder="{{if eq .ID $.Default}}из .env: {{index $.Env "base"}}{{else}}develop{{end}}"><div class="hint">от неё создаются ветки задач</div></div></div>
+  <div class="field"><label>Трекеры задач</label><div><input type="text" size="60" class="mono" data-field="issue_projects" value="{{.IssueProjects}}" placeholder="{{if and (eq .ID $.Default) (index $.Env "issues")}}из .env: {{index $.Env "issues"}}{{else}}group/tracker, group/other-tracker{{end}}"><div class="hint">GitLab-проекты, задачи которых делаются в этом репозитории; пусто — задачи самого проекта{{if eq .ID $.Default}} или GITLAB_ISSUE_PROJECTS из .env{{end}}</div></div></div>
+  <div class="field"><label>Skill стенда</label><div><input type="text" size="30" class="mono" data-field="stand_skill" value="{{.StandSkill}}" placeholder="{{if and (eq .ID $.Default) (index $.Env "stand")}}из .env: {{index $.Env "stand"}}{{else}}определяется сам{{end}}"></div></div>
+  <div class="actions left">
+    <button class="btn btn-primary" onclick="saveProject({{.ID}}, this)">Сохранить</button>
+    {{if ne .ID $.Default}}<button class="btn btn-danger tip" data-tip="Удалить проект из dashboard. Возможно, только пока у него нет MR, задач и запусков. Репозиторий не трогается." onclick="confirm('Удалить проект {{.Name}} из dashboard?') && del('/api/projects/{{.ID}}', this).then(r => r && reload())">Удалить</button>{{end}}
+  </div>
+</section>
+{{end}}
+{{end}}

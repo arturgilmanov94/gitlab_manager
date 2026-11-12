@@ -66,6 +66,11 @@ type pageBase struct {
 	AutoSyncSec int
 	SyncError   string // last background sync error ("" = fine)
 	Offline     string // why GitLab does not answer ("" = reachable)
+	// Projects (repositories): the header switcher. Project = the chosen one (0 = all); ProjectNames is set only in
+	// «all» mode with several projects, for the project badge on list rows.
+	Projects     []db.Project
+	Project      int64
+	ProjectNames map[int64]string
 }
 
 // New builds the HTTP server.
@@ -176,7 +181,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 	if err != nil {
 		return nil, err
 	}
-	for _, page := range []string{"overview", "index", "history", "issues", "mr", "issue", "run", "runs", "workspaces", "ci", "doctor", "phone"} {
+	for _, page := range []string{"overview", "index", "history", "issues", "mr", "issue", "run", "runs", "workspaces", "ci", "doctor", "phone", "projects"} {
 		files := append([]string{"templates/layout.html", "templates/" + page + ".html"}, partials...)
 		t, err := template.New("layout").Funcs(funcs).ParseFS(assets, files...)
 		if err != nil {
@@ -215,6 +220,20 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /issues", s.issues)
 	s.mux.HandleFunc("GET /runs", s.runs)
 	s.mux.HandleFunc("GET /workspaces", s.workspaces)
+	s.mux.HandleFunc("GET /projects", func(w http.ResponseWriter, r *http.Request) {
+		s.render(w, "projects", map[string]any{"Base": s.base(r, "projects", "Проекты"), "Projects": s.svc.Projects(), "Default": s.svc.DefaultProjectID(),
+			"Env": map[string]string{"base": s.svc.Settings.BaseBranch, "stand": s.svc.Settings.StandSkill, "issues": strings.Join(s.svc.Settings.GitLabIssueProjects, ", ")}})
+	})
+	s.mux.HandleFunc("POST /api/projects", func(w http.ResponseWriter, r *http.Request) {
+		p, err := s.svc.AddProject(readBody(r)["repo_root"])
+		s.result(w, map[string]any{"project": p}, err)
+	})
+	s.mux.HandleFunc("POST /api/projects/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.result(w, map[string]any{}, s.svc.UpdateProject(pathID(r), readBody(r)))
+	})
+	s.mux.HandleFunc("DELETE /api/projects/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.result(w, map[string]any{}, s.svc.DeleteProject(pathID(r)))
+	})
 	s.mux.HandleFunc("POST /api/workspaces/cleanup-review", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Path string `json:"path"`
@@ -406,7 +425,16 @@ func (s *Server) routes() {
 
 // ---------------------------------------------------------------------------------- pages
 
-func (s *Server) base(nav, title string) pageBase {
+func (s *Server) base(r *http.Request, nav, title string) pageBase {
+	projects := s.svc.Projects()
+	current := s.currentProject(r)
+	var names map[int64]string
+	if current == 0 && len(projects) > 1 {
+		names = map[int64]string{}
+		for _, p := range projects {
+			names[p.ID] = p.Name
+		}
+	}
 	pending, _ := s.svc.DB.PendingApprovals()
 	var waiting []int64
 	seen := map[int64]bool{}
@@ -430,26 +458,29 @@ func (s *Server) base(nav, title string) pageBase {
 	}
 	_, syncErr := s.svc.AutoSyncState()
 	return pageBase{
-		Version:     s.version,
-		ProjectRoot: s.svc.Settings.ProjectRoot,
-		Skill:       s.svc.Skill(),
-		Runners:     s.svc.RunnerInfos(),
-		Username:    s.svc.CurrentUser(),
-		Counts:      s.svc.DB.Counts(),
-		Pending:     pending,
-		Waiting:     waiting,
-		Labels:      s.svc.Settings.HighlightLabels,
-		Terminal:    termOK,
-		TerminalWhy: termWhy,
-		Nav:         nav,
-		Title:       title,
-		Started:     s.started,
-		AutoRefresh: autoRefreshNav[nav],
-		DataVersion: s.svc.DataVersion(0),
-		Queue:       s.svc.Queue(),
-		AutoSyncSec: s.svc.Settings.AutoSyncSec,
-		SyncError:   syncErr,
-		Offline:     s.svc.GitLabOffline(),
+		Version:      s.version,
+		ProjectRoot:  s.svc.Settings.ProjectRoot,
+		Skill:        s.svc.Skill(),
+		Runners:      s.svc.RunnerInfos(),
+		Username:     s.svc.CurrentUser(),
+		Counts:       s.svc.DB.Counts(),
+		Pending:      pending,
+		Waiting:      waiting,
+		Labels:       s.svc.Settings.HighlightLabels,
+		Terminal:     termOK,
+		TerminalWhy:  termWhy,
+		Nav:          nav,
+		Title:        title,
+		Started:      s.started,
+		AutoRefresh:  autoRefreshNav[nav],
+		DataVersion:  s.svc.DataVersion(0),
+		Queue:        s.svc.Queue(),
+		AutoSyncSec:  s.svc.Settings.AutoSyncSec,
+		SyncError:    syncErr,
+		Offline:      s.svc.GitLabOffline(),
+		Projects:     projects,
+		Project:      current,
+		ProjectNames: names,
 	}
 }
 
@@ -467,6 +498,7 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 // index lists the MRs that still concern the developer (open, not approved by me, I have a role or added by hand).
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	mrs, err := s.svc.DB.ListMRs()
+	mrs = inProject(mrs, s.currentProject(r), func(m db.MRListItem) int64 { return m.ProjectID })
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -474,19 +506,20 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	relevant, archived := splitMRs(mrs)
 	// Seen MRs sink to the end, keeping the GitLab-activity order within each group.
 	sort.SliceStable(relevant, func(i, j int) bool { return !relevant[i].Seen() && relevant[j].Seen() })
-	s.render(w, "index", map[string]any{"Base": s.base("mrs", "Merge requests"), "MRs": relevant, "Archived": len(archived)})
+	s.render(w, "index", map[string]any{"Base": s.base(r, "mrs", "Merge requests"), "MRs": relevant, "Archived": len(archived)})
 }
 
 // history lists MRs that no longer concern the developer (approved, merged, closed, role removed) but were
 // worked on: every review action is still available there.
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	mrs, err := s.svc.DB.ListMRs()
+	mrs = inProject(mrs, s.currentProject(r), func(m db.MRListItem) int64 { return m.ProjectID })
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	_, archived := splitMRs(mrs)
-	s.render(w, "history", map[string]any{"Base": s.base("history", "История"), "MRs": archived})
+	s.render(w, "history", map[string]any{"Base": s.base(r, "history", "История"), "MRs": archived})
 }
 
 func splitMRs(mrs []db.MRListItem) (relevant, archived []db.MRListItem) {
@@ -556,9 +589,12 @@ type inboxItem struct {
 // overview is the home page: what needs the developer, which agents are working, how my MRs are doing.
 func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	mrs, _ := s.svc.DB.ListMRs()
+	mrs = inProject(mrs, s.currentProject(r), func(m db.MRListItem) int64 { return m.ProjectID })
 	issues, _ := s.svc.DB.ListIssues()
+	issues = inProject(issues, s.currentProject(r), func(i db.IssueListItem) int64 { return i.ProjectID })
 	issues = openIssues(issues)
 	runs, _ := s.svc.DB.ListRuns(300)
+	runs = inProject(runs, s.currentProject(r), func(x db.RunListItem) int64 { return x.ProjectID })
 	username := s.svc.CurrentUser()
 	var inbox []inboxItem
 	var active []db.RunListItem
@@ -622,7 +658,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	sort.SliceStable(inbox, func(i, j int) bool { return inboxRank(inbox[i]) < inboxRank(inbox[j]) })
 	relevant, _ := splitMRs(mrs)
 	s.render(w, "overview", map[string]any{
-		"Base": s.base("overview", "Обзор"), "Inbox": inbox, "Active": active, "Mine": mine,
+		"Base": s.base(r, "overview", "Обзор"), "Inbox": inbox, "Active": active, "Mine": mine,
 		"MRCount": len(relevant), "IssueCount": len(issues),
 	})
 }
@@ -656,6 +692,7 @@ func runObjectLabel(run db.RunListItem) string {
 
 func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 	runs, err := s.svc.DB.ListRuns(300)
+	runs = inProject(runs, s.currentProject(r), func(x db.RunListItem) int64 { return x.ProjectID })
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -679,7 +716,7 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 			finished = append(finished, row)
 		}
 	}
-	s.render(w, "runs", map[string]any{"Base": s.base("runs", "Сессии"), "Active": active, "Finished": finished})
+	s.render(w, "runs", map[string]any{"Base": s.base(r, "runs", "Сессии"), "Active": active, "Finished": finished})
 }
 
 // idList parses "1,2,3" into ids (blanks and junk ignored).
@@ -723,6 +760,7 @@ type ciRow struct {
 // ci lists the MRs whose head pipeline failed, with their failed jobs and the latest analysis.
 func (s *Server) ci(w http.ResponseWriter, r *http.Request) {
 	mrs, err := s.svc.DB.ListMRs()
+	mrs = inProject(mrs, s.currentProject(r), func(m db.MRListItem) int64 { return m.ProjectID })
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -747,7 +785,7 @@ func (s *Server) ci(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, row)
 	}
-	s.render(w, "ci", map[string]any{"Base": s.base("ci", "CI"), "Rows": rows})
+	s.render(w, "ci", map[string]any{"Base": s.base(r, "ci", "CI"), "Rows": rows})
 }
 
 // changesIf returns what changed since the reviewed SHA when the review is stale (nil otherwise).
@@ -791,7 +829,7 @@ func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
 			reviews++
 		}
 	}
-	data := map[string]any{"Base": s.base("workspaces", "Workspaces"), "Workspaces": items, "Reviews": reviews, "ReviewTTL": s.svc.Settings.ReviewWorktreeTTLMin}
+	data := map[string]any{"Base": s.base(r, "workspaces", "Workspaces"), "Workspaces": items, "Reviews": reviews, "ReviewTTL": s.svc.Settings.ReviewWorktreeTTLMin}
 	if err != nil {
 		data["Error"] = err.Error()
 	}
@@ -800,11 +838,12 @@ func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) issues(w http.ResponseWriter, r *http.Request) {
 	issues, err := s.svc.DB.ListIssues()
+	issues = inProject(issues, s.currentProject(r), func(i db.IssueListItem) int64 { return i.ProjectID })
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.render(w, "issues", map[string]any{"Base": s.base("issues", "Задачи"), "Issues": openIssues(issues)})
+	s.render(w, "issues", map[string]any{"Base": s.base(r, "issues", "Задачи"), "Issues": openIssues(issues)})
 }
 
 // openIssues is the task list: an issue closed in GitLab is kept in the database for its run history but is no
@@ -870,7 +909,7 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 	if latest != nil && latest.HeadSHA != "" {
 		sha = latest.HeadSHA
 	}
-	base := s.base("mrs", fmt.Sprintf("!%d %s", mr.IID, mr.Title))
+	base := s.base(r, "mrs", fmt.Sprintf("!%d %s", mr.IID, mr.Title))
 	base.DataScope, base.DataScopeID, base.DataVersion = "mr", mr.ID, svc.DataVersion(mr.ID)
 	var queuePos int64 = -1
 	if active != nil && active.Status == db.StatusQueued {
@@ -927,7 +966,7 @@ func (s *Server) issuePage(w http.ResponseWriter, r *http.Request) {
 		state = "planned"
 	}
 	s.render(w, "issue", map[string]any{
-		"Base": s.base("issues", fmt.Sprintf("#%d %s", issue.IID, issue.Title)), "Issue": issue, "Runs": runs, "Active": active,
+		"Base": s.base(r, "issues", fmt.Sprintf("#%d %s", issue.IID, issue.Title)), "Issue": issue, "Runs": runs, "Active": active,
 		"Plan": plan, "Impl": impl, "Failed": failed, "State": state, "LooksLikeBug": issue.LooksLikeBug(), "PlanIsBug": plan != nil && plan.Mode == "bug",
 		"PlanSessions": svc.Resumable(runs, svc.Settings.ProjectRoot), "ImplSessions": svc.Resumable(runs, svc.Worktrees.Path(issue.Ref())),
 		"DefaultBranch": issue.Ref(), "BaseBranch": svc.Settings.BaseBranch, "Workspaces": svc.IssueWorkspaces(runs),
@@ -963,7 +1002,7 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	svc := s.svc.ForRun(run.ID) // skills, worktrees and review directories of the object's project
-	data := map[string]any{"Base": s.base("runs", fmt.Sprintf("Run #%d", run.ID)), "Run": run, "Blob": "", "SHA": run.HeadSHA}
+	data := map[string]any{"Base": s.base(r, "runs", fmt.Sprintf("Run #%d", run.ID)), "Run": run, "Blob": "", "SHA": run.HeadSHA}
 	if run.MRID != nil {
 		mr, _ := svc.DB.GetMR(*run.MRID)
 		data["MR"] = mr
@@ -1113,7 +1152,7 @@ func (s *Server) runLog(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) doctorPage(w http.ResponseWriter, r *http.Request) {
 	rep := doctor.Run(s.svc.Settings, s.version, s.svc.GitLab, s.runners)
-	s.render(w, "doctor", map[string]any{"Base": s.base("doctor", "Doctor"), "Report": rep, "Skills": s.svc.SkillMap(),
+	s.render(w, "doctor", map[string]any{"Base": s.base(r, "doctor", "Doctor"), "Report": rep, "Skills": s.svc.SkillMap(),
 		"SkillSettings": s.svc.SkillSettings(), "Candidates": s.svc.SkillCandidates()})
 }
 
@@ -1794,4 +1833,40 @@ func planAsText(raw string) string {
 		}
 	}
 	return b.String()
+}
+
+// projectCookie remembers the project chosen in the header switcher ("" or "0" = all projects).
+const projectCookie = "project"
+
+// currentProject is the project chosen in the header (0 = all, also for an id that no longer exists).
+func (s *Server) currentProject(r *http.Request) int64 {
+	if r == nil {
+		return 0
+	}
+	c, err := r.Cookie(projectCookie)
+	if err != nil {
+		return 0
+	}
+	id, _ := strconv.ParseInt(c.Value, 10, 64)
+	if id <= 0 {
+		return 0
+	}
+	if p, _ := s.svc.DB.GetProject(id); p == nil {
+		return 0
+	}
+	return id
+}
+
+// inProject keeps the items of the chosen project (all of them when no project is chosen).
+func inProject[T any](items []T, project int64, of func(T) int64) []T {
+	if project == 0 {
+		return items
+	}
+	var out []T
+	for _, item := range items {
+		if of(item) == project {
+			out = append(out, item)
+		}
+	}
+	return out
 }

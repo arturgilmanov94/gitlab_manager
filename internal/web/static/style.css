@@ -515,3 +515,6 @@ details.card[open] > summary.card-head h2::before { content: "▾"; }
 .brand, .tabs a { white-space: nowrap; flex: none; }
 .nav-context { min-width: 0; }
 .nav-context .chip.path { min-width: 60px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+/* header project switcher and the project badge of list rows */
+.project-switch { font-size: 12px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); color: var(--fg); max-width: 160px; }
+.badge-project { background: var(--info-soft, var(--neutral-soft)); color: var(--fg-2); margin-left: 4px; }

@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"mr-review/internal/usage"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1262,5 +1264,62 @@ func TestStaticAssetsVersioned(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 200 || resp.Header.Get("Cache-Control") != "no-cache" {
 		t.Fatalf("%d %q", resp.StatusCode, resp.Header.Get("Cache-Control"))
+	}
+}
+
+// Header switcher: «Все проекты» shows every MR with a project badge, a chosen project (cookie) only its own.
+// The projects page adds a repository by path and saves its settings.
+func TestProjectSwitcherAndSettings(t *testing.T) {
+	ts, svc, _ := newServer(t)
+	gl := svc.GitLab.(*testutil.FakeGitLab)
+	otherRoot := testutil.GitRepo(t, filepath.Join(t.TempDir(), "other"))
+	exec.Command("git", "-C", otherRoot, "remote", "set-url", "origin", "git@gitlab.example.com:group/other.git").Run()
+	code, out := postJSON(t, ts.URL+"/api/projects", map[string]any{"repo_root": otherRoot})
+	if code != 200 {
+		t.Fatalf("add project: %d %v", code, out)
+	}
+	if code, _ := postJSON(t, ts.URL+"/api/projects", map[string]any{"repo_root": otherRoot}); code == 200 {
+		t.Fatal("the same repository cannot be added twice")
+	}
+	projects := svc.Projects()
+	if len(projects) != 2 || projects[1].ProjectPath != "group/other" || projects[1].GitLabHost != "gitlab.example.com" {
+		t.Fatalf("%+v", projects)
+	}
+	other := projects[1]
+	payload := testutil.MRPayload(50, "sha-50")
+	payload["web_url"] = "https://gitlab.example.com/group/other/-/merge_requests/50"
+	payload["references"] = map[string]any{"full": "group/other!50"}
+	gl.MRs[50] = payload
+	svc.AddMR("!42")
+	svc.AddMR("group/other!50")
+
+	_, all := get(t, ts.URL+"/mrs")
+	if !strings.Contains(all, "!42") || !strings.Contains(all, "!50") || !strings.Contains(all, `badge-project">other<`) || !strings.Contains(all, `id="project-switch"`) {
+		t.Fatal("all projects: both MRs with badges and the switcher")
+	}
+	req, _ := http.NewRequest("GET", ts.URL+"/mrs", nil)
+	req.AddCookie(&http.Cookie{Name: "project", Value: fmt.Sprint(other.ID)})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(body), ">!42<") || !strings.Contains(string(body), ">!50<") || strings.Contains(string(body), "badge-project") {
+		t.Fatal("a chosen project shows only its MRs, without badges")
+	}
+
+	if code, _ := postJSON(t, ts.URL+fmt.Sprintf("/api/projects/%d", other.ID), map[string]any{"name": "Другой", "base_branch": "main", "issue_projects": "group/tracker/"}); code != 200 {
+		t.Fatal(code)
+	}
+	if p, _ := svc.DB.GetProject(other.ID); p.Name != "Другой" || p.BaseBranch != "main" || p.IssueProjects != "group/tracker" {
+		t.Fatalf("%+v", p)
+	}
+	if _, page := get(t, ts.URL+"/projects"); !strings.Contains(page, "Другой") || !strings.Contains(page, "по умолчанию") {
+		t.Fatal("projects page")
+	}
+	req, _ = http.NewRequest("DELETE", ts.URL+fmt.Sprintf("/api/projects/%d", projects[0].ID), nil)
+	if resp, _ := http.DefaultClient.Do(req); resp == nil || resp.StatusCode == 200 {
+		t.Fatal("the default project cannot be deleted")
 	}
 }
