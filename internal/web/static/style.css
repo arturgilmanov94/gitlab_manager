@@ -431,6 +431,9 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
 .note-body.long::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 48px; background: linear-gradient(transparent, var(--surface)); }
 .note-more { margin: 2px 0 4px; }
 .pick-bar[hidden] { display: none; }
+.thread-actions { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: flex-start; }
+.thread-reply textarea { font-family: inherit; font-size: 13px; }
+.reply-preview { border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: 6px 10px; background: var(--surface); min-height: 60px; }
 .threads-group { margin-top: 12px; }
 .threads-group > summary { margin-bottom: 10px; }
 .pick-bar { position: sticky; bottom: 0; z-index: 40; box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06); }
@@ -541,6 +544,10 @@ details.card[open] > summary.card-head h2::before { content: "▾"; }
 .brand, .tabs a { white-space: nowrap; flex: none; }
 .nav-context { min-width: 0; }
 .nav-context .chip.path { min-width: 60px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+/* …then the reference chips leave: the skill (it is on the MR page and in «Проверка окружения»), then the path */
+@media (max-width: 1640px) { .nav-context .chip.skill { display: none; } }
+@media (max-width: 1360px) { .nav-context .chip.path { display: none; } .nav-context { gap: 8px; } }
+@media (max-width: 1240px) { .navbar-inner { gap: 4px 14px; flex-wrap: wrap; } }
 /* header project switcher and the project badge of list rows */
 .project-switch { font-size: 12px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); color: var(--fg); max-width: 160px; }
 .badge-project { background: var(--info-soft, var(--neutral-soft)); color: var(--fg-2); margin-left: 4px; }

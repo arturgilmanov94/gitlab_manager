@@ -82,25 +82,9 @@ func (g *Glab) CreateDiscussion(ref Ref, body string, pos *Position) (int64, err
 		}
 		payload["position"] = p
 	}
-	raw, _ := json.Marshal(payload)
-	args := []string{"api"}
-	if ref.Host != "" {
-		args = append(args, "--hostname", ref.Host)
-	}
-	args = append(args, "--method", "POST", "-H", "Content-Type: application/json", "--input", "-",
-		fmt.Sprintf("projects/%s/merge_requests/%d/discussions", ref.EncodedProject(), ref.IID))
-	ctx, cancel := context.WithTimeout(context.Background(), g.Timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, g.Bin, args...)
-	cmd.Stdin = bytes.NewReader(raw)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return 0, fmt.Errorf("GitLab did not accept the comment: %s", firstNonEmpty(lastLine(stderr.String()), lastLine(stdout.String()), err.Error()))
-	}
-	var obj map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &obj); err != nil {
-		return 0, errors.New("unexpected response from GitLab when posting the comment")
+	obj, err := g.apiWrite(ref.Host, "POST", fmt.Sprintf("projects/%s/merge_requests/%d/discussions", ref.EncodedProject(), ref.IID), payload)
+	if err != nil {
+		return 0, fmt.Errorf("GitLab did not accept the comment: %w", err)
 	}
 	notes, _ := obj["notes"].([]any)
 	if len(notes) > 0 {
@@ -109,6 +93,76 @@ func (g *Glab) CreateDiscussion(ref Ref, body string, pos *Position) (int64, err
 		}
 	}
 	return 0, nil
+}
+
+// apiWrite sends a JSON payload with POST/PUT/DELETE and returns the response object. These are the only calls
+// of the dashboard that change something in GitLab; each one is started by the developer's button.
+func (g *Glab) apiWrite(host, method, path string, payload map[string]any) (map[string]any, error) {
+	args := []string{"api"}
+	if host != "" {
+		args = append(args, "--hostname", host)
+	}
+	args = append(args, "--method", method)
+	var stdin []byte
+	if payload != nil {
+		stdin, _ = json.Marshal(payload)
+		args = append(args, "-H", "Content-Type: application/json", "--input", "-")
+	}
+	args = append(args, path)
+	ctx, cancel := context.WithTimeout(context.Background(), g.Timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, g.Bin, args...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, errors.New(firstNonEmpty(apiMessage(stdout.Bytes()), lastLine(stderr.String()), lastLine(stdout.String()), err.Error()))
+	}
+	obj := map[string]any{}
+	if text := bytes.TrimSpace(stdout.Bytes()); len(text) > 0 && text[0] == '{' {
+		if err := json.Unmarshal(text, &obj); err != nil {
+			return nil, errors.New("unexpected response from GitLab")
+		}
+	}
+	return obj, nil
+}
+
+// apiMessage is the "message" of a GitLab error body ("" when there is none).
+func apiMessage(body []byte) string {
+	var obj map[string]any
+	if json.Unmarshal(bytes.TrimSpace(body), &obj) != nil {
+		return ""
+	}
+	switch m := obj["message"].(type) {
+	case string:
+		return m
+	case nil:
+		return Str(obj, "error")
+	default:
+		raw, _ := json.Marshal(m)
+		return string(raw)
+	}
+}
+
+// ReplyDiscussion adds a note to a discussion of an MR and returns the id of the new note.
+func (g *Glab) ReplyDiscussion(ref Ref, discussionID, body string) (int64, error) {
+	obj, err := g.apiWrite(ref.Host, "POST", fmt.Sprintf("projects/%s/merge_requests/%d/discussions/%s/notes", ref.EncodedProject(), ref.IID, url.PathEscape(discussionID)),
+		map[string]any{"body": body})
+	if err != nil {
+		return 0, fmt.Errorf("GitLab did not accept the reply: %w", err)
+	}
+	return Int(obj, "id"), nil
+}
+
+// ResolveDiscussion resolves a thread of an MR or opens it again.
+func (g *Glab) ResolveDiscussion(ref Ref, discussionID string, resolved bool) error {
+	_, err := g.apiWrite(ref.Host, "PUT", fmt.Sprintf("projects/%s/merge_requests/%d/discussions/%s?resolved=%t", ref.EncodedProject(), ref.IID, url.PathEscape(discussionID), resolved), nil)
+	if err != nil {
+		return fmt.Errorf("GitLab did not change the thread: %w", err)
+	}
+	return nil
 }
 
 // DiffLine is one line of the new file as the MR diff sees it.

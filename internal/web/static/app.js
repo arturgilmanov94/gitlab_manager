@@ -304,13 +304,42 @@
     setTimeout(reload, 900);
   };
 
+  // Threads: reply (optionally resolving), resolve / reopen, preview of the reply as it will read.
+  window.replyThread = async function (id, button, resolve) {
+    const area = document.querySelector(`textarea[data-reply-thread="${id}"]`);
+    if (!area || !area.value.trim()) { flash('Пустой ответ', false); return; }
+    hold(button);
+    const data = await call('POST', `/api/threads/${id}/reply`, { body: area.value, resolve: resolve ? '1' : '0' }, button);
+    if (!data) { release(button); setTimeout(reload, 2500); return; } // a reply may have gone out even when the resolve failed
+    flash(resolve ? 'Ответ отправлен, тред закрыт' : 'Ответ отправлен', true);
+    area.defaultValue = area.value;
+    area.blur();
+    const box = area.closest('details'); if (box) box.removeAttribute('open');
+    setTimeout(reload, 700);
+  };
+  window.resolveThread = async function (id, button, resolved) {
+    const data = await call('POST', `/api/threads/${id}/resolve`, { resolved: resolved ? '1' : '0' }, button);
+    if (data) { flash(resolved ? 'Тред закрыт' : 'Тред открыт снова', true); setTimeout(reload, 700); }
+  };
+  window.previewReply = async function (button) {
+    const body = button.closest('.gl-post-body');
+    const area = body.querySelector('textarea');
+    const view = body.querySelector('.reply-preview');
+    if (!view.hidden) { view.hidden = true; area.hidden = false; button.textContent = 'Превью'; area.focus(); return; }
+    const data = await call('POST', '/api/markdown', { text: area.value }, null);
+    if (!data) return;
+    view.innerHTML = data.html || '<span class="muted">пусто</span>';
+    view.hidden = false; area.hidden = true; button.textContent = 'Редактировать';
+  };
+
   // «Отмена»: closes the editor and puts the original text back (an edit is dropped, like closing a dialog).
   window.cancelPost = function (button) {
     const box = button.closest('details.gl-post');
     if (!box) return;
     const area = box.querySelector('textarea');
     if (area && area.value !== area.defaultValue && !confirm('Отменить отправку? Правки текста пропадут.')) return;
-    if (area) area.value = area.defaultValue;
+    if (area) { area.value = area.defaultValue; area.hidden = false; }
+    const view = box.querySelector('.reply-preview'); if (view) view.hidden = true;
     box.removeAttribute('open');
   };
   // Opening the editor puts the cursor into the text.

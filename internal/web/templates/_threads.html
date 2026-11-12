@@ -54,6 +54,26 @@
     <div>{{md .Text $r.Blob $r.SHA}}</div>
   </div>
   {{end}}
+  {{$draft := $d.ReplyDraft $r.IsMine}}
+  <div class="thread-actions">
+    <details class="gl-post thread-reply">
+      <summary class="btn btn-sm tip" data-tip="Ответить в этот тред в GitLab. Текст можно отредактировать и посмотреть превью; ничего не уходит, пока не нажата «Отправить».">Ответить{{if $draft}} · есть черновик{{end}}</summary>
+      <div class="gl-post-body">
+        {{if $draft}}<div class="small muted">Черновик по оценке AI «учтено» — проверьте и поправьте текст перед отправкой.</div>{{end}}
+        <textarea rows="4" data-reply-thread="{{$d.ID}}" placeholder="Ответ в тред. Markdown GitLab.">{{$draft}}</textarea>
+        <div class="reply-preview note-body" hidden></div>
+        <div class="inline">
+          <button class="btn btn-primary btn-sm" onclick="replyThread('{{$d.ID}}', this, false)">Отправить</button>
+          {{if $d.Open}}<button class="btn btn-sm tip" data-tip="Отправить ответ и закрыть (resolve) тред в GitLab" onclick="replyThread('{{$d.ID}}', this, true)">Ответить и закрыть</button>{{end}}
+          <button class="btn btn-sm btn-link" onclick="previewReply(this)">Превью</button>
+          <button class="btn btn-sm btn-link" onclick="cancelPost(this)">Отмена</button>
+          <span class="small muted">уйдёт в GitLab от вашего имени</span>
+        </div>
+      </div>
+    </details>
+    {{if $d.Open}}<button class="btn btn-sm btn-link tip" data-tip="Закрыть (resolve) тред в GitLab без ответа" onclick="confirm('Закрыть тред в GitLab без ответа?') && resolveThread('{{$d.ID}}', this, true)">Закрыть тред</button>
+    {{else if $d.Resolved}}<button class="btn btn-sm btn-link tip" data-tip="Снова открыть (unresolve) тред в GitLab" onclick="confirm('Открыть тред в GitLab снова?') && resolveThread('{{$d.ID}}', this, false)">Открыть снова</button>{{end}}
+  </div>
 </article>
 {{end}}
 

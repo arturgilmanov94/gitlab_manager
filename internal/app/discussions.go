@@ -281,3 +281,73 @@ func clip(text string, n int) string {
 	}
 	return string(r[:n]) + "…"
 }
+
+// threadTarget loads a live thread with its MR, in the service of the MR's project.
+func (s *Service) threadTarget(threadID int64) (*db.MRDiscussion, *db.MergeRequest, gitlab.Ref, error) {
+	d, _ := s.DB.GetMRDiscussion(threadID)
+	if d == nil {
+		return nil, nil, gitlab.Ref{}, userErr("обсуждение не найдено: список обновился, перезагрузите страницу")
+	}
+	mr, _ := s.DB.GetMR(d.MRID)
+	if mr == nil {
+		return nil, nil, gitlab.Ref{}, userErr("merge request обсуждения не найден")
+	}
+	return d, mr, gitlab.Ref{Host: mr.GitLabHost, ProjectPath: mr.ProjectPath, IID: mr.IID}, nil
+}
+
+// ReplyThread posts the developer's reply to a thread in GitLab and, when asked, resolves the thread after it
+// («Ответить и закрыть»). The text is exactly what the developer saw and edited. The threads are re-read after.
+func (s *Service) ReplyThread(threadID int64, body string, resolve bool) error {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return userErr("пустой ответ")
+	}
+	d, mr, ref, err := s.threadTarget(threadID)
+	if err != nil {
+		return err
+	}
+	if resolve && !d.Resolvable {
+		return userErr("это комментарий без треда: закрыть его нельзя")
+	}
+	if _, err := s.GitLab.ReplyDiscussion(ref, d.GitLabID, body); err != nil {
+		return &UserError{err.Error()}
+	}
+	var resolveErr error
+	if resolve && !d.Resolved {
+		resolveErr = s.GitLab.ResolveDiscussion(ref, d.GitLabID, true)
+	}
+	_ = s.SyncDiscussions(mr.ID)
+	if resolveErr != nil {
+		return &UserError{"ответ отправлен, но тред не закрыт: " + resolveErr.Error()}
+	}
+	return nil
+}
+
+// ResolveThread resolves a thread in GitLab or opens it again.
+func (s *Service) ResolveThread(threadID int64, resolved bool) error {
+	d, mr, ref, err := s.threadTarget(threadID)
+	if err != nil {
+		return err
+	}
+	if !d.Resolvable {
+		return userErr("это комментарий без треда: закрыть его нельзя")
+	}
+	if err := s.GitLab.ResolveDiscussion(ref, d.GitLabID, resolved); err != nil {
+		return &UserError{err.Error()}
+	}
+	_ = s.SyncDiscussions(mr.ID)
+	return nil
+}
+
+// ReplyDraft is the text the reply editor of a thread opens with: when the latest review found the thread
+// addressed and the MR is the developer's own, what was done — to be read, edited and sent by hand. "" otherwise.
+func (v ThreadView) ReplyDraft(own bool) string {
+	if !own || v.Assessment == nil || !v.Assessment.Addressed || !v.Open() {
+		return ""
+	}
+	text := strings.TrimSpace(v.Assessment.Text)
+	if text == "" {
+		return "Исправлено."
+	}
+	return "Исправлено. " + text
+}

@@ -987,7 +987,28 @@ func TestDiscussionsTab(t *testing.T) {
 	if code, out := postJSON(t, ts.URL+"/api/mrs/1/threads/sync", map[string]any{}); code != 200 || out["changed"] != false {
 		t.Fatalf("%d %v", code, out)
 	}
-	svc.GitLab.(*testutil.FakeGitLab).SetThreads(42, nil)
+	// Reply with resolve from the page, the preview of the text, and a refused write shown as an error.
+	gl := svc.GitLab.(*testutil.FakeGitLab)
+	for _, want := range []string{`data-reply-thread="1"`, `replyThread('1', this, true)`, "Закрыть тред", "Открыть снова", "Превью"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("MR page lacks %q", want)
+		}
+	}
+	if code, out := postJSON(t, ts.URL+"/api/markdown", map[string]any{"text": "**done** in `abc`"}); code != 200 || !strings.Contains(out["html"].(string), "<strong>done</strong>") && !strings.Contains(out["html"].(string), "<b>done</b>") {
+		t.Fatalf("%d %v", code, out)
+	}
+	if code, _ := postJSON(t, ts.URL+"/api/threads/1/reply", map[string]any{"body": "fixed", "resolve": "1"}); code != 200 || len(gl.Replies) != 1 || len(gl.Resolves) != 1 {
+		t.Fatalf("%d %v %v", code, gl.Replies, gl.Resolves)
+	}
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, "Открытые треды (1)") || !strings.Contains(body, "Решённые треды (2)") || !strings.Contains(body, "fixed") {
+		t.Fatal("the page follows the reply and the resolve")
+	}
+	gl.FailWrite = true
+	if code, out := postJSON(t, ts.URL+"/api/threads/1/resolve", map[string]any{"resolved": "0"}); code != 400 || !strings.Contains(out["error"].(string), "403") {
+		t.Fatalf("%d %v", code, out)
+	}
+	gl.FailWrite = false
+	gl.SetThreads(42, nil)
 	if code, out := postJSON(t, ts.URL+"/api/mrs/1/threads/sync", map[string]any{}); code != 200 || out["changed"] != true {
 		t.Fatalf("%d %v", code, out)
 	}

@@ -343,6 +343,20 @@ func (s *Server) routes() {
 		changed, err := s.svc.RefreshThreads(pathID(r))
 		s.result(w, map[string]any{"changed": changed}, err)
 	})
+	// Writes to GitLab, each by the developer's button with the text they saw: a reply to a thread (optionally
+	// resolving it) and resolve / reopen.
+	s.mux.HandleFunc("POST /api/threads/{id}/reply", func(w http.ResponseWriter, r *http.Request) {
+		body := readBody(r)
+		s.result(w, nil, s.svc.ReplyThread(pathID(r), body["body"], body["resolve"] == "1" || body["resolve"] == "true"))
+	})
+	s.mux.HandleFunc("POST /api/threads/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
+		body := readBody(r)
+		s.result(w, nil, s.svc.ResolveThread(pathID(r), body["resolved"] != "0" && body["resolved"] != "false"))
+	})
+	// Preview of a comment before it is sent: the same markdown rendering the pages use.
+	s.mux.HandleFunc("POST /api/markdown", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"ok": true, "html": string(renderMarkdown(readBody(r)["text"], "", ""))})
+	})
 	s.mux.HandleFunc("POST /api/findings/{id}/gitlab", func(w http.ResponseWriter, r *http.Request) {
 		res, err := s.svc.PostFinding(pathID(r), readBody(r)["body"])
 		if err != nil {

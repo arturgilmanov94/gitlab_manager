@@ -204,3 +204,67 @@ func TestTelegramNewThread(t *testing.T) {
 		t.Fatalf("a known thread is not news: %q", got())
 	}
 }
+
+// Reply and resolve go to GitLab with the developer's text and the page state follows: the reply is in the thread,
+// «Ответить и закрыть» resolves it, a refusal of GitLab changes nothing here.
+func TestReplyAndResolveThread(t *testing.T) {
+	svc, gl, _ := newService(t)
+	mr, _ := svc.AddMR("!42")
+	find := func(id string) ThreadView {
+		th := svc.ThreadsOf(mr)
+		for _, v := range append(append(th.Open, th.Resolved...), th.Comments...) {
+			if v.GitLabID == id {
+				return v
+			}
+		}
+		t.Fatalf("thread %s not found", id)
+		return ThreadView{}
+	}
+	d2 := find("d2")
+	if err := svc.ReplyThread(d2.ID, "   ", false); err == nil {
+		t.Fatal("an empty reply is refused before GitLab")
+	}
+	gl.FailWrite = true
+	if err := svc.ReplyThread(d2.ID, "ok", true); err == nil || !strings.Contains(err.Error(), "403") || len(gl.Replies) != 0 {
+		t.Fatalf("%v %v", err, gl.Replies)
+	}
+	gl.FailWrite = false
+	if err := svc.ReplyThread(d2.ID, " Done in abc123 ", false); err != nil {
+		t.Fatal(err)
+	}
+	if d2 = find("d2"); gl.Replies[0] != "d2: Done in abc123" || !d2.Open() || d2.WaitsForMe || d2.Replies()[0].Body != "Done in abc123" {
+		t.Fatalf("%v %+v", gl.Replies, d2)
+	}
+	if err := svc.ReplyThread(d2.ID, "closing", true); err != nil {
+		t.Fatal(err)
+	}
+	if d2 = find("d2"); !d2.Resolved || len(gl.Resolves) != 1 || gl.Resolves[0] != "d2=true" {
+		t.Fatalf("%+v %v", d2, gl.Resolves)
+	}
+	if mr, _ = svc.DB.GetMR(mr.ID); mr.Unresolved != 1 {
+		t.Fatalf("the counter follows: %d", mr.Unresolved)
+	}
+	if err := svc.ResolveThread(d2.ID, false); err != nil || !find("d2").Open() {
+		t.Fatal(err)
+	}
+	if err := svc.ResolveThread(find("dc").ID, true); err == nil {
+		t.Fatal("a plain comment cannot be resolved")
+	}
+	if err := svc.ReplyThread(find("dc").ID, "thanks", false); err != nil || gl.Replies[2] != "dc: thanks" {
+		t.Fatalf("%v %v", err, gl.Replies)
+	}
+
+	// The draft: only for an own MR and only when the review found the thread addressed.
+	addressed := ThreadView{MRDiscussion: db.MRDiscussion{Resolvable: true}, Assessment: &db.Assessment{Addressed: true, Text: "guard added"}}
+	if got := addressed.ReplyDraft(true); got != "Исправлено. guard added" {
+		t.Fatal(got)
+	}
+	addressed.Assessment.Addressed = false
+	if addressed.ReplyDraft(true) != "" || (ThreadView{}).ReplyDraft(true) != "" {
+		t.Fatal("no draft without an «addressed» assessment")
+	}
+	addressed.Assessment.Addressed = true
+	if addressed.ReplyDraft(false) != "" {
+		t.Fatal("no draft in someone else's MR")
+	}
+}

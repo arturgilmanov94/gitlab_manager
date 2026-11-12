@@ -63,6 +63,9 @@ type FakeGitLab struct {
 	RejectPosition bool
 	// Fail* make the corresponding calls fail (GitLab hiccups); UserCalls counts CurrentUser lookups.
 	FailUnresolved bool
+	FailWrite      bool     // replies, resolves, approvals and retries are refused
+	Replies        []string // ReplyDiscussion calls
+	Resolves       []string // ResolveDiscussion calls
 	FailApprovals  bool
 	FailUser       bool
 	UserCalls      int
@@ -120,10 +123,7 @@ func (f *FakeGitLab) GetMR(ref gitlab.Ref) (map[string]any, error) {
 func (f *FakeGitLab) SetThreads(iid int64, list []gitlab.Discussion) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.Threads == nil {
-		f.Threads = map[int64][]gitlab.Discussion{}
-	}
-	f.Threads[iid] = list
+	f.setThreadsLocked(iid, list)
 }
 
 // CallsCopy returns the calls recorded so far.
@@ -142,11 +142,15 @@ func (f *FakeGitLab) Discussions(ref gitlab.Ref) ([]gitlab.Discussion, error) {
 	if f.FailUnresolved {
 		return nil, errors.New("glab api discussions failed: 502")
 	}
-	if list, ok := f.Threads[ref.IID]; ok {
-		return list, nil
+	return f.threadsLocked(ref.IID), nil
+}
+
+func (f *FakeGitLab) threadsLocked(iid int64) []gitlab.Discussion {
+	if list, ok := f.Threads[iid]; ok {
+		return list
 	}
 	var out []gitlab.Discussion
-	for i := int64(0); i < f.Unresolved[ref.IID]; i++ {
+	for i := int64(0); i < f.Unresolved[iid]; i++ {
 		d := gitlab.Discussion{ID: fmt.Sprintf("d%d", i+1), Resolvable: true, File: "src/A.php", Line: 12 + i, HeadSHA: "sha-1",
 			Notes: []gitlab.Note{{ID: 100 + i, Author: "bob", AuthorName: "Bob", Body: "why?", CreatedAt: "2026-09-01T10:00:00+03:00"}}}
 		if i == 0 {
@@ -157,8 +161,56 @@ func (f *FakeGitLab) Discussions(ref gitlab.Ref) ([]gitlab.Discussion, error) {
 	out = append(out, gitlab.Discussion{ID: "dr", Resolvable: true, Resolved: true, ResolvedBy: "alice", File: "src/A.php", Line: 3,
 		Notes: []gitlab.Note{{ID: 300, Author: "carol", Body: "typo", CreatedAt: "2026-09-01T09:00:00+03:00"}}})
 	out = append(out, gitlab.Discussion{ID: "dc", Notes: []gitlab.Note{{ID: 301, Author: "carol", Body: "LGTM overall", CreatedAt: "2026-09-01T09:30:00+03:00"}}})
-	return out, nil
+	return out
 }
+
+// ReplyDiscussion adds alice's note to the thread (the canned threads become the MR's own list) and records
+// "<discussion>: <body>" in Replies. FailWrite makes it fail.
+func (f *FakeGitLab) ReplyDiscussion(ref gitlab.Ref, discussionID, body string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailWrite {
+		return 0, errors.New("GitLab did not accept the reply: 403 Forbidden")
+	}
+	list := append([]gitlab.Discussion(nil), f.threadsLocked(ref.IID)...)
+	for i := range list {
+		if list[i].ID == discussionID {
+			id := int64(900 + len(f.Replies))
+			list[i].Notes = append(append([]gitlab.Note(nil), list[i].Notes...), gitlab.Note{ID: id, Author: "alice", AuthorName: "Alice", Body: body, CreatedAt: "2026-09-02T10:00:00+03:00"})
+			f.setThreadsLocked(ref.IID, list)
+			f.Replies = append(f.Replies, discussionID+": "+body)
+			return id, nil
+		}
+	}
+	return 0, errors.New("GitLab did not accept the reply: 404 Discussion Not Found")
+}
+
+// ResolveDiscussion flips the thread and records "<discussion>=<resolved>" in Resolves.
+func (f *FakeGitLab) ResolveDiscussion(ref gitlab.Ref, discussionID string, resolved bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailWrite {
+		return errors.New("GitLab did not change the thread: 403 Forbidden")
+	}
+	list := append([]gitlab.Discussion(nil), f.threadsLocked(ref.IID)...)
+	for i := range list {
+		if list[i].ID == discussionID {
+			list[i].Resolved, list[i].ResolvedBy = resolved, "alice"
+			f.setThreadsLocked(ref.IID, list)
+			f.Resolves = append(f.Resolves, fmt.Sprintf("%s=%t", discussionID, resolved))
+			return nil
+		}
+	}
+	return errors.New("GitLab did not change the thread: 404 Discussion Not Found")
+}
+
+func (f *FakeGitLab) setThreadsLocked(iid int64, list []gitlab.Discussion) {
+	if f.Threads == nil {
+		f.Threads = map[int64][]gitlab.Discussion{}
+	}
+	f.Threads[iid] = list
+}
+
 func (f *FakeGitLab) GetApprovals(ref gitlab.Ref) (gitlab.Approvals, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
