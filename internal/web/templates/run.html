@@ -315,18 +315,26 @@
 {{end}}
 {{end}}
 
-{{if or (eq .Run.Status "done") (eq .Run.Status "failed")}}
+{{if and (or (eq .Run.Status "done") (eq .Run.Status "failed") (eq .Run.Status "cancelled")) (ne .Run.Kind "ask")}}
 <section class="card">
-  <div class="card-head"><h2>Продолжить сессию с агентом</h2><span class="small muted tip" data-tip="Та же сессия агента (resume): у него остаётся контекст этого запуска. Режим только чтение, файлы не меняются. Вопрос и ответ сохраняются здесь.">как это работает?</span></div>
+  <div class="card-head"><h2>Продолжить сессию с агентом</h2><span class="small muted tip" data-tip="Та же сессия агента (resume): у него остаётся контекст этого запуска. Режим только чтение, файлы не меняются. Вопрос идёт отдельным запуском в общей очереди: его можно остановить, разрешения спрашиваются как обычно. Вопрос и ответ сохраняются здесь.">как это работает?</span></div>
   <div id="chat">
     {{range .Messages}}<div class="msg msg-{{.Role}}"><div class="msg-role">{{if eq .Role "user"}}вы{{else if eq .Role "assistant"}}агент{{else}}ошибка{{end}} · {{when .CreatedAt}}{{if .Tokens}} · {{tokens .Tokens}} токенов{{end}}</div>{{md .Content $.Blob $.SHA}}</div>{{end}}
+    {{with .AskActive}}<div class="msg msg-assistant" id="ask-pending"><div class="msg-role"><span data-run-status="{{.ID}}" data-status="{{.Status}}">{{if eq .Status "waiting"}}⚠ агент ждёт разрешения — <a href="{{runPath .Kind .ID}}#approval">ответить</a>{{else if eq .Status "queued"}}<span class="dot-pulse"></span> вопрос в очереди{{else}}<span class="spinner"></span> агент отвечает в той же сессии…{{end}}</span> · <a href="{{runPath .Kind .ID}}">запуск #{{.ID}}</a> · <button class="btn btn-sm btn-link" onclick="post('/api/runs/{{.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button></div></div>{{end}}
   </div>
-  {{if .Run.SessionID}}
+  {{if and .Run.SessionID (not .AskActive)}}
   <form class="inline" onsubmit="return ask(event, {{.Run.ID}})">
     <textarea id="question" rows="2" placeholder="Например: почему это HIGH, а не MEDIUM? Покажи, как выглядел бы фикс для второго замечания." required></textarea>
     <button type="submit" class="btn btn-primary">Отправить</button>
   </form>
-  {{else}}<p class="muted small">Сессия недоступна для продолжения: агент {{.Run.Runner}} не вернул её идентификатор.</p>{{end}}
+  {{else if not .Run.SessionID}}<p class="muted small">Сессия недоступна для продолжения: агент {{.Run.Runner}} не вернул её идентификатор.</p>{{end}}
+</section>
+{{end}}
+{{if eq .Run.Kind "ask"}}
+<section class="card">
+  <div class="card-head"><h2>Вопрос</h2>{{if .Run.BaseRunID}}<a class="small" href="/run/{{deref .Run.BaseRunID}}#chat">к диалогу запуска #{{deref .Run.BaseRunID}}</a>{{end}}</div>
+  <div class="prewrap">{{.Run.Notes}}</div>
+  {{if .Run.Summary}}<h3>Ответ</h3>{{md .Run.Summary .Blob .SHA}}{{end}}
 </section>
 {{end}}
 

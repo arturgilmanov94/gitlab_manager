@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -34,6 +36,7 @@ const (
 	KindCIAnalyze     = "ci_analyze"     // read-only: why the head pipeline failed (job traces + diff)
 	KindCIFix         = "ci_fix"         // edit in the MR worktree: fix what makes the pipeline fail
 	KindFixFindings   = "fix_findings"   // edit in the MR worktree: address the findings/discussions the developer selected
+	KindAsk           = "ask"            // a follow-up question in the agent session of a finished run (BaseRunID), read-only
 
 	StatusQueued    = "queued"
 	StatusRunning   = "running"
@@ -47,7 +50,10 @@ const (
 func Now() string { return time.Now().UTC().Truncate(time.Second).Format(time.RFC3339) }
 
 // DB wraps the SQL handle.
-type DB struct{ sql *sql.DB }
+type DB struct {
+	sql   *sql.DB
+	runMu sync.Mutex // CreateRun: the duplicate check and the insert happen as one step
+}
 
 // Open opens (creating directories as needed) the SQLite database.
 func Open(path string) (*DB, error) {
@@ -380,7 +386,7 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = d.id AND f.status = 'open' AND f.severity IN ('LOW', 'INFO')),
 		       COALESCE(` + fmt.Sprintf(contextRunSQL, "mr_id", "mr") + `, 0)
 		FROM merge_requests mr
-		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE mr_id = mr.id AND kind != 'verify_finding' ORDER BY id DESC LIMIT 1)
+		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE mr_id = mr.id AND kind NOT IN ('verify_finding', 'ask') ORDER BY id DESC LIMIT 1)
 		LEFT JOIN runs d ON d.id = (SELECT id FROM runs WHERE mr_id = mr.id AND status = 'done' AND kind IN ('review_full', 'review_verify', 'review_quick') ORDER BY id DESC LIMIT 1)
 		ORDER BY CASE WHEN mr.gitlab_updated_at = '' THEN mr.added_at ELSE mr.gitlab_updated_at END DESC, mr.id DESC`)
 	if err != nil {
@@ -505,7 +511,7 @@ func (d *DB) ListIssues() ([]IssueListItem, error) {
 		       r.id, r.kind, r.status, r.verdict, r.head_sha, r.runner, r.model, r.finished_at, r.created_at, r.session_id,
 		       COALESCE(` + fmt.Sprintf(contextRunSQL, "issue_id", "i") + `, 0)
 		FROM issues i
-		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE issue_id = i.id ORDER BY id DESC LIMIT 1)
+		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE issue_id = i.id AND kind != 'ask' ORDER BY id DESC LIMIT 1)
 		ORDER BY CASE WHEN i.gitlab_updated_at = '' THEN i.added_at ELSE i.gitlab_updated_at END DESC, i.id DESC`)
 	if err != nil {
 		return nil, err
@@ -643,17 +649,63 @@ func scanRun(s scanner) (*Run, error) {
 	return &r, nil
 }
 
-// CreateRun inserts a queued run and returns its id.
+// ActiveRunError refuses a run because another one is queued or running on the same object or workspace.
+type ActiveRunError struct{ ID int64 }
+
+func (e *ActiveRunError) Error() string {
+	return fmt.Sprintf("a run for this object is already queued or running (#%d)", e.ID)
+}
+
+// CreateRun inserts a queued run and returns its id. It refuses (ActiveRunError) when the same MR or task already
+// has an active run (several «Проверить замечание» of one MR may run together), or when an edit run would share
+// the workspace of an active one: the check and the insert are one step, so two clicks cannot both pass.
 func (d *DB) CreateRun(r Run) (int64, error) {
-	res, err := d.sql.Exec(`
+	d.runMu.Lock()
+	defer d.runMu.Unlock()
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var active int64
+	switch {
+	case r.MRID != nil:
+		err = tx.QueryRow("SELECT id FROM runs WHERE mr_id = ? AND status IN "+activeStatuses+" AND NOT (kind = 'verify_finding' AND ? = 'verify_finding') ORDER BY id LIMIT 1",
+			*r.MRID, r.Kind).Scan(&active)
+	case r.IssueID != nil:
+		err = tx.QueryRow("SELECT id FROM runs WHERE issue_id = ? AND status IN "+activeStatuses+" ORDER BY id LIMIT 1", *r.IssueID).Scan(&active)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		err = nil
+	}
+	if err == nil && active == 0 && r.WorkDir != "" && EditKinds[r.Kind] {
+		err = tx.QueryRow("SELECT id FROM runs WHERE work_dir = ? AND status IN "+activeStatuses+" AND kind IN "+editKindsSQL+" ORDER BY id LIMIT 1", r.WorkDir).Scan(&active)
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	if active != 0 {
+		return 0, &ActiveRunError{active}
+	}
+	res, err := tx.Exec(`
 		INSERT INTO runs (kind, mr_id, issue_id, base_run_id, continue_run_id, finding_id, head_sha, status, runner, model, requested_model, skill_identifier, notes, work_dir, branch, mode, selection_json, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.Kind, nullInt(r.MRID), nullInt(r.IssueID), nullInt(r.BaseRunID), nullInt(r.ContinueRunID), nullInt(r.FindingID), r.HeadSHA, r.Runner, r.Model, r.RequestedModel, r.SkillIdentifier, r.Notes, r.WorkDir, r.Branch, r.Mode, r.SelectionJSON, Now())
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
 }
+
+// EditKinds are the run kinds that change files in a worktree: two of them must never share one.
+var EditKinds = map[string]bool{KindImplement: true, KindFixComments: true, KindCIFix: true, KindFixFindings: true, KindStandTest: true}
+
+// editKindsSQL is EditKinds for SQL (keep in sync with migration 022).
+const editKindsSQL = "('implement', 'fix_comments', 'ci_fix', 'fix_findings', 'stand_test')"
 
 // UpdateRun sets the given columns.
 func (d *DB) UpdateRun(id int64, fields map[string]any) error {
@@ -1768,4 +1820,13 @@ func (d *DB) SetIssueAgentNotes(id int64, notes string) error {
 		return fmt.Errorf("issue #%d not found", id)
 	}
 	return nil
+}
+
+// ActiveAsk returns the queued/running follow-up question about a run, or nil.
+func (d *DB) ActiveAsk(baseRunID int64) (*Run, error) {
+	r, err := scanRun(d.sql.QueryRow("SELECT "+runColumns+" FROM runs WHERE kind = 'ask' AND base_run_id = ? AND status IN "+activeStatuses+" ORDER BY id DESC LIMIT 1", baseRunID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return r, err
 }

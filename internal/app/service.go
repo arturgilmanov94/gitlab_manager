@@ -70,6 +70,7 @@ type core struct {
 	contexts  map[string]*prompts.MRContext   // prefetched diff/discussions per "ref sha" (reviewContext)
 	decisions map[int64]chan approvalDecision // pending approval id → channel the run goroutine waits on
 	runRules  map[int64]map[string]bool       // «allow such calls until the end of the run»: run id → SimilarKey
+	sessions  map[string]int64                // agent session id → the run resuming it now (one --resume at a time)
 	username  string                          // GitLab username, cached once known (CurrentUser)
 	userTried time.Time                       // last lookup attempt
 	userMu    sync.Mutex                      // guards username/userTried
@@ -1538,6 +1539,9 @@ func (s *Service) continuation(continueRunID int64, mrID, issueID *int64, dirs .
 	if prev.SessionID == "" {
 		return nil, userErr("session #%d cannot be continued: the %s agent did not report a session id", continueRunID, prev.Runner)
 	}
+	if busy := s.sessionUser(prev.SessionID); busy != 0 {
+		return nil, userErr("the agent session of #%d is being continued by run #%d right now: wait for it to finish", continueRunID, busy)
+	}
 	if prev.WorkDir != "" && !containsStr(dirs, prev.WorkDir) {
 		return nil, userErr("session #%d worked in another directory (%s); an agent session can only be continued from the same workspace", continueRunID, prev.WorkDir)
 	}
@@ -1591,6 +1595,9 @@ func (s *Service) Resumable(runs []db.RunSummary, dirs ...string) []db.RunSummar
 		workDir := run.WorkDir
 		if workDir == "" {
 			workDir = s.Settings.ProjectRoot
+		}
+		if run.Kind == db.KindAsk {
+			continue // a follow-up question lives in the asked run's session: continue that one
 		}
 		if !run.Active() && run.SessionID != "" && containsStr(dirs, workDir) {
 			out = append(out, run)
@@ -1673,6 +1680,10 @@ func (s *Service) StartImplement(issueID int64, runnerName, notes, branch string
 func (s *Service) enqueue(run db.Run) (int64, error) {
 	id, err := s.DB.CreateRun(run)
 	if err != nil {
+		var active *db.ActiveRunError
+		if errors.As(err, &active) {
+			return 0, userErr("a run for this %s is already queued or running (#%d)", objectWord(run), active.ID)
+		}
 		return 0, err
 	}
 	if s.ProjectID != 0 {
@@ -2147,6 +2158,11 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			req.Prompt, req.Schema = prompts.Implement(pi, run.Notes, run.Branch, s.Settings.BaseBranch, sk), prompts.ImplementSchema
 			req.SessionName = fmt.Sprintf("implement #%d run %d", issue.IID, runID)
 		}
+	case db.KindAsk:
+		if err := s.prepareAsk(ctx, run, &req, logln); err != nil {
+			s.fail(runID, err.Error())
+			return
+		}
 	default:
 		s.fail(runID, "unknown run kind "+run.Kind)
 		return
@@ -2183,6 +2199,13 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		s.cancelled(runID, "Cancelled while preparing the code")
 		return
 	}
+	if req.ResumeSessionID != "" {
+		if holder := s.claimSession(req.ResumeSessionID, runID); holder != 0 {
+			s.fail(runID, fmt.Sprintf("the agent session is being continued by run #%d right now: wait for it to finish and retry", holder))
+			return
+		}
+		defer s.releaseSession(req.ResumeSessionID, runID)
+	}
 	_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusRunning, "progress": progressStarting, "prompt": req.Prompt, "work_dir": req.Dir})
 	result, runErr := r.Run(ctx, req)
 
@@ -2209,6 +2232,13 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		if len(result.Raw) > 0 && len(result.Raw) < 2_000_000 {
 			fields["raw_result"] = string(result.Raw)
 		}
+	}
+	if run.Kind == db.KindAsk {
+		if ctx.Err() == context.Canceled {
+			runErr = runner.ErrCancelled
+		}
+		s.finishAsk(run, result, runErr, fields)
+		return
 	}
 	if errors.Is(runErr, runner.ErrCancelled) || ctx.Err() == context.Canceled {
 		fields["status"], fields["error"] = db.StatusCancelled, "Cancelled"
@@ -2669,73 +2699,104 @@ func DeriveVerdict(agentVerdict string, findings []db.Finding) string {
 
 // ---------------------------------------------------------------------------------- follow-up chat
 
-// Ask resumes the run's agent session with a question and stores both sides of the exchange.
-func (s *Service) Ask(runID int64, question string) (string, error) {
+// Ask queues a follow-up question in the run's agent session (a run of kind ask); the question and the answer are
+// stored in the run's dialog. It returns the id of the ask run.
+func (s *Service) Ask(runID int64, question string) (int64, error) {
 	if v := s.forRun(runID); v != s {
 		return v.Ask(runID, question)
 	}
 	question = strings.TrimSpace(question)
 	if question == "" {
-		return "", userErr("question is empty")
+		return 0, userErr("question is empty")
 	}
 	run, _ := s.DB.GetRun(runID)
 	if run == nil {
-		return "", userErr("run #%d not found", runID)
+		return 0, userErr("run #%d not found", runID)
 	}
-	if run.Status != db.StatusDone && run.Status != db.StatusFailed {
-		return "", userErr("wait until the run has finished")
+	if run.Status != db.StatusDone && run.Status != db.StatusFailed && run.Status != db.StatusCancelled {
+		return 0, userErr("wait until the run has finished")
 	}
 	if run.SessionID == "" {
-		return "", userErr("this run has no resumable session (the %s runner did not report one)", run.Runner)
+		return 0, userErr("this run has no resumable session (the %s runner did not report one)", run.Runner)
+	}
+	if busy := s.sessionUser(run.SessionID); busy != 0 {
+		return 0, userErr("the agent session is being continued by run #%d right now: wait for it to finish", busy)
+	}
+	if active, _ := s.DB.ActiveAsk(runID); active != nil {
+		return 0, userErr("the agent is still answering the previous question (#%d)", active.ID)
 	}
 	r, _, err := s.pickRunner(run.Runner)
 	if err != nil {
-		return "", err
+		return 0, err
+	}
+	// The question is a run of its own: queued like any other, stoppable, with permission prompts; the answer
+	// lands in the asked run's dialog.
+	id, err := s.enqueue(db.Run{Kind: db.KindAsk, MRID: run.MRID, IssueID: run.IssueID, BaseRunID: &run.ID, HeadSHA: run.HeadSHA,
+		Runner: r.Name(), Notes: question, WorkDir: run.WorkDir, Branch: run.Branch})
+	if err != nil {
+		return 0, err
 	}
 	_, _ = s.DB.AddMessage(runID, "user", question, 0, 0)
-	log, _ := s.logFile(runID)
-	if log != nil {
-		defer log.Close()
-		fmt.Fprintf(log, "\n=== follow-up question ===\n")
+	return id, nil
+}
+
+// prepareAsk sets up a follow-up question: the asked run's session, in the directory that session lives in
+// (a removed review worktree is restored at the reviewed head), read-only.
+func (s *Service) prepareAsk(ctx context.Context, run *db.Run, req *runner.Request, logln func(string)) error {
+	base, _ := s.DB.GetRun(derefID(run.BaseRunID))
+	if base == nil || base.SessionID == "" {
+		return errors.New("the asked run or its agent session is gone")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
-	dir := run.WorkDir
+	dir := base.WorkDir
 	if dir != "" && !dirExists(dir) {
-		dir = s.restoreReviewDir(ctx, run, log)
+		dir = s.restoreReviewDir(ctx, base, nil)
 	}
 	if dir == "" {
 		dir = s.Settings.ProjectRoot
 	}
-	result, err := r.Run(ctx, runner.Request{
-		Prompt:          prompts.FollowUp(question),
-		Dir:             dir,
-		Mode:            runner.ModeReadOnly,
-		Policy:          s.policy(),
-		ProtectDirs:     []string{s.Settings.ProjectRoot},
-		ResumeSessionID: run.SessionID,
-		ExtraTools:      s.Settings.ClaudeExtraTools,
-		Timeout:         15 * time.Minute,
-		Log:             log,
-	})
-	if err != nil {
-		_, _ = s.DB.AddMessage(runID, "error", err.Error(), 0, 0)
-		return "", &UserError{err.Error()}
+	logln(fmt.Sprintf("follow-up question in the session of run #%d (%s)", base.ID, dir))
+	req.Dir, req.ProtectDirs = dir, protectDirs(s.Settings.ProjectRoot, dir)
+	req.Mode, req.Agent, req.Schema = runner.ModeReadOnly, "", nil
+	req.ResumeSessionID = base.SessionID
+	req.Prompt = prompts.FollowUp(run.Notes)
+	req.SessionName = ""
+	if req.Timeout <= 0 || req.Timeout > askTimeout {
+		req.Timeout = askTimeout
 	}
-	answer := strings.TrimSpace(result.Text)
-	_, _ = s.DB.AddMessage(runID, "assistant", answer, result.CostUSD, result.Usage.Total())
-	// The follow-up grew the same session: the run's context fill follows it.
-	if result.Context.Tokens > 0 {
-		fields := map[string]any{"context_tokens": result.Context.Tokens}
-		if result.Context.Window > 0 {
-			fields["context_window"] = result.Context.Window
+	return nil
+}
+
+// askTimeout bounds a follow-up question (the agent answers from what it already knows).
+const askTimeout = 15 * time.Minute
+
+// finishAsk puts the outcome of a follow-up question into the asked run's dialog and ends the ask run.
+func (s *Service) finishAsk(run *db.Run, result *runner.Result, runErr error, fields map[string]any) {
+	baseID := derefID(run.BaseRunID)
+	switch {
+	case errors.Is(runErr, runner.ErrCancelled):
+		fields["status"], fields["error"] = db.StatusCancelled, "Cancelled"
+		_, _ = s.DB.AddMessage(baseID, "error", "вопрос остановлен", 0, 0)
+	case runErr != nil:
+		fields["status"], fields["error"] = db.StatusFailed, runErr.Error()
+		_, _ = s.DB.AddMessage(baseID, "error", runErr.Error(), 0, 0)
+	default:
+		answer := strings.TrimSpace(result.Text)
+		fields["status"], fields["summary"] = db.StatusDone, answer
+		_, _ = s.DB.AddMessage(baseID, "assistant", answer, result.CostUSD, result.Usage.Total())
+		// The follow-up grew the same session: the asked run's context fill and session id follow it.
+		base := map[string]any{}
+		if result.Context.Tokens > 0 {
+			base["context_tokens"] = result.Context.Tokens
+			if result.Context.Window > 0 {
+				base["context_window"] = result.Context.Window
+			}
 		}
-		_ = s.DB.UpdateRun(runID, fields)
+		if result.SessionID != "" {
+			base["session_id"] = result.SessionID
+		}
+		_ = s.DB.UpdateRun(baseID, base)
 	}
-	if result.SessionID != "" && result.SessionID != run.SessionID {
-		_ = s.DB.UpdateRun(runID, map[string]any{"session_id": result.SessionID})
-	}
-	return answer, nil
+	_ = s.DB.UpdateRun(run.ID, fields)
 }
 
 // maxFocusChars caps the review focus note: it is a short hint, not a second prompt.
@@ -3343,4 +3404,45 @@ func (s *Service) requireFixRights(mr *db.MergeRequest) error {
 		return nil
 	}
 	return userErr("only the author or an assignee lets an agent change the MR branch (!%d is by %s); for others' MRs use the review results", mr.IID, mr.Author)
+}
+
+// objectWord names what a run is about, for messages.
+func objectWord(run db.Run) string {
+	switch {
+	case run.MRID != nil:
+		return "merge request"
+	case run.IssueID != nil:
+		return "issue"
+	}
+	return "workspace"
+}
+
+// claimSession marks an agent session as being resumed by runID; it returns the run that already holds it (0 =
+// claimed). Two `--resume` of one session at once would interleave two conversations in one history.
+func (s *Service) claimSession(sessionID string, runID int64) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if holder := s.sessions[sessionID]; holder != 0 && holder != runID {
+		return holder
+	}
+	if s.sessions == nil {
+		s.sessions = map[string]int64{}
+	}
+	s.sessions[sessionID] = runID
+	return 0
+}
+
+func (s *Service) releaseSession(sessionID string, runID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessions[sessionID] == runID {
+		delete(s.sessions, sessionID)
+	}
+}
+
+// sessionUser is the run resuming an agent session right now (0 = none).
+func (s *Service) sessionUser(sessionID string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessions[sessionID]
 }

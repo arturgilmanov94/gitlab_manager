@@ -486,13 +486,9 @@
     waiting.innerHTML = '<div class="msg-role"><span class="spinner"></span> агент отвечает в той же сессии…</div>';
     chat.appendChild(waiting);
     area.value = '';
+    // The question runs as a queued run of its own; the page follows it and shows the answer when it is done.
     const data = await call('POST', `/api/runs/${runId}/ask`, { question }, event.submitter);
-    if (data) {
-      waiting.innerHTML = '<div class="msg-role">агент</div><div class="prewrap"></div>';
-      waiting.querySelector('.prewrap').textContent = data.answer;
-    } else {
-      waiting.remove();
-    }
+    if (data) { setTimeout(reload, 300); } else { waiting.remove(); pending.remove(); area.value = question; }
     return false;
   };
 

@@ -451,7 +451,7 @@ func TestVerifyNeedsBaseAndSingleActive(t *testing.T) {
 }
 
 func TestFailureAndRecover(t *testing.T) {
-	svc, _, fr := newService(t)
+	svc, gl, fr := newService(t)
 	mr, _ := svc.AddMR("!42")
 	fr.FailWith = "claude timed out after 1s"
 	runID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
@@ -463,7 +463,9 @@ func TestFailureAndRecover(t *testing.T) {
 	// A run that was running dies with the process; one still waiting in the queue is kept and started again.
 	staleID, _ := svc.DB.CreateRun(db.Run{Kind: db.KindReviewFull, MRID: &mr.ID, Runner: "claude"})
 	_ = svc.DB.UpdateRun(staleID, map[string]any{"status": db.StatusRunning})
-	queuedID, _ := svc.DB.CreateRun(db.Run{Kind: db.KindReviewFull, MRID: &mr.ID, HeadSHA: "sha-1", Runner: "claude"})
+	gl.MRs[43] = testutil.MRPayload(43, "sha-1")
+	second, _ := svc.AddMR("!43") // one active run per MR: the queued one is of another MR
+	queuedID, _ := svc.DB.CreateRun(db.Run{Kind: db.KindReviewFull, MRID: &second.ID, HeadSHA: "sha-1", Runner: "claude"})
 	if svc.Recover() != 1 {
 		t.Fatal("recover")
 	}
@@ -686,9 +688,14 @@ func TestAskResumesSession(t *testing.T) {
 	runID, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
 	testutil.WaitFor(t, func() bool { return status(svc, runID) == db.StatusDone })
 	fr.Texts = []string{"Because it can be nil."}
-	answer, err := svc.Ask(runID, "why HIGH?")
-	if err != nil || answer != "Because it can be nil." {
-		t.Fatalf("%q %v", answer, err)
+	askID, err := svc.Ask(runID, "why HIGH?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The question is a run of its own (kind ask, queued); the answer lands in the asked run's dialog.
+	testutil.WaitFor(t, func() bool { return status(svc, askID) == db.StatusDone })
+	if ask, _ := svc.DB.GetRun(askID); ask.Kind != db.KindAsk || ask.Summary != "Because it can be nil." || *ask.BaseRunID != runID {
+		t.Fatalf("%+v", ask)
 	}
 	last := fr.Requests[len(fr.Requests)-1]
 	if last.ResumeSessionID != "sess-1" || len(last.Schema) != 0 || last.Agent != "" {
@@ -1453,9 +1460,11 @@ func TestReviewWorktreeJanitor(t *testing.T) {
 		t.Fatalf("workspaces list must not show the removed worktree: %+v", ws)
 	}
 	// A follow-up question restores the worktree at the reviewed head and runs there.
-	if _, err := svc.Ask(runID, "why HIGH?"); err != nil {
+	askID, err := svc.Ask(runID, "why HIGH?")
+	if err != nil {
 		t.Fatal(err)
 	}
+	testutil.WaitFor(t, func() bool { return status(svc, askID) == db.StatusDone })
 	if req := fr.Requests[len(fr.Requests)-1]; req.Dir != path || req.ResumeSessionID == "" || !svc.Worktrees.Exists(path) {
 		t.Fatalf("follow-up must restore the review worktree: %+v", req)
 	}

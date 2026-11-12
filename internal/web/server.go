@@ -387,8 +387,8 @@ func (s *Server) routes() {
 	})
 	s.mux.HandleFunc("POST /api/runs/{id}/ask", func(w http.ResponseWriter, r *http.Request) {
 		body := readBody(r)
-		answer, err := s.svc.Ask(pathID(r), body["question"])
-		s.result(w, map[string]any{"answer": answer}, err)
+		id, err := s.svc.Ask(pathID(r), body["question"])
+		s.result(w, map[string]any{"run_id": id}, err)
 	})
 	s.mux.HandleFunc("POST /api/runs/{id}/commit", func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.svc.Commit(pathID(r), readBody(r)["message"])
@@ -558,11 +558,13 @@ func runSlug(kind string) string {
 		return "ci-fix"
 	case db.KindFixFindings:
 		return "fix-findings"
+	case db.KindAsk:
+		return "ask"
 	}
 	return "run"
 }
 
-var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "verify-finding": true, "stand-test": true, "ci-analyze": true, "ci-fix": true, "fix-findings": true, "fix-comments": true, "task-plan": true, "task-implement": true, "run": true}
+var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "verify-finding": true, "stand-test": true, "ci-analyze": true, "ci-fix": true, "fix-findings": true, "fix-comments": true, "ask": true, "task-plan": true, "task-implement": true, "run": true}
 
 func runPath(kind string, id any) string { return fmt.Sprintf("/-/%s/%v", runSlug(kind), id) }
 func mrPath(id any) string               { return fmt.Sprintf("/-/mr/%v", id) }
@@ -1102,6 +1104,7 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 	data["Timeline"] = timeline
 	data["Warnings"] = svc.DB.RunWarnings(run.ID)
 	data["Messages"], _ = svc.DB.ListMessages(run.ID)
+	data["AskActive"], _ = svc.DB.ActiveAsk(run.ID)
 	data["LogTail"] = tail(run.LogPath, 12000)
 	data["Approvals"], _ = svc.DB.ListApprovals(run.ID)
 	if run.Status == db.StatusWaiting {
@@ -1400,6 +1403,8 @@ func formatWhenFull(value string) string {
 
 func kindLabel(kind string) string {
 	switch kind {
+	case db.KindAsk:
+		return "Вопрос агенту"
 	case db.KindReviewQuick:
 		return "Быстрое ревью"
 	case db.KindReviewFull:

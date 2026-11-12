@@ -21,7 +21,7 @@ func open(t *testing.T) *DB {
 func TestMigrateIdempotent(t *testing.T) {
 	d := open(t)
 	applied, err := d.Migrate()
-	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 21 {
+	if err != nil || len(applied) != 0 || len(d.SchemaVersion()) != 22 {
 		t.Fatalf("%v %v %v", applied, err, d.SchemaVersion())
 	}
 }
@@ -170,7 +170,8 @@ func TestIssuesAndStale(t *testing.T) {
 		t.Fatalf("%+v %v", issue, err)
 	}
 	runID, _ := d.CreateRun(Run{Kind: KindPlan, IssueID: &issue.ID, Runner: "claude"})
-	queuedID, _ := d.CreateRun(Run{Kind: KindPlan, IssueID: &issue.ID, Runner: "claude"})
+	other, _ := d.UpsertIssue(Issue{GitLabHost: "gl", ProjectPath: "g/p", IID: 10, WebURL: "u2", Title: "other task"})
+	queuedID, _ := d.CreateRun(Run{Kind: KindPlan, IssueID: &other.ID, Runner: "claude"}) // one active run per task: another task
 	_ = d.UpdateRun(runID, map[string]any{"status": StatusRunning})
 	if n, _ := d.FailStaleRuns("restart"); n != 1 {
 		t.Fatal("stale run")
@@ -186,6 +187,7 @@ func TestIssuesAndStale(t *testing.T) {
 		t.Fatalf("running run after restart: %s", r.Status)
 	}
 	_, _ = d.sql.Exec("DELETE FROM runs WHERE id = ?", queuedID)
+	_, _ = d.sql.Exec("DELETE FROM issues WHERE id = ?", other.ID)
 	list, _ := d.ListIssues()
 	if len(list) != 1 || list[0].Last == nil || list[0].Last.ID != runID || list[0].Last.Status != StatusFailed {
 		t.Fatalf("%+v", list)

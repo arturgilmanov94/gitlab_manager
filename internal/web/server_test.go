@@ -167,8 +167,14 @@ func TestPagesAndFlow(t *testing.T) {
 		t.Fatalf("%d %v", code, out)
 	}
 	fr.Texts = []string{"Because."}
-	if code, out := postJSON(t, ts.URL+"/api/runs/1/ask", map[string]any{"question": "why?"}); code != 200 || out["answer"] != "Because." {
+	code, out = postJSON(t, ts.URL+"/api/runs/1/ask", map[string]any{"question": "why?"})
+	if code != 200 || out["run_id"] == nil {
 		t.Fatalf("%d %v", code, out)
+	}
+	askID := int64(out["run_id"].(float64))
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(askID); return r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/run/1"); !strings.Contains(body, "Because.") {
+		t.Fatal("the answer shows in the asked run's dialog")
 	}
 	if code, body := get(t, ts.URL+"/doctor"); code != 200 || !strings.Contains(body, "Skill: review_full") || !strings.Contains(body, "Действия dashboard → skills проекта") || !strings.Contains(body, "task-plan") {
 		t.Fatalf("doctor %d: must list the action → skill map", code)
