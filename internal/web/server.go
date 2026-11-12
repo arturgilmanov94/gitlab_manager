@@ -149,6 +149,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 		"errorTitle": errorTitle,
 		"md":         renderMarkdown,
 		"noteText":   noteText,
+		"stageLabel": db.StageLabel,
 		"roleWords":  func(roles string) string { return strings.ReplaceAll(roles, ",", " ") },
 		"hasRole": func(roles, role string) bool {
 			for _, r := range strings.Split(roles, ",") {
@@ -487,6 +488,9 @@ func (s *Server) routes() {
 		s.result(w, map[string]any{}, s.svc.RemoveWorktree(pathID(r)))
 	})
 	// «Обновить»: rebase the task's worktree on a fresh origin/<base> (aborted on conflicts, the branch unchanged).
+	s.mux.HandleFunc("POST /api/issues/{id}/stage", func(w http.ResponseWriter, r *http.Request) {
+		s.result(w, nil, s.svc.SetIssueStage(pathID(r), readBody(r)["stage"]))
+	})
 	s.mux.HandleFunc("POST /api/runs/{id}/workspace/update", func(w http.ResponseWriter, r *http.Request) {
 		msg, err := s.svc.UpdateWorkspace(pathID(r))
 		s.result(w, map[string]any{"message": msg}, err)
@@ -1016,9 +1020,10 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 		queuePos = svc.DB.QueuePosition(active.ID)
 	}
 	details := svc.DB.MRDetailsOf(mr.ID)
+	tasks := svc.IssuesOfMR(mr)
 	readiness, readinessTone := app.MergeReadiness(details)
 	s.render(w, "mr", map[string]any{
-		"Details": details, "Readiness": readiness, "ReadinessTone": readinessTone, "Me": username,
+		"Tasks": tasks, "Details": details, "Readiness": readiness, "ReadinessTone": readinessTone, "Me": username,
 		"Base": base, "MR": mr, "QueuePos": queuePos, "Runs": runs, "Latest": latest,
 		"Sessions":   svc.Resumable(runs, svc.ReviewDirs(mr)...),
 		"Changes":    changesIf(stale, s.svc, mr, latest),
@@ -1058,6 +1063,13 @@ func (s *Server) issuePage(w http.ResponseWriter, r *http.Request) {
 			failed = r
 		}
 	}
+	linkedMRs, comments := svc.DB.IssueLinks(issue.ID)
+	var openMR *db.LinkedMR // the MR under review, for «Открыть MR»
+	for i := range linkedMRs {
+		if linkedMRs[i].State == "opened" && openMR == nil {
+			openMR = &linkedMRs[i]
+		}
+	}
 	state := "new"
 	switch {
 	case active != nil && active.Kind == db.KindPlan:
@@ -1074,7 +1086,9 @@ func (s *Server) issuePage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "issue", map[string]any{
 		"Base": s.base(r, "issues", fmt.Sprintf("#%d %s", issue.IID, issue.Title)), "Issue": issue, "Runs": runs, "Active": active,
 		"Plan": plan, "Impl": impl, "Failed": failed, "State": state, "LooksLikeBug": issue.LooksLikeBug(), "PlanIsBug": plan != nil && plan.Mode == "bug",
-		"PlanSessions": svc.Resumable(runs, svc.Settings.ProjectRoot), "ImplSessions": svc.Resumable(runs, svc.Worktrees.Path(issue.Ref())),
+		// Every stage works in the task's worktree (T19), so both pickers offer the sessions of that worktree.
+		"PlanSessions": svc.Resumable(runs, svc.Worktrees.Path(svc.IssueBranch(issue))), "ImplSessions": svc.Resumable(runs, svc.Worktrees.Path(svc.IssueBranch(issue))),
+		"Stages": db.IssueStages, "LinkedMRs": linkedMRs, "Comments": comments, "OpenMR": openMR,
 		"DefaultBranch": svc.IssueBranch(issue), "BaseBranch": svc.Settings.BaseBranch, "Workspaces": svc.IssueWorkspaces(runs),
 		"StandSkill": svc.StandSkill(), "StandTestSkill": svc.SkillFor(db.KindStandTest), "Stand": standFor(runs, impl),
 	})

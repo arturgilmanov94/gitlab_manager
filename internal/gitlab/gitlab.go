@@ -140,6 +140,7 @@ type Client interface {
 	GetApprovals(ref Ref) (Approvals, error)
 	ListOpenMRs(host, username string, roles []string, projectPath string) ([]map[string]any, error)
 	GetIssue(ref Ref) (map[string]any, error)
+	IssueLinks(ref Ref) ([]LinkedMR, []IssueNote, error)
 	ListOpenIssues(host, username, projectPath string) ([]map[string]any, error)
 	CreateMR(host, projectPath, sourceBranch, targetBranch, title, description string) (string, error)
 	Compare(ref Ref, from, to string) (Changes, error)

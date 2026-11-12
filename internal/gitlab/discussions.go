@@ -319,3 +319,58 @@ func (g *Glab) RetryPipeline(ref Ref, pipelineID int64) error {
 	}
 	return nil
 }
+
+// LinkedMR is an MR GitLab links to an issue.
+type LinkedMR struct {
+	ProjectPath, Title, State, WebURL, SourceBranch string
+	IID                                             int64
+	Closes                                          bool // the MR closes the issue when merged (closed_by)
+}
+
+// IssueNote is a comment people wrote on an issue.
+type IssueNote struct{ Author, Body, CreatedAt string }
+
+// IssueLinks returns the MRs linked to an issue (closed_by and related_merge_requests) and its comments.
+func (g *Glab) IssueLinks(ref Ref) ([]LinkedMR, []IssueNote, error) {
+	base := fmt.Sprintf("projects/%s/issues/%d", ref.EncodedProject(), ref.IID)
+	seen := map[string]int{}
+	var mrs []LinkedMR
+	add := func(items []map[string]any, closes bool) {
+		for _, it := range items {
+			project := firstNonEmpty(Str(Nested(it, "references"), "full"), "")
+			if i := strings.LastIndex(project, "!"); i > 0 {
+				project = project[:i]
+			} else {
+				project = ref.ProjectPath
+			}
+			key := fmt.Sprintf("%s!%d", project, Int(it, "iid"))
+			if i, ok := seen[key]; ok {
+				mrs[i].Closes = mrs[i].Closes || closes
+				continue
+			}
+			seen[key] = len(mrs)
+			mrs = append(mrs, LinkedMR{ProjectPath: project, IID: Int(it, "iid"), Title: Str(it, "title"), State: Str(it, "state"), WebURL: Str(it, "web_url"),
+				SourceBranch: Str(it, "source_branch"), Closes: closes})
+		}
+	}
+	closedBy, err := g.apiList(ref.Host, base+"/closed_by?per_page=100")
+	if err != nil {
+		return nil, nil, err
+	}
+	add(closedBy, true)
+	if related, err := g.apiList(ref.Host, base+"/related_merge_requests?per_page=100"); err == nil {
+		add(related, false)
+	}
+	raw, err := g.apiList(ref.Host, base+"/notes?sort=asc&order_by=created_at&per_page=100")
+	if err != nil {
+		return mrs, nil, err
+	}
+	var notes []IssueNote
+	for _, n := range raw {
+		if Bool(n, "system") {
+			continue
+		}
+		notes = append(notes, IssueNote{Author: Str(Nested(n, "author"), "username"), Body: Str(n, "body"), CreatedAt: Str(n, "created_at")})
+	}
+	return mrs, notes, nil
+}

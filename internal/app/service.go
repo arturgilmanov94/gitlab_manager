@@ -727,6 +727,11 @@ func (s *Service) fetchIssue(ref gitlab.Ref) (*db.Issue, error) {
 	}
 	issue, err := s.DB.UpsertIssue(issueFromPayload(payload, ref))
 	s.assignIssue(issue)
+	if err == nil {
+		s.refreshIssueLinks(issue, ref)
+		s.UpdateIssueStage(issue.ID)
+		issue, _ = s.DB.GetIssue(issue.ID)
+	}
 	return issue, err
 }
 
@@ -1913,6 +1918,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		return
 	}
 	defer s.notifyFinished(runID) // Telegram: done, failed, or stopped with questions
+	defer s.stageAfterRun(runID)  // a task's stored stage follows its runs
 	r, _, err := s.pickRunner(run.Runner)
 	if err != nil {
 		s.fail(runID, err.Error())
@@ -2179,7 +2185,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		}
 		req.Dir, req.Mode, req.ProtectDirs = path, runner.ModeEdit, nil
 		if issue != nil {
-			req.Prompt, req.Schema = prompts.StandTestIssue(promptIssue(issue), run.Notes, run.Branch, s.Settings.BaseBranch, stand, sk), prompts.StandSchema
+			req.Prompt, req.Schema = prompts.StandTestIssue(s.promptIssue(issue), run.Notes, run.Branch, s.Settings.BaseBranch, stand, sk), prompts.StandSchema
 			req.SessionName = fmt.Sprintf("stand-test #%d run %d", issue.IID, runID)
 		} else {
 			req.Prompt, req.Schema = prompts.StandTest(promptMR(mr), run.Notes, firstOf(mr.TargetBranch, s.Settings.BaseBranch), stand, sk), prompts.StandSchema
@@ -2206,7 +2212,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 			s.fail(runID, "issue disappeared")
 			return
 		}
-		pi := promptIssue(issue)
+		pi := s.promptIssue(issue)
 		// Every stage of a task works in the task's worktree (G1): created from a fresh origin/<base> by the first
 		// run of any kind, reused by the next ones. Runs from before 0.32 without a branch get the task's branch.
 		if run.Branch == "" {
@@ -3425,8 +3431,16 @@ func (s *Service) RemoveWorktree(runID int64) error {
 
 // ---------------------------------------------------------------------------------- helpers
 
-func promptIssue(issue *db.Issue) prompts.Issue {
-	return prompts.Issue{WebURL: issue.WebURL, ProjectPath: issue.ProjectPath, Host: issue.GitLabHost, IID: issue.IID, Title: issue.Title, Description: issue.Description}
+func (s *Service) promptIssue(issue *db.Issue) prompts.Issue {
+	out := prompts.Issue{WebURL: issue.WebURL, ProjectPath: issue.ProjectPath, Host: issue.GitLabHost, IID: issue.IID, Title: issue.Title, Description: issue.Description}
+	mrs, notes := s.DB.IssueLinks(issue.ID)
+	for _, n := range notes {
+		out.Comments = append(out.Comments, prompts.IssueComment{Author: n.Author, Body: n.Body, CreatedAt: n.CreatedAt})
+	}
+	for _, m := range mrs {
+		out.MRs = append(out.MRs, fmt.Sprintf("%s!%d (%s, branch %s) %s", m.ProjectPath, m.IID, m.State, firstOf(m.SourceBranch, "?"), m.Title))
+	}
+	return out
 }
 
 func promptMR(mr *db.MergeRequest) prompts.MR {

@@ -365,7 +365,15 @@ type Issue struct {
 	WebURL, ProjectPath, Host string
 	IID                       int64
 	Title, Description        string
+	Comments                  []IssueComment // people's comments on the task, oldest first
+	MRs                       []string       // MRs linked to the task, one line each
 }
+
+// IssueComment is a comment on a task.
+type IssueComment struct{ Author, Body, CreatedAt string }
+
+// maxIssueComments caps the comments inlined into a prompt (the newest are kept).
+const maxIssueComments = 30
 
 // PrevFinding is a previous finding passed to verify.
 type PrevFinding struct {
@@ -458,6 +466,24 @@ func issueBlock(issue Issue, notes string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Issue: %s\nProject path: %s (GitLab host: %s)\nIssue IID: %d\nTitle: %s\n\n--- issue description ---\n%s\n--- end description ---\n",
 		issue.WebURL, issue.ProjectPath, issue.Host, issue.IID, issue.Title, strings.TrimSpace(issue.Description))
+	if len(issue.Comments) > 0 {
+		comments := issue.Comments
+		if len(comments) > maxIssueComments {
+			fmt.Fprintf(&b, "\n(%d earlier comments omitted; read them with `glab api` if needed)", len(comments)-maxIssueComments)
+			comments = comments[len(comments)-maxIssueComments:]
+		}
+		b.WriteString("\n--- comments on the issue (oldest first; they may refine or change the description) ---\n")
+		for _, c := range comments {
+			fmt.Fprintf(&b, "@%s, %s:\n%s\n\n", c.Author, c.CreatedAt, oneLine(c.Body, 2000))
+		}
+		b.WriteString("--- end comments ---\n")
+	}
+	if len(issue.MRs) > 0 {
+		b.WriteString("\nMerge requests linked to this issue:\n")
+		for _, m := range issue.MRs {
+			b.WriteString("  - " + m + "\n")
+		}
+	}
 	if strings.TrimSpace(notes) != "" {
 		fmt.Fprintf(&b, "\n--- additional instructions from the developer ---\n%s\n--- end instructions ---\n", strings.TrimSpace(notes))
 	}

@@ -3,7 +3,12 @@
   <div>
     <div class="crumbs"><a class="back tip" data-back href="/issues" data-tip="Назад к списку (Esc). Ведёт туда, откуда вы пришли: список задач с вашими фильтрами, сессии или обзор.">← Задачи</a> · {{.Issue.ProjectPath}}</div>
     <h1><a class="ref" href="{{.Issue.WebURL}}" target="_blank" rel="noopener">#{{.Issue.IID}}</a> {{.Issue.Title}}</h1>
-    <div class="meta"><span>{{.Issue.Author}}</span><span class="sep"></span><span>{{.Issue.State}}</span>{{if keyLabels .Issue.Labels}}<span class="sep"></span><span>{{template "labels" .Issue.Labels}}</span>{{end}}{{with otherLabels .Issue.Labels}}<span class="sep"></span><span>{{.}}</span>{{end}}<span class="sep"></span><span>GitLab обновлена {{when .Issue.GitLabUpdatedAt}}</span></div>
+    <div class="meta"><span>{{.Issue.Author}}</span><span class="sep"></span><span>{{.Issue.State}}</span>{{if keyLabels .Issue.Labels}}<span class="sep"></span><span>{{template "labels" .Issue.Labels}}</span>{{end}}{{with otherLabels .Issue.Labels}}<span class="sep"></span><span>{{.}}</span>{{end}}<span class="sep"></span><span>GitLab обновлена {{when .Issue.GitLabUpdatedAt}}</span>
+      <span class="sep"></span><label class="stage-pick tip" data-tip="Стадия задачи. Считается сама по запускам и связанным MR; можно поставить вручную — тогда держится, пока не вернёте «авто».">стадия
+        <select onchange="post('/api/issues/{{.Issue.ID}}/stage', {stage: this.value}, this).then(r => r && reload())">
+          <option value="auto">{{if .Issue.StageManual}}авто{{else}}авто · {{stageLabel .Issue.Stage}}{{end}}</option>
+          {{range .Stages}}<option value="{{.Key}}"{{if and $.Issue.StageManual (eq .Key $.Issue.Stage)}} selected{{end}}>{{.Label}}{{if and $.Issue.StageManual (eq .Key $.Issue.Stage)}} · вручную{{end}}</option>{{end}}
+        </select></label></div>
   </div>
   <div class="actions">
     {{if and .Active (eq .Active.Status "waiting")}}
@@ -14,6 +19,10 @@
     {{else if eq .State "failed"}}
       <a class="btn" href="{{runPath .Failed.Kind .Failed.ID}}">Посмотреть ошибку</a>
       <button class="btn btn-primary tip" data-tip="{{kindTip "retry"}}" onclick="post('/api/runs/{{.Failed.ID}}/retry', {}, this).then(r => r && go(r.redirect))">Повторить</button>
+    {{else if or (eq .Issue.Stage "done") (eq .Issue.Stage "merged")}}
+      <span class="badge badge-success">{{if eq .Issue.Stage "done"}}задача закрыта{{else}}MR влит{{end}}</span>
+    {{else if and (eq .Issue.Stage "review") .OpenMR}}
+      {{if .OpenMR.MRID}}<a class="btn btn-primary" href="{{mrPath .OpenMR.MRID}}">Открыть MR !{{.OpenMR.IID}}</a>{{else}}<a class="btn btn-primary ext" href="{{.OpenMR.WebURL}}" target="_blank" rel="noopener">Открыть MR !{{.OpenMR.IID}}</a>{{end}}
     {{else if eq .State "ready"}}
       <a class="btn btn-primary" href="{{runPath .Impl.Kind .Impl.ID}}">Подготовить MR</a>
       <a class="btn" href="{{runPath .Impl.Kind .Impl.ID}}#workspace">Показать diff</a>
@@ -22,8 +31,8 @@
       <button class="btn btn-primary tip" data-tip="{{kindTip "implement_plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {plan_run: '{{.Plan.ID}}', notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">{{if .PlanIsBug}}Исправить{{else}}Реализовать этот план{{end}}</button>
       <a class="btn" href="{{runPath .Plan.Kind .Plan.ID}}">{{if .PlanIsBug}}Открыть разбор{{else}}Открыть план{{end}}</a>
     {{else}}
-      <button class="btn btn-primary tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Решить задачу</button>
-      <button class="btn tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'plan', this, {notes: document.getElementById('notes').value, mode: planMode()})">Исследовать</button>
+      <button class="btn btn-primary tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'plan', this, {notes: document.getElementById('notes').value, mode: planMode()})">Исследовать</button>
+      <button class="btn tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Решить сразу</button>
     {{end}}
     <a class="btn btn-link ext tip" data-tip="Открыть задачу #{{.Issue.IID}} в GitLab (новая вкладка)." href="{{.Issue.WebURL}}" target="_blank" rel="noopener">GitLab</a>
     <details class="menu">
@@ -116,6 +125,38 @@
   <div class="card-head"><h2>Описание задачи</h2></div>
   <div class="description-md">{{if .Issue.Description}}{{md .Issue.Description (blobBase .Issue.WebURL) ""}}{{else}}<span class="muted">(описание в GitLab пустое)</span>{{end}}</div>
 </section>
+
+{{if .LinkedMRs}}
+<section class="card" id="linked-mrs">
+  <div class="card-head"><h2>Связанные MR ({{len .LinkedMRs}})</h2><span class="small muted">из GitLab (closes / related) и по ветке задачи</span></div>
+  <table class="table compact">
+    <tbody>
+    {{range .LinkedMRs}}
+    <tr>
+      <td class="nowrap">{{if .MRID}}<a class="ref" href="{{mrPath .MRID}}">!{{.IID}}</a>{{else}}<a class="ref ext" href="{{.WebURL}}" target="_blank" rel="noopener">!{{.IID}}</a>{{end}}<div class="small muted">{{.ProjectPath}}</div></td>
+      <td>{{.Title}}<div class="small muted mono">{{.SourceBranch}}</div></td>
+      <td class="small">{{if eq .State "merged"}}<span class="state state-success">merged</span>{{else if eq .State "closed"}}<span class="state state-neutral">closed</span>{{else}}<span class="state state-info">open</span>{{end}}</td>
+      <td class="small muted">{{if eq .Via "closes"}}закроет задачу{{else if eq .Via "branch"}}по ветке задачи{{else}}упоминает задачу{{end}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}
+
+{{if .Comments}}
+<section class="card" id="comments">
+  <details class="section"{{if le (len .Comments) 3}} open{{end}}>
+    <summary><h2 class="inline-h2">Комментарии в задаче ({{len .Comments}})</h2> <span class="small muted">агент получает их вместе с описанием</span></summary>
+    {{range .Comments}}
+    <div class="note">
+      <div class="note-head small"><b>@{{.Author}}</b> <span class="muted">· {{when .CreatedAt}}</span></div>
+      <div class="note-body">{{md (noteText .Body $.Issue.WebURL) (blobBase $.Issue.WebURL) ""}}</div>
+    </div>
+    {{end}}
+  </details>
+</section>
+{{end}}
 
 <section class="card" id="solve">
   <div class="card-head"><h2>Указания агенту</h2><span class="small muted">необязательно</span></div>

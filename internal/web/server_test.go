@@ -21,6 +21,7 @@ import (
 
 	"mr-review/internal/app"
 	"mr-review/internal/db"
+	"mr-review/internal/gitlab"
 	"mr-review/internal/runner"
 	"mr-review/internal/testutil"
 )
@@ -439,10 +440,10 @@ func TestIssuesPages(t *testing.T) {
 	if code, body := get(t, ts.URL+"/issues"); code != 200 || !strings.Contains(body, "Task 7") {
 		t.Fatalf("%d", code)
 	}
-	if code, body := get(t, ts.URL+"/issue/1"); code != 200 || !strings.Contains(body, "group/sub/project#7") || !strings.Contains(body, "Решить задачу") || !strings.Contains(body, "Исследовать") {
+	if code, body := get(t, ts.URL+"/issue/1"); code != 200 || !strings.Contains(body, "group/sub/project#7") || !strings.Contains(body, "Решить сразу") || !strings.Contains(body, `btn btn-primary tip" data-tip="`+kindTip("plan")+`" onclick="startRun('/api/issues/1/runs', 'plan'`) {
 		t.Fatalf("%d", code)
 	}
-	if _, body := get(t, ts.URL+"/issues"); !strings.Contains(body, "Решить задачу") || !strings.Contains(body, "Новая") {
+	if _, body := get(t, ts.URL+"/issues"); !strings.Contains(body, "Решить сразу") || !strings.Contains(body, "Новая") {
 		t.Fatal("issues list must show state and primary action")
 	}
 	fr.Outputs = []map[string]any{testutil.PlanOutput()}
@@ -1093,6 +1094,34 @@ func TestChangesTab(t *testing.T) {
 	}
 	if code, body := get(t, ts.URL+"/api/mrs/1/diff/9?mode=all"); code != 400 || !strings.Contains(body, "файл не найден") {
 		t.Fatalf("%d %s", code, body)
+	}
+}
+
+// The task page shows the stage picker, linked MRs and comments; the MR page links back to the task.
+func TestIssueStageAndLinksPages(t *testing.T) {
+	ts, svc, _ := newServer(t)
+	gl := svc.GitLab.(*testutil.FakeGitLab)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	gl.IssueMRs = map[int64][]gitlab.LinkedMR{7: {{ProjectPath: "group/sub/project", IID: 42, Title: "MR 42", State: "opened", SourceBranch: "feature", Closes: true}}}
+	gl.IssueNotes = map[int64][]gitlab.IssueNote{7: {{Author: "pm", Body: "only the API part", CreatedAt: "2026-11-01T10:00:00Z"}}}
+	postJSON(t, ts.URL+"/api/issues", map[string]any{"url": "#7"})
+	_, body := get(t, ts.URL+"/-/issue/1")
+	for _, want := range []string{"Связанные MR (1)", `href="/-/mr/1">!42`, "закроет задачу", "Комментарии в задаче (1)", "only the API part", "авто · MR на ревью"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("task page lacks %q", want)
+		}
+	}
+	if !strings.Contains(body, `<a class="btn btn-primary" href="/-/mr/1">Открыть MR !42</a>`) {
+		t.Fatal("a task in review leads to its MR")
+	}
+	if _, mr := get(t, ts.URL+"/-/mr/1"); !strings.Contains(mr, `href="/-/issue/1"`) || !strings.Contains(mr, "задача #7") {
+		t.Fatal("the MR page links to its task")
+	}
+	if code, _ := postJSON(t, ts.URL+"/api/issues/1/stage", map[string]any{"stage": "done"}); code != 200 {
+		t.Fatal(code)
+	}
+	if _, list := get(t, ts.URL+"/issues"); !strings.Contains(list, "Закрыта") || !strings.Contains(list, "стадия вручную") {
+		t.Fatal("the list shows a hand-set stage")
 	}
 }
 

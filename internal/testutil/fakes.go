@@ -67,6 +67,8 @@ type FakeGitLab struct {
 	Replies        []string // ReplyDiscussion calls
 	Resolves       []string // ResolveDiscussion calls
 	Writes         []string // Approve / Unapprove / RetryPipeline calls
+	IssueMRs       map[int64][]gitlab.LinkedMR
+	IssueNotes     map[int64][]gitlab.IssueNote
 	FailApprovals  bool
 	FailUser       bool
 	UserCalls      int
@@ -298,6 +300,14 @@ func (f *FakeGitLab) GetIssue(ref gitlab.Ref) (map[string]any, error) {
 	}
 	return nil, errors.New("404 Not Found")
 }
+
+// IssueLinks returns IssueMRs[iid] and IssueNotes[iid].
+func (f *FakeGitLab) IssueLinks(ref gitlab.Ref) ([]gitlab.LinkedMR, []gitlab.IssueNote, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.IssueMRs[ref.IID], f.IssueNotes[ref.IID], nil
+}
+
 func (f *FakeGitLab) ListOpenIssues(host, username, projectPath string) ([]map[string]any, error) {
 	f.mu.Lock()
 	f.Calls = append(f.Calls, "issues project="+projectPath)

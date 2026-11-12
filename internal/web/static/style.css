@@ -408,6 +408,10 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
 .btn.danger, .btn-link.danger { color: var(--danger); }
 
 /* findings: code excerpt, inline actions, GitLab post editor */
+/* task page: stage picker, comments */
+.stage-pick { color: var(--muted); }
+.stage-pick select { font-size: 12px; padding: 1px 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--fg); margin-left: 4px; }
+.inline-h2 { display: inline; font-size: inherit; }
 /* MR page: people, merge readiness and the actions on the MR itself */
 .people { margin-top: 8px; display: grid; gap: 2px; }
 .people .k { display: inline-block; min-width: 78px; color: var(--muted); }

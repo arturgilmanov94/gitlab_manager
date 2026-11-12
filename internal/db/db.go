@@ -447,6 +447,8 @@ type Issue struct {
 	AddedAt         string
 	AgentNotes      string // «Указания агенту», saved on the task as the developer types
 	ProjectID       int64  // project (repository) the task is worked in
+	Stage           string // stored stage (see IssueStages); "" = not computed yet
+	StageManual     bool   // the developer set the stage by hand
 }
 
 // Ref is "project#iid" — also the project's branch naming convention.
@@ -456,11 +458,11 @@ func (i Issue) Ref() string { return fmt.Sprintf("%s#%d", i.ProjectPath, i.IID) 
 // added by hand that has not been fetched yet — it stays in the list.
 func (i Issue) Closed() bool { return i.State != "" && i.State != "opened" }
 
-const issueColumns = "id, gitlab_host, project_path, iid, web_url, title, description, author, state, labels, gitlab_updated_at, synced_at, added_at, agent_notes, project_id"
+const issueColumns = "id, gitlab_host, project_path, iid, web_url, title, description, author, state, labels, gitlab_updated_at, synced_at, added_at, agent_notes, project_id, stage, stage_manual"
 
 func scanIssue(s scanner) (*Issue, error) {
 	var i Issue
-	err := s.Scan(&i.ID, &i.GitLabHost, &i.ProjectPath, &i.IID, &i.WebURL, &i.Title, &i.Description, &i.Author, &i.State, &i.Labels, &i.GitLabUpdatedAt, &i.SyncedAt, &i.AddedAt, &i.AgentNotes, (*intOrNull)(&i.ProjectID))
+	err := s.Scan(&i.ID, &i.GitLabHost, &i.ProjectPath, &i.IID, &i.WebURL, &i.Title, &i.Description, &i.Author, &i.State, &i.Labels, &i.GitLabUpdatedAt, &i.SyncedAt, &i.AddedAt, &i.AgentNotes, (*intOrNull)(&i.ProjectID), &i.Stage, &i.StageManual)
 	if err != nil {
 		return nil, err
 	}
@@ -530,7 +532,7 @@ func (d *DB) ListIssues() ([]IssueListItem, error) {
 		var item IssueListItem
 		var id sql.NullInt64
 		var kind, status, verdict, sha, runner, model, finished, created, session sql.NullString
-		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Description, &item.Author, &item.State, &item.Labels, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt, &item.AgentNotes, (*intOrNull)(&item.ProjectID),
+		if err := rows.Scan(&item.ID, &item.GitLabHost, &item.ProjectPath, &item.IID, &item.WebURL, &item.Title, &item.Description, &item.Author, &item.State, &item.Labels, &item.GitLabUpdatedAt, &item.SyncedAt, &item.AddedAt, &item.AgentNotes, (*intOrNull)(&item.ProjectID), &item.Stage, &item.StageManual,
 			&id, &kind, &status, &verdict, &sha, &runner, &model, &finished, &created, &session, &item.ContextRunID); err != nil {
 			return nil, err
 		}

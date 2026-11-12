@@ -37,7 +37,8 @@
     </td>
     <td data-label="Состояние">
       <div class="state-stack" data-ai-state>
-        {{if not .Last}}<span class="state state-neutral"><span class="glyph">○</span> Новая</span>
+        {{if and (not $busy) (not $waiting) .Stage (or .StageManual (eq .Stage "review") (eq .Stage "merged") (eq .Stage "done"))}}<span class="state state-{{if eq .Stage "merged" "done"}}success{{else}}info{{end}}"><span class="glyph">{{if eq .Stage "merged" "done"}}✓{{else}}◐{{end}}</span> {{stageLabel .Stage}}</span>{{if .StageManual}}<span class="small muted">стадия вручную</span>{{end}}
+        {{else if not .Last}}<span class="state state-neutral"><span class="glyph">○</span> Новая</span>
         {{else if $waiting}}<a href="{{runPath .Last.Kind .Last.ID}}#approval" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}"><span class="state state-warning"><span class="glyph">⚠</span> Нужен ваш ответ</span></a>
         {{else if $busy}}<a href="{{runPath .Last.Kind .Last.ID}}" data-run-status="{{.Last.ID}}" data-status="{{.Last.Status}}"><span class="state state-info"><span class="spinner"></span> {{if eq .Last.Kind "plan"}}Исследуется{{else}}Пишется код{{end}}</span></a>
         {{else if eq .Last.Status "failed"}}<span class="state state-danger"><span class="glyph">✕</span> Ошибка</span><span class="small muted">{{kindLabel .Last.Kind}} · {{when .Last.FinishedAt}}</span>
@@ -61,8 +62,8 @@
         {{else if and .Last (eq .Last.Status "done") (eq .Last.Kind "implement")}}
           <a class="btn btn-sm btn-primary" href="{{runPath .Last.Kind .Last.ID}}">Подготовить MR</a>
         {{else}}
-          <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'implement', this)">Решить задачу</button>
-          <button class="btn btn-sm tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'plan', this)">Исследовать</button>
+          <button class="btn btn-sm btn-primary tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'plan', this)">Исследовать</button>
+          <button class="btn btn-sm tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.ID}}/runs', 'implement', this)">Решить сразу</button>
         {{end}}
         <details class="menu">
           <summary title="Ещё действия">⋯</summary>
