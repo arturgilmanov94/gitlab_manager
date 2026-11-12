@@ -17,6 +17,12 @@
 </section>
 
 {{if .Skills}}
+<section class="card" id="telegram">
+  <div class="card-head"><h2>Уведомления в Telegram</h2><span class="small {{if .Telegram}}text-success{{else}}muted{{end}}">{{if .Telegram}}включены{{else}}выключены{{end}}</span></div>
+  <p class="secondary small">Бот пишет, когда агент ждёт разрешения или ответа на вопросы и когда запуск готов или упал; в сообщении ссылка на сессию ({{.DashboardURL}}). Повтор одного события — не чаще раза в 10 минут, всего не больше 12 сообщений в минуту. {{if .Telegram}}{{if .NoTitles}}Названия MR и задач в сообщения не попадают (TELEGRAM_NO_TITLES).{{end}}{{else}}Чтобы включить, задайте в .env <span class="mono">TELEGRAM_BOT_TOKEN</span> и <span class="mono">TELEGRAM_CHAT_ID</span> и перезапустите dashboard; <span class="mono">TELEGRAM_NO_TITLES=1</span> — без названий MR и задач.{{end}}</p>
+  {{if .Telegram}}<button class="btn" onclick="post('/api/telegram/test', {}, this).then(r => r && flash('Сообщение отправлено', true))">Тестовое сообщение</button>{{end}}
+</section>
+
 <section class="card" id="skills">
   <div class="card-head"><h2>Действия dashboard → skills проекта</h2><span class="small muted">каждое действие сначала ищет свой skill в <span class="mono">.claude/</span> проекта</span></div>
   <p class="secondary small">Dashboard не несёт своих правил: он находит в проекте агента, команду или skill с ожидаемым именем и отдаёт ему запуск. Нет своего skill — действие работает по CLAUDE.md / AGENTS.md и минимальному промпту dashboard (или по skill-у запасного действия). В колонке «Настройка» можно выбрать другой skill проекта или включить <b>свои инструкции</b>: текст хранится в <span class="mono">data/</span> dashboard, не в проекте, и подставляется в промпт вместо skill. Имя также переопределяется переменной в <span class="mono">.env</span>. Подробности — в <span class="mono">docs/SKILLS.md</span>.</p>

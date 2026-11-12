@@ -119,6 +119,9 @@ REPORT_LANGUAGE=ru      # язык текстов агента: ru | en | de | u
 | `REMOTE_ACCESS` | `1` — заходить с телефона в той же сети (по ключу из QR-кода на странице `/phone`) | `0` |
 | `GITLAB_AUTO_SYNC_SEC` | как часто (сек) запущенный dashboard сам синхронизирует MR и задачи с GitLab; `0` — только кнопкой | `60` |
 | `GITLAB_REACH_CHECK` | проверять доступность GitLab (TCP до git- и API-хоста) для чипа «GitLab недоступен — VPN?» и перед синхронизацией; `0` — выключить | `1` |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | уведомления в Telegram; без обоих выключены | — |
+| `TELEGRAM_NO_TITLES` | `1` — без названий MR и задач в уведомлениях | `0` |
+| `DASHBOARD_URL` | адрес ссылок в уведомлениях | LAN-адрес или 127.0.0.1 |
 | `RUN_TIMEOUT_SEC`, `CLAUDE_MAX_BUDGET_USD` | нужен потолок по времени/деньгам на запуск | `2700`, `5` |
 | `REVIEW_WORKTREE_TTL_MIN` | проект большой и жалко диск (или наоборот — не удалять) | `30`, `0` |
 | `CLAUDE_EXTRA_ALLOWED_TOOLS` | ревью должно уметь звать линтер/анализатор | `Bash(php *) Bash(composer *)` |

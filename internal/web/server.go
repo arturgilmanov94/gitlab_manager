@@ -249,6 +249,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /ci", s.ci)
 	s.mux.HandleFunc("GET /phone", s.phonePage)
 	s.mux.HandleFunc("GET /doctor", s.doctorPage)
+	s.mux.HandleFunc("POST /api/telegram/test", func(w http.ResponseWriter, r *http.Request) {
+		s.result(w, map[string]any{}, s.svc.TestTelegram())
+	})
 	// Readable object URLs: /-/mr/1, /-/issue/2, /-/review/3, /-/task-implement/4 (+ /log).
 	s.mux.HandleFunc("GET /-/mr/{id}", s.mrPage)
 	s.mux.HandleFunc("GET /-/issue/{id}", s.issuePage)
@@ -323,7 +326,7 @@ func (s *Server) routes() {
 		if !at.IsZero() {
 			synced = at.UTC().Format(time.RFC3339)
 		}
-		writeJSON(w, 200, map[string]any{"ok": true, "version": s.svc.DataVersion(mrID), "synced_at": synced, "sync_error": syncErr, "queue": s.svc.Queue()})
+		writeJSON(w, 200, map[string]any{"ok": true, "version": s.svc.DataVersion(mrID), "synced_at": synced, "sync_error": syncErr, "queue": s.svc.Queue(), "waiting": len(s.waitingRuns())})
 	})
 	s.mux.HandleFunc("GET /api/findings/{id}/code", func(w http.ResponseWriter, r *http.Request) {
 		code, err := s.svc.FindingCode(pathID(r))
@@ -436,22 +439,7 @@ func (s *Server) base(r *http.Request, nav, title string) pageBase {
 		}
 	}
 	pending, _ := s.svc.DB.PendingApprovals()
-	var waiting []int64
-	seen := map[int64]bool{}
-	for _, a := range pending {
-		if !seen[a.RunID] {
-			seen[a.RunID] = true
-			waiting = append(waiting, a.RunID)
-		}
-	}
-	if ids, _ := s.svc.DB.RunsWaitingForAnswers(); len(ids) > 0 {
-		for _, id := range ids {
-			if !seen[id] {
-				seen[id] = true
-				waiting = append(waiting, id)
-			}
-		}
-	}
+	waiting := s.waitingRuns()
 	termOK, termWhy := s.svc.TerminalAvailable()
 	if termOK {
 		termWhy = ""
@@ -1156,7 +1144,8 @@ func (s *Server) runLog(w http.ResponseWriter, r *http.Request) {
 func (s *Server) doctorPage(w http.ResponseWriter, r *http.Request) {
 	rep := doctor.Run(s.svc.Settings, s.version, s.svc.GitLab, s.runners)
 	s.render(w, "doctor", map[string]any{"Base": s.base(r, "doctor", "Doctor"), "Report": rep, "Skills": s.svc.SkillMap(),
-		"SkillSettings": s.svc.SkillSettings(), "Candidates": s.svc.SkillCandidates()})
+		"SkillSettings": s.svc.SkillSettings(), "Candidates": s.svc.SkillCandidates(),
+		"Telegram": s.svc.TelegramEnabled(), "NoTitles": s.svc.Settings.TelegramNoTitles, "DashboardURL": s.svc.DashboardURL()})
 }
 
 // ---------------------------------------------------------------------------------- api
@@ -1874,4 +1863,25 @@ func inProject[T any](items []T, project int64, of func(T) int64) []T {
 		}
 	}
 	return out
+}
+
+// waitingRuns are the runs waiting for the developer: a permission prompt or questions, each run once.
+func (s *Server) waitingRuns() []int64 {
+	var waiting []int64
+	seen := map[int64]bool{}
+	pending, _ := s.svc.DB.PendingApprovals()
+	for _, a := range pending {
+		if !seen[a.RunID] {
+			seen[a.RunID] = true
+			waiting = append(waiting, a.RunID)
+		}
+	}
+	ids, _ := s.svc.DB.RunsWaitingForAnswers()
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			waiting = append(waiting, id)
+		}
+	}
+	return waiting
 }

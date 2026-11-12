@@ -29,6 +29,13 @@ type Settings struct {
 	RemoteAccess bool
 	// AccessKey is the key other devices need (ACCESS_KEY); "" = generated once and kept in AccessKeyFile.
 	AccessKey string
+	// Telegram notifications (G7): off unless both are set. TelegramNoTitles leaves MR/task titles out of messages.
+	TelegramBotToken string
+	TelegramChatID   string
+	TelegramNoTitles bool
+	// DashboardURL is the address links in notifications point to ("" = this machine's LAN address with REMOTE_ACCESS,
+	// else 127.0.0.1).
+	DashboardURL string
 
 	DatabasePath string
 	LogDir       string
@@ -257,6 +264,10 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		OpenBrowser:           boolean("OPEN_BROWSER", true),
 		RemoteAccess:          boolean("REMOTE_ACCESS", false),
 		AccessKey:             strings.TrimSpace(get("ACCESS_KEY")),
+		TelegramBotToken:      strings.TrimSpace(get("TELEGRAM_BOT_TOKEN")),
+		TelegramChatID:        strings.TrimSpace(get("TELEGRAM_CHAT_ID")),
+		TelegramNoTitles:      boolean("TELEGRAM_NO_TITLES", false),
+		DashboardURL:          strings.TrimRight(strings.TrimSpace(get("DASHBOARD_URL")), "/"),
 		DatabasePath:          path("DATABASE_PATH", "./data/reviews.sqlite"),
 		LogDir:                path("LOG_DIR", "./logs"),
 		RuntimeDir:            path("RUNTIME_DIR", "./runtime"),

@@ -15,6 +15,7 @@ import (
 	"mr-review/internal/config"
 	"mr-review/internal/db"
 	"mr-review/internal/gitlab"
+	"mr-review/internal/notify"
 	"mr-review/internal/prompts"
 	"mr-review/internal/runner"
 	"mr-review/internal/skill"
@@ -71,6 +72,7 @@ type core struct {
 	decisions map[int64]chan approvalDecision // pending approval id → channel the run goroutine waits on
 	runRules  map[int64]map[string]bool       // «allow such calls until the end of the run»: run id → SimilarKey
 	sessions  map[string]int64                // agent session id → the run resuming it now (one --resume at a time)
+	telegram  *notify.Telegram                // notifications; disabled without a token
 	username  string                          // GitLab username, cached once known (CurrentUser)
 	userTried time.Time                       // last lookup attempt
 	userMu    sync.Mutex                      // guards username/userTried
@@ -96,6 +98,7 @@ func New(settings *config.Settings, database *db.DB, gl gitlab.Client, runners [
 			cancels:   map[int64]context.CancelFunc{},
 			decisions: map[int64]chan approvalDecision{},
 			views:     map[int64]*worktree.Manager{},
+			telegram:  notify.New(settings.TelegramBotToken, settings.TelegramChatID),
 		},
 	}
 	s.root = s
@@ -1864,6 +1867,7 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusCancelled, "error": "Cancelled before start", "finished_at": db.Now()})
 		return
 	}
+	defer s.notifyFinished(runID) // Telegram: done, failed, or stopped with questions
 	r, _, err := s.pickRunner(run.Runner)
 	if err != nil {
 		s.fail(runID, err.Error())
@@ -2328,6 +2332,7 @@ func (s *Service) permissionFunc(runID int64, logln func(string), mode func() ru
 			s.mu.Unlock()
 		}()
 		_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusWaiting, "progress": "Нужен ваш ответ: " + req.ToolName + " " + req.Description})
+		s.notifyRun(runID, "permission", strings.TrimSpace(req.ToolName+" "+firstOf(bashCommand(req.Input), req.Description)))
 		logln(fmt.Sprintf("waiting for the developer: approval #%d (%s %s)", approvalID, req.ToolName, req.Description))
 		timeout := time.Duration(s.Settings.ApprovalTimeoutSec) * time.Second
 		var decision runner.PermissionDecision

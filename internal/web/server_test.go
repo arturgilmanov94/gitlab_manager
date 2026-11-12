@@ -1329,3 +1329,19 @@ func TestProjectSwitcherAndSettings(t *testing.T) {
 		t.Fatal("the default project cannot be deleted")
 	}
 }
+
+// Telegram is off without a token: the environment page says how to turn it on; the test button answers clearly.
+// /api/version reports how many runs wait for the developer (the «(N)» in the tab title).
+func TestTelegramSectionAndWaitingCount(t *testing.T) {
+	ts, _, _ := newServer(t)
+	if _, body := get(t, ts.URL+"/doctor"); !strings.Contains(body, `id="telegram"`) || !strings.Contains(body, "TELEGRAM_BOT_TOKEN") {
+		t.Fatal("telegram section")
+	}
+	if code, out := postJSON(t, ts.URL+"/api/telegram/test", map[string]any{}); code == 200 || !strings.Contains(fmt.Sprint(out["error"]), "TELEGRAM_BOT_TOKEN") {
+		t.Fatalf("%d %v", code, out)
+	}
+	_, body := get(t, ts.URL+"/api/version")
+	if !strings.Contains(body, `"waiting":0`) {
+		t.Fatal(body)
+	}
+}

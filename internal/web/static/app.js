@@ -722,3 +722,16 @@ window.saveProject = async function (id, button) {
   const data = await call('POST', '/api/projects/' + id, body, button);
   if (data) flash('Сохранено', true);
 };
+
+// Tab title «(N) …»: how many runs wait for you, kept current even in a background tab.
+(function waitingInTitle() {
+  const base = document.title.replace(/^\(\d+\) /, '');
+  const tick = async () => {
+    try {
+      const data = await (await fetch('/api/version')).json();
+      document.title = (data.waiting ? `(${data.waiting}) ` : '') + base;
+    } catch (e) { /* server restarting */ }
+    setTimeout(tick, 30000);
+  };
+  setTimeout(tick, 30000);
+})();
