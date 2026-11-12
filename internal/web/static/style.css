@@ -503,7 +503,15 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
 /* collapsible card (stand): the head is the summary */
 details.card > summary.card-head { cursor: pointer; list-style: none; margin-bottom: 0; }
 details.card > summary.card-head::-webkit-details-marker { display: none; }
-details.card > summary.card-head::before { content: "▸"; color: var(--muted); margin-right: 6px; }
+details.card { scroll-margin-top: 72px; }
+details.card > summary.card-head h2::before { content: "▸"; color: var(--muted); margin-right: 6px; font-weight: normal; }
 details.card[open] > summary.card-head { margin-bottom: 10px; }
-details.card[open] > summary.card-head::before { content: "▾"; }
+details.card[open] > summary.card-head h2::before { content: "▾"; }
 #plan-mode-hint { margin-top: 4px; }
+/* a field never pushes its card wider than the screen (branch input size=44, long hints) */
+.field > div { min-width: 0; max-width: 100%; }
+.field input[type="text"] { max-width: 100%; box-sizing: border-box; }
+/* header: tabs and brand never wrap; the long project path chip gives way first (ellipsis, full path in the tooltip) */
+.brand, .tabs a { white-space: nowrap; flex: none; }
+.nav-context { min-width: 0; }
+.nav-context .chip.path { min-width: 60px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }

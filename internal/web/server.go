@@ -198,7 +198,13 @@ func (s *Server) Handler() http.Handler { return s.guard(s.mux) }
 
 func (s *Server) routes() {
 	static, _ := fs.Sub(assets, "static")
-	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
+	// Embedded files carry no modification time: without no-cache a browser keeps the old CSS/JS after an
+	// upgrade. Pages also link them with ?v=<version>.
+	files := http.StripPrefix("/static/", http.FileServer(http.FS(static)))
+	s.mux.Handle("GET /static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		files.ServeHTTP(w, r)
+	}))
 	s.mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/static/favicon.svg", http.StatusFound)
 	})

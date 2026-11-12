@@ -9,7 +9,7 @@
 <link rel="apple-touch-icon" href="/static/favicon.svg">
 <title>{{.Base.Title}} · MR Review</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v={{.Base.Version}}">
 </head>
 <body{{if .Base.AutoRefresh}} data-autorefresh="1" data-version="{{.Base.DataVersion}}"{{if .Base.DataScope}} data-scope="{{.Base.DataScope}}" data-scope-id="{{.Base.DataScopeID}}"{{end}}{{end}}>
 <header class="navbar">
@@ -46,6 +46,6 @@
   <a href="/phone">Открыть с телефона</a>
 </footer>
 <div id="tooltip" class="tooltip" hidden></div>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v={{.Base.Version}}"></script>
 </body>
 </html>{{end}}

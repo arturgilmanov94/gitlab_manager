@@ -1247,3 +1247,20 @@ func TestFixButtonsFollowRights(t *testing.T) {
 		t.Fatal("an assignee gets «Исправить CI»")
 	}
 }
+
+// CSS and JS are linked with the version and served no-cache: after an upgrade the browser takes the new files.
+func TestStaticAssetsVersioned(t *testing.T) {
+	ts, _, _ := newServer(t)
+	_, body := get(t, ts.URL+"/")
+	if !strings.Contains(body, `/static/style.css?v=test"`) || !strings.Contains(body, `/static/app.js?v=test"`) {
+		t.Fatal("static links must carry the version")
+	}
+	resp, err := http.Get(ts.URL + "/static/style.css?v=test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 || resp.Header.Get("Cache-Control") != "no-cache" {
+		t.Fatalf("%d %q", resp.StatusCode, resp.Header.Get("Cache-Control"))
+	}
+}
