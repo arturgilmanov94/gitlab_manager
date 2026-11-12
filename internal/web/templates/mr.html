@@ -111,7 +111,15 @@
 <nav class="page-tabs" data-page-tabs>
   <a href="#review" data-tab="review" class="active">Ревью и действия</a>
   <a href="#discussions" data-tab="discussions" data-mr="{{.MR.ID}}">Обсуждения{{if .Threads.Open}} <span class="count{{if .Threads.Waiting}} hot{{end}} tip" data-tip="Открытых тредов: {{len .Threads.Open}}{{if .Threads.Waiting}}, ждут вашего ответа: {{.Threads.Waiting}}{{end}}">{{len .Threads.Open}}</span>{{else if .Threads.Total}} <span class="count">✓</span>{{end}}</a>
+  <a href="#changes" data-tab="changes">Изменения{{if .MR.ChangesCount}} <span class="count">{{.MR.ChangesCount}}</span>{{end}}</a>
 </nav>
+
+<div data-pane="changes" hidden>
+<section class="card">
+  <div class="card-head"><h2>Изменения MR</h2><span class="small muted">HEAD <span class="mono">{{shortSHA .MR.HeadSHA}}</span> · замечания AI и треды отмечены на строках</span></div>
+  <div id="diff-root" data-mr="{{.MR.ID}}"><p class="muted">Загружается…</p></div>
+</section>
+</div>
 
 <div data-pane="discussions" hidden>
 {{template "threads" .}}

@@ -432,7 +432,49 @@
       });
       body.after(more);
     });
-    const paneOf = (hash) => (hash === '#discussions' || hash.startsWith('#thread-')) ? 'discussions' : 'review';
+    const paneOf = (hash) => (hash === '#discussions' || hash.startsWith('#thread-')) ? 'discussions'
+      : (hash === '#changes' || hash.startsWith('#file-')) ? 'changes' : 'review';
+    // «Изменения»: the file list of the chosen mode is loaded when the tab opens, each file's diff when the file
+    // comes into view or is unfolded.
+    const diffRoot = document.getElementById('diff-root');
+    let diffMode = null;
+    const loadFile = async (file) => {
+      if (file.dataset.loaded || !file.open) return;
+      file.dataset.loaded = '1';
+      const box = file.querySelector('[data-diff-body]');
+      try {
+        const res = await fetch(`/api/mrs/${diffRoot.dataset.mr}/diff/${file.dataset.diffFile}?mode=${diffMode}`);
+        box.innerHTML = await res.text();
+      } catch (e) { delete file.dataset.loaded; box.innerHTML = '<p class="muted">не удалось загрузить — откройте файл ещё раз</p>'; }
+    };
+    const watcher = ('IntersectionObserver' in window) ? new IntersectionObserver((entries) => entries.forEach((en) => { if (en.isIntersecting) loadFile(en.target); }), { rootMargin: '600px 0px' }) : null;
+    const loadDiff = async (mode, then) => {
+      diffMode = mode;
+      try { sessionStorage.setItem('diff-mode-' + diffRoot.dataset.mr, mode); } catch (e) { /* private mode */ }
+      diffRoot.classList.add('loading');
+      try {
+        const res = await fetch(`/api/mrs/${diffRoot.dataset.mr}/diff?mode=${mode}`);
+        diffRoot.innerHTML = await res.text();
+      } catch (e) { diffRoot.innerHTML = '<p class="muted">не удалось загрузить изменения</p>'; }
+      diffRoot.classList.remove('loading');
+      diffRoot.querySelectorAll('[data-diff-mode]').forEach((b) => b.addEventListener('click', () => { if (b.getAttribute('aria-disabled') !== 'true' && b.dataset.diffMode !== diffMode) loadDiff(b.dataset.diffMode); }));
+      diffRoot.querySelectorAll('details.diff-file').forEach((f) => {
+        f.addEventListener('toggle', () => loadFile(f));
+        if (watcher) watcher.observe(f); else loadFile(f);
+      });
+      if (then) then();
+    };
+    const openChanges = (hash) => {
+      const jump = () => {
+        if (!hash.startsWith('#file-')) return;
+        const f = document.getElementById(hash.slice(1));
+        if (f) { f.open = true; loadFile(f); f.scrollIntoView({ block: 'start' }); }
+      };
+      if (diffMode) { jump(); return; }
+      let saved = 'all';
+      try { saved = sessionStorage.getItem('diff-mode-' + diffRoot.dataset.mr) || 'all'; } catch (e) { /* private mode */ }
+      loadDiff(saved, jump);
+    };
     const show = (hash, scroll) => {
       const name = paneOf(hash);
       panes.forEach((p) => { p.hidden = p.dataset.pane !== name; });
@@ -442,6 +484,7 @@
         foldLong(document);
         if (!synced) { synced = true; syncThreads(nav.querySelector('[data-tab="discussions"]').dataset.mr, null, false); }
       }
+      if (name === 'changes' && diffRoot) { openChanges(hash); return; }
       if (scroll && hash.length > 1 && hash !== '#discussions') {
         const target = document.getElementById(hash.slice(1));
         if (target && target.tagName !== 'NAV') {
@@ -453,8 +496,8 @@
     };
     nav.querySelectorAll('a').forEach((a) => a.addEventListener('click', (e) => {
       e.preventDefault();
-      history.replaceState(null, '', a.dataset.tab === 'review' ? location.pathname + location.search : '#discussions');
-      show(a.dataset.tab === 'review' ? '' : '#discussions', false);
+      history.replaceState(null, '', a.dataset.tab === 'review' ? location.pathname + location.search : '#' + a.dataset.tab);
+      show(a.dataset.tab === 'review' ? '' : '#' + a.dataset.tab, false);
     }));
     window.addEventListener('hashchange', () => show(location.hash, true));
     document.querySelectorAll('details.threads-group').forEach((g) => g.addEventListener('toggle', () => {

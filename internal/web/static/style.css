@@ -414,8 +414,37 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
 .gitlab-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
 .btn-success { background: var(--success); border-color: var(--success); color: #fff; }
 .btn-success:hover { filter: brightness(0.95); }
+/* «Изменения»: mode switch, file list, unified diff with marks */
+.diff-modes { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin-bottom: 10px; }
+.diff-modes .fchip[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+#diff-root.loading { opacity: 0.5; }
+.diff-toc-list { list-style: none; margin: 6px 0 12px; padding: 0; columns: 2 420px; column-gap: 24px; }
+.diff-toc-list li { break-inside: avoid; padding: 1px 0; overflow-wrap: anywhere; }
+.dstatus { display: inline-block; width: 16px; text-align: center; font-weight: 700; font-family: var(--mono); font-size: 11px; border-radius: 3px; }
+.dstatus-A { color: var(--success); } .dstatus-D { color: var(--danger); } .dstatus-R { color: var(--primary); } .dstatus-M { color: var(--muted); }
+.diff-file { border: 1px solid var(--border); border-radius: var(--radius); margin: 0 0 12px; background: var(--surface); scroll-margin-top: 60px; }
+.diff-file > summary { padding: 6px 10px; cursor: pointer; background: var(--surface-2); position: sticky; top: 52px; z-index: 5; overflow-wrap: anywhere; border-radius: var(--radius); }
+.diff-file[open] > summary { border-bottom: 1px solid var(--border); border-radius: var(--radius) var(--radius) 0 0; }
+.diff-file .diff-gl { float: right; margin-left: 10px; }
+.diff-body { overflow-x: auto; }
+/* a file not loaded yet keeps some height, so that only the files near the screen are fetched */
+.diff-file[open]:not([data-loaded]) .diff-body { min-height: 240px; }
+.diff-wait, .diff-note, .diff-loose { padding: 6px 10px; }
+.diff-loose { border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+.diff-table { border-collapse: collapse; width: 100%; font-size: 12px; line-height: 1.5; }
+.diff-table td { padding: 0 8px; vertical-align: top; }
+.diff-table td.ln { width: 1%; min-width: 38px; text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--border); white-space: nowrap; }
+.diff-table td.tx { white-space: pre; }
+.diff-table .dr-add { background: var(--success-soft); }
+.diff-table .dr-del { background: var(--danger-soft); }
+.diff-table .dr-hunk td { background: var(--surface-2); color: var(--muted); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.diff-table .dr-marks td.tx { white-space: normal; font-family: var(--font, inherit); padding: 4px 8px; background: var(--warning-soft); }
+.diff-mark { display: inline-block; margin: 1px 8px 1px 0; padding: 1px 8px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border-strong); color: var(--fg); font-size: 12px; font-family: var(--font, system-ui, sans-serif); }
+.diff-mark:hover { text-decoration: none; border-color: var(--primary); }
+.diff-mark.dm-done { opacity: 0.65; }
 /* MR page tabs and live threads */
-.page-tabs { display: flex; gap: 2px; margin: 0 0 14px; border-bottom: 1px solid var(--border); }
+.page-tabs { display: flex; gap: 2px; margin: 0 0 14px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+.page-tabs::-webkit-scrollbar { display: none; }
 .page-tabs a { color: var(--fg-2); padding: 8px 14px; display: flex; align-items: center; gap: 6px; border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500; white-space: nowrap; }
 .page-tabs a:hover { color: var(--fg); text-decoration: none; background: var(--surface-2); }
 .page-tabs a.active { color: var(--fg); border-bottom-color: var(--primary); }

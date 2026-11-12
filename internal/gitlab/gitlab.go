@@ -143,6 +143,7 @@ type Client interface {
 	ListOpenIssues(host, username, projectPath string) ([]map[string]any, error)
 	CreateMR(host, projectPath, sourceBranch, targetBranch, title, description string) (string, error)
 	Compare(ref Ref, from, to string) (Changes, error)
+	CompareDiffs(ref Ref, from, to string) ([]FileDiff, error)
 	FailedJobs(ref Ref, pipelineID int64) ([]Job, error)
 	JobTrace(ref Ref, jobID int64, tailLines int) (string, error)
 	MRDiffs(ref Ref) ([]FileDiff, error)
@@ -435,6 +436,23 @@ func (g *Glab) Compare(ref Ref, from, to string) (Changes, error) {
 		return Changes{}, err
 	}
 	return ParseCompare(obj), nil
+}
+
+// CompareDiffs returns the per-file diffs between two commits of the MR's project, from → to directly (what
+// «compare versions» of an MR shows), not from their merge base.
+func (g *Glab) CompareDiffs(ref Ref, from, to string) ([]FileDiff, error) {
+	obj, err := g.apiObject(ref.Host, fmt.Sprintf("projects/%s/repository/compare?from=%s&to=%s&straight=true", ref.EncodedProject(), url.QueryEscape(from), url.QueryEscape(to)))
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := obj["diffs"].([]any)
+	var list []map[string]any
+	for _, item := range raw {
+		if m, ok := item.(map[string]any); ok {
+			list = append(list, m)
+		}
+	}
+	return ParseDiffs(list), nil
 }
 
 // ParseCompare counts commits, files and +/- lines in a compare payload (diff text is counted line by line).

@@ -343,6 +343,14 @@ func (f *FakeGitLab) Compare(ref gitlab.Ref, from, to string) (gitlab.Changes, e
 	return gitlab.Changes{Commits: 2, Files: 1, Additions: 10, Deletions: 3}, nil
 }
 
+// CompareDiffs returns a canned one-file diff of what arrived between two commits.
+func (f *FakeGitLab) CompareDiffs(ref gitlab.Ref, from, to string) ([]gitlab.FileDiff, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, "compare-diffs "+from+".."+to)
+	return []gitlab.FileDiff{{OldPath: "src/B.php", NewPath: "src/B.php", Diff: "@@ -10,2 +10,3 @@ class B\n ctx\n+since " + from + "\n ctx2\n"}}, nil
+}
+
 func (f *FakeGitLab) CreateMR(host, projectPath, sourceBranch, targetBranch, title, description string) (string, error) {
 	f.CreatedMR = fmt.Sprintf("%s|%s|%s|%s|%s", projectPath, sourceBranch, targetBranch, title, description)
 	return "https://gitlab.example.com/group/sub/project/-/merge_requests/100", nil

@@ -1054,6 +1054,30 @@ func TestApproveOnPages(t *testing.T) {
 	}
 }
 
+// The «Изменения» tab is filled by fragments: the file list with the mode switch, then one file's diff.
+func TestChangesTab(t *testing.T) {
+	ts, _, _ := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `data-tab="changes"`) || !strings.Contains(body, `id="diff-root" data-mr="1"`) {
+		t.Fatal("the MR page has the tab")
+	}
+	code, list := get(t, ts.URL+"/api/mrs/1/diff?mode=all")
+	for _, want := range []string{`data-diff-mode="all"`, `data-diff-mode="seen"`, `aria-disabled="true"`, `id="file-0" data-diff-file="0" open`, "src/A.php", "1 файлов"} {
+		if code != 200 || !strings.Contains(list, want) {
+			t.Fatalf("%d: file list lacks %q:\n%s", code, want, list)
+		}
+	}
+	code, file := get(t, ts.URL+"/api/mrs/1/diff/0?mode=all")
+	for _, want := range []string{`class="dr-add"`, `class="dr-del"`, "+new line", "dr-hunk", `href="#thread-`} {
+		if code != 200 || !strings.Contains(file, want) {
+			t.Fatalf("%d: file diff lacks %q:\n%s", code, want, file)
+		}
+	}
+	if code, body := get(t, ts.URL+"/api/mrs/1/diff/9?mode=all"); code != 400 || !strings.Contains(body, "файл не найден") {
+		t.Fatalf("%d %s", code, body)
+	}
+}
+
 func TestNoteText(t *testing.T) {
 	got := noteText("see ![image](/uploads/abc/image.png){width=814 height=474} and [log](/uploads/d/log.txt)", "https://gl.example.com/g/p/-/merge_requests/5")
 	if got != "see [вложение: image](https://gl.example.com/g/p/uploads/abc/image.png) and [вложение: log](https://gl.example.com/g/p/uploads/d/log.txt)" {

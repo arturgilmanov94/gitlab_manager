@@ -1,0 +1,47 @@
+{{/* The «Изменения» tab of an MR: the file list of a mode (diff-files) and the diff of one file (diff-file). */}}
+{{define "diff-files"}}
+{{$v := .View}}{{$mr := .MR}}
+<div class="diff-modes">
+  {{range $v.Modes}}<button type="button" class="fchip tip{{if eq .Key $v.Mode}} on{{end}}" data-diff-mode="{{.Key}}" data-tip="{{.Hint}}"{{if not .Available}} aria-disabled="true"{{end}}>{{.Label}}{{if and .From .Available}} <span class="mono small">{{shortSHA .From}}…</span>{{end}}</button>{{end}}
+  {{if $v.Files}}<span class="small muted">{{len $v.Files}} файлов · <span class="text-success">+{{$v.Additions}}</span> <span class="text-danger">−{{$v.Deletions}}</span>{{if $v.From}} · <span class="mono">{{shortSHA $v.From}}..{{shortSHA $v.To}}</span>{{end}}</span>{{end}}
+</div>
+{{if $v.Note}}<p class="muted">{{$v.Note}}</p>{{end}}
+{{if $v.Files}}
+<details class="section diff-toc"{{if le (len $v.Files) 25}} open{{end}}>
+  <summary>Файлы ({{len $v.Files}})</summary>
+  <ul class="diff-toc-list">
+    {{range $v.Files}}<li><a href="#file-{{.Index}}" class="mono small"><span class="dstatus dstatus-{{.Status}}">{{.Status}}</span> {{.Path}}</a> <span class="small"><span class="text-success">+{{.Additions}}</span> <span class="text-danger">−{{.Deletions}}</span>{{if .Marks}} <span class="count tip" data-tip="Замечаний и тредов в этом файле: {{.Marks}}">{{.Marks}}</span>{{end}}</span></li>{{end}}
+  </ul>
+</details>
+{{range $v.Files}}
+<details class="diff-file" id="file-{{.Index}}" data-diff-file="{{.Index}}"{{if not .Folded}} open{{end}}>
+  <summary><span class="dstatus dstatus-{{.Status}}">{{.Status}}</span> <span class="mono">{{.Path}}</span>{{if and (eq .Status "R") (ne .OldPath .Path)}} <span class="muted small mono">← {{.OldPath}}</span>{{end}}
+    <span class="small"><span class="text-success">+{{.Additions}}</span> <span class="text-danger">−{{.Deletions}}</span>{{if .Marks}} <span class="count">{{.Marks}}</span>{{end}}</span>
+    {{with mrDiffLink $mr.WebURL .Path}}<a class="small ext diff-gl" href="{{.}}" target="_blank" rel="noopener">в GitLab</a>{{end}}
+  </summary>
+  <div class="diff-body" data-diff-body><div class="small muted diff-wait">загружается…</div></div>
+</details>
+{{end}}
+{{end}}
+{{end}}
+
+{{define "diff-file"}}
+{{with .Body}}
+{{if .Note}}<div class="small muted diff-note">{{.Note}}</div>{{end}}
+{{if .Loose}}<div class="diff-loose small">Вне показанных строк: {{range .Loose}}{{template "diff-mark" .}}{{end}}</div>{{end}}
+{{if .Rows}}
+<table class="diff-table mono">
+  {{range .Rows}}
+  {{if eq .Kind "hunk"}}<tr class="dr-hunk"><td class="ln"></td><td class="ln"></td><td class="tx">{{.Text}}</td></tr>
+  {{else}}<tr class="dr-{{.Kind}}"><td class="ln">{{if .Old}}{{.Old}}{{end}}</td><td class="ln">{{if .New}}{{.New}}{{end}}</td><td class="tx">{{if eq .Kind "add"}}+{{else if eq .Kind "del"}}−{{else}} {{end}}{{.Text}}</td></tr>{{end}}
+  {{if .Marks}}<tr class="dr-marks"><td class="ln"></td><td class="ln"></td><td class="tx">{{range .Marks}}{{template "diff-mark" .}}{{end}}</td></tr>{{end}}
+  {{end}}
+</table>
+{{end}}
+{{end}}
+{{end}}
+
+{{define "diff-mark"}}
+{{if eq .Kind "finding"}}<a class="diff-mark dm-finding{{if ne .Status "open"}} dm-done{{end}}" href="#finding-{{.ID}}"><span class="sev sev-{{.Severity}}">{{.Severity}}</span> {{.Text}}{{if ne .Status "open"}} <span class="muted">· {{fstatusLabel .Status}}</span>{{end}}</a>
+{{else}}<a class="diff-mark dm-thread{{if eq .Status "resolved"}} dm-done{{end}}" href="#thread-{{.ID}}">💬 @{{.Author}}: {{.Text}}{{if eq .Status "resolved"}} <span class="muted">· решён</span>{{end}}</a>{{end}}
+{{end}}

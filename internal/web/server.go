@@ -316,6 +316,25 @@ func (s *Server) routes() {
 		mr, err := s.svc.RefreshMR(pathID(r))
 		s.result(w, map[string]any{"mr": mr}, err)
 	})
+	// The «Изменения» tab: HTML fragments — the file list of a mode, then each file's diff when it is opened.
+	s.mux.HandleFunc("GET /api/mrs/{id}/diff", func(w http.ResponseWriter, r *http.Request) {
+		mr, _ := s.svc.DB.GetMR(pathID(r))
+		view, err := s.svc.MRDiff(pathID(r), r.URL.Query().Get("mode"))
+		if err != nil || mr == nil {
+			s.fragmentError(w, err)
+			return
+		}
+		s.fragment(w, "mr", "diff-files", map[string]any{"View": view, "MR": mr})
+	})
+	s.mux.HandleFunc("GET /api/mrs/{id}/diff/{index}", func(w http.ResponseWriter, r *http.Request) {
+		index, _ := strconv.Atoi(r.PathValue("index"))
+		body, err := s.svc.MRDiffFile(pathID(r), r.URL.Query().Get("mode"), index)
+		if err != nil {
+			s.fragmentError(w, err)
+			return
+		}
+		s.fragment(w, "mr", "diff-file", map[string]any{"Body": body})
+	})
 	// Approve / unapprove and a retry of the failed pipeline: writes to GitLab by the developer's button.
 	s.mux.HandleFunc("POST /api/mrs/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
 		_, err := s.svc.ApproveMR(pathID(r), true, readBody(r)["sha"])
@@ -540,6 +559,29 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 	if err := s.pages[page].ExecuteTemplate(w, "layout", data); err != nil {
 		http.Error(w, err.Error(), 500)
 	}
+}
+
+// fragment renders a named template of a page as a piece of HTML (loaded into an open page by its script).
+func (s *Server) fragment(w http.ResponseWriter, page, name string, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.pages[page].ExecuteTemplate(w, name, data); err != nil {
+		http.Error(w, err.Error(), 500)
+	}
+}
+
+// fragmentError answers a fragment request with a readable message.
+func (s *Server) fragmentError(w http.ResponseWriter, err error) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	status, text := 500, "не удалось загрузить"
+	var ue *app.UserError
+	if errors.As(err, &ue) {
+		status = 400
+	}
+	if err != nil {
+		text = err.Error()
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(`<p class="muted">` + template.HTMLEscapeString(text) + `</p>`))
 }
 
 // index lists the MRs that still concern the developer (open, not approved by me, I have a role or added by hand).

@@ -235,12 +235,20 @@ func (d *DB) SetMRHidden(id int64, hidden bool) error {
 
 // SetMRSeen marks an MR as seen (dimmed, at the end of the list) or clears the mark.
 func (d *DB) SetMRSeen(id int64, seen bool) error {
-	at := ""
-	if seen {
-		at = Now()
+	if !seen {
+		_, err := d.sql.Exec("UPDATE merge_requests SET seen_at = '' WHERE id = ?", id)
+		return err
 	}
-	_, err := d.sql.Exec("UPDATE merge_requests SET seen_at = ? WHERE id = ?", at, id)
+	// seen_sha remembers the head that was looked at; it outlives the mark (see SeenSHA).
+	_, err := d.sql.Exec("UPDATE merge_requests SET seen_at = ?, seen_sha = head_sha WHERE id = ?", Now(), id)
 	return err
+}
+
+// SeenSHA is the head of the MR when the developer last marked it as seen ("" = never).
+func (d *DB) SeenSHA(id int64) string {
+	var sha string
+	_ = d.sql.QueryRow("SELECT seen_sha FROM merge_requests WHERE id = ?", id).Scan(&sha)
+	return sha
 }
 
 // SetMRReviewFocus stores what the next reviews of an MR should pay attention to.

@@ -69,6 +69,7 @@ type core struct {
 	changes   map[string]gitlab.Changes       // compare results per "ref from..to" (Changes)
 	jobs      map[string][]prompts.FailedJob  // failed jobs with log tails per "ref pipeline" (FailedJobsFor)
 	contexts  map[string]*prompts.MRContext   // prefetched files and diff per "ref sha" (reviewContext)
+	diffs     map[string][]gitlab.FileDiff    // per-file diffs per "ref from..to" (MRDiff)
 	decisions map[int64]chan approvalDecision // pending approval id → channel the run goroutine waits on
 	runRules  map[int64]map[string]bool       // «allow such calls until the end of the run»: run id → SimilarKey
 	sessions  map[string]int64                // agent session id → the run resuming it now (one --resume at a time)
