@@ -476,6 +476,8 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
 .note-body { overflow-wrap: anywhere; }
 .note-body > :first-child { margin-top: 2px; } .note-body > :last-child { margin-bottom: 2px; }
 .note-body img { max-width: 100%; }
+.note-fold { margin: 6px 0; padding: 4px 10px; border-left: 2px solid var(--border-strong); background: var(--surface-2); border-radius: 0 var(--radius) var(--radius) 0; }
+.note-fold > summary { cursor: pointer; color: var(--fg-2); font-weight: 600; }
 .thread-ai { margin-top: 8px; padding: 8px 10px; border-radius: var(--radius); background: var(--surface-2); }
 .note-body.long { max-height: 240px; overflow: hidden; position: relative; }
 .note-body.long::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 48px; background: linear-gradient(transparent, var(--surface)); }

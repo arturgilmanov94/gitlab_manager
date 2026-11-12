@@ -156,7 +156,7 @@
     {{range .Comments}}
     <div class="note">
       <div class="note-head small"><b>@{{.Author}}</b> <span class="muted">· {{when .CreatedAt}}</span></div>
-      <div class="note-body">{{md (noteText .Body $.Issue.WebURL) (blobBase $.Issue.WebURL) ""}}</div>
+      <div class="note-body">{{note (noteText .Body $.Issue.WebURL) (blobBase $.Issue.WebURL) ""}}</div>
     </div>
     {{end}}
   </details>

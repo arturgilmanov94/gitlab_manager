@@ -185,3 +185,36 @@ func noteText(body, mrURL string) string {
 	}
 	return uploadRe.ReplaceAllString(body, "[вложение: ${1}]("+project+"${2})")
 }
+
+// GitLab comments (bot reports especially) fold parts with HTML <details><summary>…</summary> … </details>. The
+// renderer escapes HTML, so the folds are turned into marker paragraphs before rendering and back into real
+// <details> after — only when every <details> is closed, otherwise the text is shown as written.
+var (
+	detailsOpenRe  = regexp.MustCompile(`(?is)<details[^>]*>\s*(?:<summary[^>]*>(.*?)</summary>)?`)
+	detailsCloseRe = regexp.MustCompile(`(?i)</details>`)
+	foldOpenRe     = regexp.MustCompile(`<p>\x00FOLD\x01(.*?)\x00</p>`)
+)
+
+// renderNote renders a comment with its <details> folds.
+func renderNote(text, base, sha string) template.HTML {
+	opens, closes := len(detailsOpenRe.FindAllStringIndex(text, -1)), len(detailsCloseRe.FindAllStringIndex(text, -1))
+	if opens == 0 || opens != closes {
+		return renderMarkdown(text, base, sha)
+	}
+	text = detailsOpenRe.ReplaceAllStringFunc(text, func(m string) string {
+		summary := strings.TrimSpace(detailsOpenRe.FindStringSubmatch(m)[1])
+		summary = strings.Join(strings.Fields(regexp.MustCompile(`<[^>]+>`).ReplaceAllString(summary, "")), " ")
+		if summary == "" {
+			summary = "подробнее"
+		}
+		return "\n\n\x00FOLD\x01" + summary + "\x00\n\n"
+	})
+	text = detailsCloseRe.ReplaceAllString(text, "\n\n\x00ENDFOLD\x00\n\n")
+	html := string(renderMarkdown(text, base, sha))
+	html = foldOpenRe.ReplaceAllString(html, `<details class="note-fold"><summary>$1</summary>`)
+	html = strings.ReplaceAll(html, "<p>\x00ENDFOLD\x00</p>", "</details>")
+	if strings.Contains(html, "\x00") { // a marker landed somewhere unexpected: show the comment as written
+		return renderMarkdown(strings.NewReplacer("\x00FOLD\x01", "", "\x00ENDFOLD\x00", "", "\x00", "").Replace(text), base, sha)
+	}
+	return template.HTML(html)
+}

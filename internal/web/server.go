@@ -149,6 +149,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 		"errorTitle": errorTitle,
 		"md":         renderMarkdown,
 		"noteText":   noteText,
+		"note":       renderNote,
 		"stageLabel": db.StageLabel,
 		"roleWords":  func(roles string) string { return strings.ReplaceAll(roles, ",", " ") },
 		"hasRole": func(roles, role string) bool {

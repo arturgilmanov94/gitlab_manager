@@ -43,7 +43,7 @@
     {{range $i, $n := $d.People}}
     <div class="note{{if $i}} note-reply{{end}}">
       <div class="note-head small"><b>@{{$n.Author}}</b>{{if $n.AuthorName}} <span class="muted">{{$n.AuthorName}}</span>{{end}} <span class="muted">· {{when $n.CreatedAt}}</span></div>
-      <div class="note-body">{{md (noteText $n.Body $r.MR.WebURL) $r.Blob $r.SHA}}</div>
+      <div class="note-body">{{note (noteText $n.Body $r.MR.WebURL) $r.Blob $r.SHA}}</div>
     </div>
     {{end}}
   </div>

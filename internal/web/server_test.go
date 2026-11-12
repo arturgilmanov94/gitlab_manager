@@ -1163,6 +1163,26 @@ func TestLocalTaskPages(t *testing.T) {
 	}
 }
 
+func TestRenderNoteFolds(t *testing.T) {
+	got := string(renderNote("Head\n\n<details>\n<summary>Сделано</summary>\n\n- one\n- **two**\n\n</details>\n\nTail", "", ""))
+	for _, want := range []string{`<details class="note-fold"><summary>Сделано</summary>`, "<li>one</li>", "<strong>two</strong>", "</details>", "<p>Tail</p>"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("lacks %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "&lt;details") || strings.Contains(got, "\x00") {
+		t.Fatal(got)
+	}
+	// Unbalanced: shown as written (escaped), nothing swallowed.
+	if got := string(renderNote("<details><summary>x</summary> open only", "", "")); !strings.Contains(got, "&lt;details&gt;") {
+		t.Fatal(got)
+	}
+	// Script-like summary stays escaped.
+	if got := string(renderNote("<details><summary><b>S</b><script>x</script></summary>body</details>", "", "")); strings.Contains(got, "<script>") || strings.Contains(got, "<b>") {
+		t.Fatal(got)
+	}
+}
+
 func TestNoteText(t *testing.T) {
 	got := noteText("see ![image](/uploads/abc/image.png){width=814 height=474} and [log](/uploads/d/log.txt)", "https://gl.example.com/g/p/-/merge_requests/5")
 	if got != "see [вложение: image](https://gl.example.com/g/p/uploads/abc/image.png) and [вложение: log](https://gl.example.com/g/p/uploads/d/log.txt)" {
