@@ -825,16 +825,17 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	runs, _ := s.svc.DB.ListRunsForMR(mr.ID)
-	latest, _ := s.svc.DB.LatestDoneReview(mr.ID)
+	svc := s.svc.ForMR(mr.ID) // skills, worktrees and review directories of the object's project
+	runs, _ := svc.DB.ListRunsForMR(mr.ID)
+	latest, _ := svc.DB.LatestDoneReview(mr.ID)
 	var findings []db.Finding
 	var discussions []db.Discussion
 	if latest != nil {
-		findings, _ = s.svc.DB.ListFindings(latest.ID)
-		discussions, _ = s.svc.DB.ListDiscussions(latest.ID)
+		findings, _ = svc.DB.ListFindings(latest.ID)
+		discussions, _ = svc.DB.ListDiscussions(latest.ID)
 	}
-	active, _ := s.svc.DB.ActiveRunForMR(mr.ID)
-	username := s.svc.CurrentUser()
+	active, _ := svc.DB.ActiveRunForMR(mr.ID)
+	username := svc.CurrentUser()
 	stale := latest != nil && latest.HeadSHA != "" && latest.HeadSHA != mr.HeadSHA
 	var lastRun *db.RunSummary
 	if len(runs) > 0 {
@@ -870,17 +871,17 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 		sha = latest.HeadSHA
 	}
 	base := s.base("mrs", fmt.Sprintf("!%d %s", mr.IID, mr.Title))
-	base.DataScope, base.DataScopeID, base.DataVersion = "mr", mr.ID, s.svc.DataVersion(mr.ID)
+	base.DataScope, base.DataScopeID, base.DataVersion = "mr", mr.ID, svc.DataVersion(mr.ID)
 	var queuePos int64 = -1
 	if active != nil && active.Status == db.StatusQueued {
-		queuePos = s.svc.DB.QueuePosition(active.ID)
+		queuePos = svc.DB.QueuePosition(active.ID)
 	}
 	s.render(w, "mr", map[string]any{
 		"Base": base, "MR": mr, "QueuePos": queuePos, "Runs": runs, "Latest": latest,
-		"Sessions":   s.svc.Resumable(runs, s.svc.ReviewDirs(mr)...),
+		"Sessions":   svc.Resumable(runs, svc.ReviewDirs(mr)...),
 		"Changes":    changesIf(stale, s.svc, mr, latest),
-		"StandSkill": s.svc.StandSkill(), "StandTestSkill": s.svc.SkillFor(db.KindStandTest), "Stand": app.LatestStandFor(runs, mr.SourceBranch),
-		"FailedJobs": s.svc.FailedJobsFor(mr), "CIAnalysis": latestCIAnalysis(runs, mr.HeadSHA),
+		"StandSkill": svc.StandSkill(), "StandTestSkill": svc.SkillFor(db.KindStandTest), "Stand": app.LatestStandFor(runs, mr.SourceBranch),
+		"FailedJobs": svc.FailedJobsFor(mr), "CIAnalysis": latestCIAnalysis(runs, mr.HeadSHA),
 		"Findings": findings, "Discussions": discussions, "Active": active, "LastRun": lastRun,
 		"Stale": stale, "State": state, "OpenMajor": major, "OpenMinor": minor, "OpenInfo": info,
 		"IsMine":   username != "" && mr.Author == username,
@@ -897,8 +898,9 @@ func (s *Server) issuePage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	runs, _ := s.svc.DB.ListRunsForIssue(issue.ID)
-	active, _ := s.svc.DB.ActiveRunForIssue(issue.ID)
+	svc := s.svc.ForIssue(issue.ID) // skills, worktrees and review directories of the object's project
+	runs, _ := svc.DB.ListRunsForIssue(issue.ID)
+	active, _ := svc.DB.ActiveRunForIssue(issue.ID)
 	var plan, impl, failed *db.RunSummary
 	for i := range runs {
 		r := &runs[i]
@@ -927,9 +929,9 @@ func (s *Server) issuePage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "issue", map[string]any{
 		"Base": s.base("issues", fmt.Sprintf("#%d %s", issue.IID, issue.Title)), "Issue": issue, "Runs": runs, "Active": active,
 		"Plan": plan, "Impl": impl, "Failed": failed, "State": state, "LooksLikeBug": issue.LooksLikeBug(), "PlanIsBug": plan != nil && plan.Mode == "bug",
-		"PlanSessions": s.svc.Resumable(runs, s.svc.Settings.ProjectRoot), "ImplSessions": s.svc.Resumable(runs, s.svc.Worktrees.Path(issue.Ref())),
-		"DefaultBranch": issue.Ref(), "BaseBranch": s.svc.Settings.BaseBranch, "Workspaces": s.svc.IssueWorkspaces(runs),
-		"StandSkill": s.svc.StandSkill(), "StandTestSkill": s.svc.SkillFor(db.KindStandTest), "Stand": standFor(runs, impl),
+		"PlanSessions": svc.Resumable(runs, svc.Settings.ProjectRoot), "ImplSessions": svc.Resumable(runs, svc.Worktrees.Path(issue.Ref())),
+		"DefaultBranch": issue.Ref(), "BaseBranch": svc.Settings.BaseBranch, "Workspaces": svc.IssueWorkspaces(runs),
+		"StandSkill": svc.StandSkill(), "StandTestSkill": svc.SkillFor(db.KindStandTest), "Stand": standFor(runs, impl),
 	})
 }
 
@@ -960,35 +962,36 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	svc := s.svc.ForRun(run.ID) // skills, worktrees and review directories of the object's project
 	data := map[string]any{"Base": s.base("runs", fmt.Sprintf("Run #%d", run.ID)), "Run": run, "Blob": "", "SHA": run.HeadSHA}
 	if run.MRID != nil {
-		mr, _ := s.svc.DB.GetMR(*run.MRID)
+		mr, _ := svc.DB.GetMR(*run.MRID)
 		data["MR"] = mr
 		if mr != nil {
 			data["Blob"] = blobBase(mr.WebURL)
 		}
 	}
 	if run.IssueID != nil {
-		issue, _ := s.svc.DB.GetIssue(*run.IssueID)
+		issue, _ := svc.DB.GetIssue(*run.IssueID)
 		data["Issue"] = issue
 		if issue != nil {
 			data["Blob"] = blobBase(issue.WebURL)
 		}
 	}
-	if chain, _ := s.svc.DB.ListRunsBySession(run.SessionID); len(chain) > 1 {
+	if chain, _ := svc.DB.ListRunsBySession(run.SessionID); len(chain) > 1 {
 		data["Chain"] = chain
 		if chain[0].ID != run.ID {
 			data["ContinuedFrom"] = chain[0]
 		}
 	}
 	if run.ContinueRunID != nil {
-		if prev, _ := s.svc.DB.GetRun(*run.ContinueRunID); prev != nil {
+		if prev, _ := svc.DB.GetRun(*run.ContinueRunID); prev != nil {
 			data["ContinueFrom"] = prev
 		}
 	}
 	if run.IsReview() {
-		data["Findings"], _ = s.svc.DB.ListFindings(run.ID)
-		data["Discussions"], _ = s.svc.DB.ListDiscussions(run.ID)
+		data["Findings"], _ = svc.DB.ListFindings(run.ID)
+		data["Discussions"], _ = svc.DB.ListDiscussions(run.ID)
 	}
 	if run.Kind == db.KindFixFindings && run.ResultJSON != "" {
 		var report struct {
@@ -1001,7 +1004,7 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(run.ResultJSON), &report)
 		var results []fixResult
 		for _, r := range report.Results {
-			f, _ := s.svc.DB.GetFinding(r.FindingID)
+			f, _ := svc.DB.GetFinding(r.FindingID)
 			results = append(results, fixResult{Finding: f, Status: r.Status, Note: r.Note})
 		}
 		data["FixResults"] = results
@@ -1012,9 +1015,9 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		data["CIAnalysis"] = analysis
 	}
 	if run.Kind == db.KindVerifyFinding && run.FindingID != nil {
-		if finding, _ := s.svc.DB.GetFinding(*run.FindingID); finding != nil {
+		if finding, _ := svc.DB.GetFinding(*run.FindingID); finding != nil {
 			data["Finding"] = finding
-			if origin, _ := s.svc.DB.GetRun(finding.RunID); origin != nil {
+			if origin, _ := svc.DB.GetRun(finding.RunID); origin != nil {
 				data["FindingRun"] = origin
 			}
 		}
@@ -1040,17 +1043,17 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 			data["Report"] = report
 		}
 		if !run.Active() {
-			data["Worktree"] = s.svc.Worktree(run)
+			data["Worktree"] = svc.Worktree(run)
 			if run.Kind == db.KindImplement && run.IssueID != nil {
-				issue, _ := s.svc.DB.GetIssue(*run.IssueID)
-				data["MRDraft"] = s.svc.MRDraftFor(run, issue)
-				runs, _ := s.svc.DB.ListRunsForIssue(*run.IssueID)
-				data["StandSkill"], data["StandTestSkill"] = s.svc.StandSkill(), s.svc.SkillFor(db.KindStandTest)
+				issue, _ := svc.DB.GetIssue(*run.IssueID)
+				data["MRDraft"] = svc.MRDraftFor(run, issue)
+				runs, _ := svc.DB.ListRunsForIssue(*run.IssueID)
+				data["StandSkill"], data["StandTestSkill"] = svc.StandSkill(), svc.SkillFor(db.KindStandTest)
 				data["Stand"] = app.LatestStandFor(runs, run.Branch)
 			}
 		}
 	}
-	timeline := s.svc.DB.TimelineFor(run.ID)
+	timeline := svc.DB.TimelineFor(run.ID)
 	if !run.Active() {
 		// A finished run has no "current" step: its last tool call (often the raw result JSON) is not news.
 		for i := range timeline {
@@ -1058,20 +1061,20 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	data["Timeline"] = timeline
-	data["Warnings"] = s.svc.DB.RunWarnings(run.ID)
-	data["Messages"], _ = s.svc.DB.ListMessages(run.ID)
+	data["Warnings"] = svc.DB.RunWarnings(run.ID)
+	data["Messages"], _ = svc.DB.ListMessages(run.ID)
 	data["LogTail"] = tail(run.LogPath, 12000)
-	data["Approvals"], _ = s.svc.DB.ListApprovals(run.ID)
+	data["Approvals"], _ = svc.DB.ListApprovals(run.ID)
 	if run.Status == db.StatusWaiting {
-		pending, _ := s.svc.DB.PendingApproval(run.ID)
+		pending, _ := svc.DB.PendingApproval(run.ID)
 		data["Pending"] = pending
 		if pending != nil {
 			data["PendingCommand"] = app.BashCommand(*pending)
 			data["PendingRule"] = app.SimilarRule(*pending)
 		}
-		data["Questions"], _ = s.svc.DB.PendingQuestions(run.ID)
+		data["Questions"], _ = svc.DB.PendingQuestions(run.ID)
 	}
-	if all, _ := s.svc.DB.ListQuestions(run.ID); len(all) > 0 {
+	if all, _ := svc.DB.ListQuestions(run.ID); len(all) > 0 {
 		var answered []db.Question
 		for _, q := range all {
 			if q.Answered() {
@@ -1085,7 +1088,7 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(run.DenialsJSON), &denials)
 		data["Denials"] = denials
 	}
-	data["PlansDir"] = s.svc.PlansDir()
+	data["PlansDir"] = svc.PlansDir()
 	s.render(w, "run", data)
 }
 

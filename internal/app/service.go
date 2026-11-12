@@ -43,6 +43,19 @@ type Service struct {
 	terminal      *terminal.Emulator // detected once at start; nil = «Открыть в терминале» unavailable
 	terminalNote  string             // why no terminal is available
 
+	// ProjectID is the project (repository) this service works for: 0 for the root service, which routes
+	// object-bound calls to the service of the object's project (ForProject). Settings, Worktrees and project
+	// below are that project's; everything mutable and shared lives in core.
+	ProjectID int64
+	project   *[2]string // GitLab host and project path (DefaultProject)
+
+	*core
+}
+
+// core is the state shared by the root service and its per-project views: locks, queues and caches.
+type core struct {
+	root      *Service                    // the service New returned (per-project views are made from it)
+	views     map[int64]*worktree.Manager // worktree manager per project id
 	sem       chan struct{}
 	mrSync    sync.Mutex              // one MR sync at a time (button and background sync)
 	issueSync sync.Mutex              // one issue sync at a time
@@ -60,7 +73,6 @@ type Service struct {
 	username  string                          // GitLab username, cached once known (CurrentUser)
 	userTried time.Time                       // last lookup attempt
 	userMu    sync.Mutex                      // guards username/userTried
-	project   *[2]string
 	wg        sync.WaitGroup
 }
 
@@ -74,14 +86,18 @@ type approvalDecision struct {
 func New(settings *config.Settings, database *db.DB, gl gitlab.Client, runners []runner.Runner) *Service {
 	em, note := terminal.Detect(settings.TerminalCmd)
 	s := &Service{
-		Settings:  settings,
-		DB:        database,
-		GitLab:    gl,
-		Runners:   map[string]runner.Runner{},
-		sem:       make(chan struct{}, settings.RunConcurrency),
-		cancels:   map[int64]context.CancelFunc{},
-		decisions: map[int64]chan approvalDecision{},
+		Settings: settings,
+		DB:       database,
+		GitLab:   gl,
+		Runners:  map[string]runner.Runner{},
+		core: &core{
+			sem:       make(chan struct{}, settings.RunConcurrency),
+			cancels:   map[int64]context.CancelFunc{},
+			decisions: map[int64]chan approvalDecision{},
+			views:     map[int64]*worktree.Manager{},
+		},
 	}
+	s.root = s
 	s.terminal, s.terminalNote = em, note
 	if database != nil {
 		s.applySkillSettings()
@@ -97,6 +113,7 @@ func New(settings *config.Settings, database *db.DB, gl gitlab.Client, runners [
 	if settings.ProjectRoot != "" {
 		s.Worktrees = &worktree.Manager{Root: settings.ProjectRoot, Dir: settings.WorktreeDir, BaseBranch: settings.BaseBranch}
 	}
+	s.ensureProjects()
 	return s
 }
 
@@ -467,6 +484,7 @@ func (s *Service) fetchMRPartial(ref gitlab.Ref, manual bool) (*db.MergeRequest,
 		row.MyRoles = strings.Join(roles, ",")
 	}
 	mr, err := s.DB.UpsertMR(row)
+	s.assignMR(mr)
 	return mr, strings.Join(problems, "; "), err
 }
 
@@ -482,6 +500,9 @@ func (s *Service) AddMR(reference string) (*db.MergeRequest, error) {
 
 // RefreshMR re-reads a merge request from GitLab.
 func (s *Service) RefreshMR(id int64) (*db.MergeRequest, error) {
+	if v := s.forMR(id); v != s {
+		return v.RefreshMR(id)
+	}
 	mr, err := s.DB.GetMR(id)
 	if err != nil || mr == nil {
 		return nil, userErr("merge request #%d is not in the dashboard", id)
@@ -517,16 +538,35 @@ func (s *Service) SyncMRs() (SyncResult, error) {
 	if username == "" {
 		return SyncResult{}, userErr("glab is not authenticated for %s (run `glab auth login --hostname %s`)", host, host)
 	}
-	filter := ""
+	// GITLAB_SYNC_ONLY_PROJECT: the MRs of every project's GitLab project; otherwise every MR of mine on the host.
+	type listing struct{ host, filter string }
+	listings := []listing{{host, ""}}
 	if s.Settings.GitLabSyncOnlyProject {
-		filter = project
+		listings = []listing{{host, project}}
+		for _, p := range s.Projects() {
+			if p.ID == s.root.ProjectID {
+				continue
+			}
+			if h, path := s.ForProject(p.ID).DefaultProject(); h != "" && path != "" {
+				listings = append(listings, listing{h, path})
+			}
+		}
 	}
-	items, err := s.GitLab.ListOpenMRs(host, username, s.Settings.GitLabSyncRoles, filter)
-	if err != nil {
-		return SyncResult{}, &UserError{err.Error()}
+	var items []map[string]any
+	var filters []string
+	for i, l := range listings {
+		list, err := s.GitLab.ListOpenMRs(l.host, username, s.Settings.GitLabSyncRoles, l.filter)
+		if err != nil {
+			if i == 0 {
+				return SyncResult{}, &UserError{err.Error()}
+			}
+			continue // another project's listing failed: its known MRs are still refreshed one by one below
+		}
+		items = append(items, list...)
+		filters = append(filters, firstOf(l.filter, "*"))
 	}
 	started := time.Now()
-	result := SyncResult{Username: username, Project: firstOf(filter, "*")}
+	result := SyncResult{Username: username, Project: strings.Join(filters, ", ")}
 	// Every MR GitLab lists for me plus every open MR already in the dashboard is refreshed individually (the
 	// list payload lacks pipeline/divergence/approval details), then classified: still mine → main list; no
 	// longer mine (approved by me, role removed, merged/closed) → history when it has runs, otherwise removed.
@@ -614,6 +654,9 @@ func (s *Service) DeleteMR(id int64) error {
 
 // HideMR moves an MR into the history (its runs are kept); an active run is stopped.
 func (s *Service) HideMR(id int64) error {
+	if v := s.forMR(id); v != s {
+		return v.HideMR(id)
+	}
 	if mr, _ := s.DB.GetMR(id); mr == nil {
 		return userErr("merge request #%d is not in the dashboard", id)
 	}
@@ -652,7 +695,9 @@ func (s *Service) fetchIssue(ref gitlab.Ref) (*db.Issue, error) {
 	if err != nil {
 		return nil, &UserError{err.Error()}
 	}
-	return s.DB.UpsertIssue(issueFromPayload(payload, ref))
+	issue, err := s.DB.UpsertIssue(issueFromPayload(payload, ref))
+	s.assignIssue(issue)
+	return issue, err
 }
 
 func issueFromPayload(payload map[string]any, ref gitlab.Ref) db.Issue {
@@ -682,6 +727,9 @@ func (s *Service) AddIssue(reference string) (*db.Issue, error) {
 
 // RefreshIssue re-reads an issue.
 func (s *Service) RefreshIssue(id int64) (*db.Issue, error) {
+	if v := s.forIssue(id); v != s {
+		return v.RefreshIssue(id)
+	}
 	issue, err := s.DB.GetIssue(id)
 	if err != nil || issue == nil {
 		return nil, userErr("issue #%d is not in the dashboard", id)
@@ -708,9 +756,26 @@ func (s *Service) SyncIssues() (SyncResult, error) {
 	for _, p := range s.Settings.GitLabIssueProjects {
 		wanted[strings.ToLower(strings.Trim(p, "/"))] = true
 	}
+	// Other projects add their trackers (the default project with no list means «every tracker» already).
+	if len(wanted) > 0 {
+		for _, p := range s.Projects() {
+			if p.ID == s.root.ProjectID {
+				continue
+			}
+			for _, tracker := range append(p.IssueProjectList(), p.ProjectPath) {
+				if tracker != "" {
+					wanted[strings.ToLower(strings.Trim(tracker, "/"))] = true
+				}
+			}
+		}
+	}
 	filter := ""
-	if len(wanted) == 1 {
-		filter = s.Settings.GitLabIssueProjects[0]
+	if len(wanted) == 1 && len(s.Settings.GitLabIssueProjects) == 1 {
+		filter = s.Settings.GitLabIssueProjects[0] // as written in .env (wanted holds it lower-cased)
+	} else if len(wanted) == 1 {
+		for only := range wanted {
+			filter = only
+		}
 	}
 	items, err := s.GitLab.ListOpenIssues(host, username, filter)
 	if err != nil {
@@ -729,7 +794,8 @@ func (s *Service) SyncIssues() (SyncResult, error) {
 		}
 		ref := gitlab.Ref{Host: itemHost, ProjectPath: itemProject, IID: gitlab.Int(item, "iid")}
 		listed[issueKey(ref.Host, ref.ProjectPath, ref.IID)] = true
-		if _, err := s.DB.UpsertIssue(issueFromPayload(item, ref)); err == nil {
+		if issue, err := s.DB.UpsertIssue(issueFromPayload(item, ref)); err == nil {
+			s.assignIssue(issue)
 			result.Synced++
 		}
 	}
@@ -800,6 +866,9 @@ func (s *Service) DeleteIssue(id int64) error {
 // StartReview queues a review run. continueRunID > 0 starts it inside the agent session of that earlier run
 // of the same MR (the developer's choice of context); 0 = new chat.
 func (s *Service) StartReview(mrID int64, kind, runnerName string, continueRunID int64) (int64, error) {
+	if v := s.forMR(mrID); v != s {
+		return v.StartReview(mrID, kind, runnerName, continueRunID)
+	}
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
@@ -841,6 +910,9 @@ func (s *Service) StartReview(mrID int64, kind, runnerName string, continueRunID
 // StartVerifyFinding queues a read-only mini run that re-examines one finding of the MR's review («Проверить
 // замечание»). Several finding checks may run in parallel; a review of the same MR must not be active.
 func (s *Service) StartVerifyFinding(mrID, findingID int64, runnerName string, continueRunID int64) (int64, error) {
+	if v := s.forMR(mrID); v != s {
+		return v.StartVerifyFinding(mrID, findingID, runnerName, continueRunID)
+	}
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
@@ -930,6 +1002,9 @@ func (s *Service) TerminalCommand(run *db.Run) string {
 // OpenTerminal opens a terminal window for a run: in its directory, continuing the agent session when resume is
 // set and the run has finished with a session id. Returns the command that was started inside the terminal.
 func (s *Service) OpenTerminal(runID int64, resume bool) (string, error) {
+	if v := s.forRun(runID); v != s {
+		return v.OpenTerminal(runID, resume)
+	}
 	run, _ := s.DB.GetRun(runID)
 	if run == nil {
 		return "", userErr("run #%d not found", runID)
@@ -1143,6 +1218,9 @@ func (s *Service) FailedJobsFor(mr *db.MergeRequest) []prompts.FailedJob {
 
 // StartCIAnalyze queues a read-only run that explains why the MR's head pipeline failed («Разобрать ошибки CI»).
 func (s *Service) StartCIAnalyze(mrID int64, runnerName string, continueRunID int64) (int64, error) {
+	if v := s.forMR(mrID); v != s {
+		return v.StartCIAnalyze(mrID, runnerName, continueRunID)
+	}
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
@@ -1174,6 +1252,9 @@ func (s *Service) StartCIAnalyze(mrID int64, runnerName string, continueRunID in
 // StartCIFix queues an edit run in the MR worktree that fixes what makes the head pipeline fail («Исправить CI»).
 // analysisRunID (0 = none) hands the summary of an earlier CI analysis to the agent.
 func (s *Service) StartCIFix(mrID int64, runnerName string, analysisRunID, continueRunID int64) (int64, error) {
+	if v := s.forMR(mrID); v != s {
+		return v.StartCIFix(mrID, runnerName, analysisRunID, continueRunID)
+	}
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
@@ -1218,6 +1299,9 @@ func (s *Service) StartCIFix(mrID int64, runnerName string, analysisRunID, conti
 // StartFixFindings queues an edit run in the MR worktree that addresses the findings and reviewer discussions the
 // developer selected («Исправить выбранные»). Own MRs only: the branch will be pushed to the MR.
 func (s *Service) StartFixFindings(mrID int64, runnerName, notes string, findingIDs, discussionIDs []int64, continueRunID int64) (int64, error) {
+	if v := s.forMR(mrID); v != s {
+		return v.StartFixFindings(mrID, runnerName, notes, findingIDs, discussionIDs, continueRunID)
+	}
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
@@ -1290,6 +1374,9 @@ func (s *Service) StandSkill() *skill.Skill {
 // runs tests there and writes/runs an emulation script («Проверить на стенде»). Needs a stand-access skill in the
 // project (STAND_SKILL or detected) or a dedicated stand_test skill.
 func (s *Service) StartStandTest(mrID int64, runnerName, notes string, continueRunID int64) (int64, error) {
+	if v := s.forMR(mrID); v != s {
+		return v.StartStandTest(mrID, runnerName, notes, continueRunID)
+	}
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
@@ -1326,6 +1413,9 @@ func (s *Service) StartStandTest(mrID int64, runnerName, notes string, continueR
 // the developer's stand, runs the tests and an emulation script with mocked external systems there, and reports
 // whether the solution works. branch defaults to the newest finished implementation of the issue.
 func (s *Service) StartStandTestIssue(issueID int64, runnerName, notes, branch string, continueRunID int64) (int64, error) {
+	if v := s.forIssue(issueID); v != s {
+		return v.StartStandTestIssue(issueID, runnerName, notes, branch, continueRunID)
+	}
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
@@ -1392,6 +1482,9 @@ func LatestStandFor(runs []db.RunSummary, branch string) *db.RunSummary {
 // StartFixComments queues an edit run that addresses unresolved reviewer discussions in a worktree of the MR branch.
 // continueRunID > 0 continues the agent session of an earlier run in the same worktree (0 = new chat).
 func (s *Service) StartFixComments(mrID int64, runnerName, notes string, continueRunID int64) (int64, error) {
+	if v := s.forMR(mrID); v != s {
+		return v.StartFixComments(mrID, runnerName, notes, continueRunID)
+	}
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
@@ -1509,6 +1602,9 @@ func (s *Service) Resumable(runs []db.RunSummary, dirs ...string) []db.RunSummar
 // StartPlan queues a read-only task analysis. continueRunID > 0 continues the agent session of an earlier
 // project-root run of the same issue (0 = new chat).
 func (s *Service) StartPlan(issueID int64, runnerName, notes string, continueRunID int64, mode string) (int64, error) {
+	if v := s.forIssue(issueID); v != s {
+		return v.StartPlan(issueID, runnerName, notes, continueRunID, mode)
+	}
 	if mode != "" && mode != "bug" {
 		return 0, userErr("unknown plan mode %q (task or bug)", mode)
 	}
@@ -1539,6 +1635,9 @@ func (s *Service) StartPlan(issueID int64, runnerName, notes string, continueRun
 // StartImplement queues an edit run in a worktree on `branch` (default: the issue reference). continueRunID > 0
 // continues the agent session of an earlier run in that same worktree (0 = new chat).
 func (s *Service) StartImplement(issueID int64, runnerName, notes, branch string, continueRunID int64) (int64, error) {
+	if v := s.forIssue(issueID); v != s {
+		return v.StartImplement(issueID, runnerName, notes, branch, continueRunID)
+	}
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
@@ -1576,6 +1675,9 @@ func (s *Service) enqueue(run db.Run) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if s.ProjectID != 0 {
+		_ = s.DB.SetRunProject(id, &s.ProjectID)
+	}
 	s.launch(id)
 	return id, nil
 }
@@ -1597,7 +1699,7 @@ func (s *Service) launch(id int64) {
 		}()
 		s.sem <- struct{}{}
 		defer func() { <-s.sem }()
-		s.execute(ctx, id)
+		s.forRun(id).execute(ctx, id) // in the service of the run's project: its checkout and worktrees
 	}()
 }
 
@@ -1636,6 +1738,9 @@ func (s *Service) Answer(runID int64, answers map[int64]string) error {
 
 // Retry starts a new run with the same parameters as a finished/failed one.
 func (s *Service) Retry(runID int64) (int64, error) {
+	if v := s.forRun(runID); v != s {
+		return v.Retry(runID)
+	}
 	run, _ := s.DB.GetRun(runID)
 	if run == nil {
 		return 0, userErr("run #%d not found", runID)
@@ -2317,6 +2422,9 @@ func (s *Service) PlansDir() string {
 
 // ExportPlan writes a finished plan run as a markdown file into PlansDir and remembers the path.
 func (s *Service) ExportPlan(runID int64) (string, error) {
+	if v := s.forRun(runID); v != s {
+		return v.ExportPlan(runID)
+	}
 	run, _ := s.DB.GetRun(runID)
 	if run == nil || run.Kind != db.KindPlan {
 		return "", userErr("run #%d is not a plan", runID)
@@ -2563,6 +2671,9 @@ func DeriveVerdict(agentVerdict string, findings []db.Finding) string {
 
 // Ask resumes the run's agent session with a question and stores both sides of the exchange.
 func (s *Service) Ask(runID int64, question string) (string, error) {
+	if v := s.forRun(runID); v != s {
+		return v.Ask(runID, question)
+	}
 	question = strings.TrimSpace(question)
 	if question == "" {
 		return "", userErr("question is empty")
@@ -2685,6 +2796,17 @@ func (s *Service) RunJanitor(ctx context.Context) {
 // Review worktrees are disposable: the next review recreates them at the MR head, and a follow-up question restores
 // the one its session lived in.
 func (s *Service) CleanupReviewWorktrees(ctx context.Context, force bool) []string {
+	if s == s.root {
+		var removed []string
+		for _, v := range s.otherViews() {
+			removed = append(removed, v.CleanupReviewWorktrees(ctx, force)...)
+		}
+		return append(s.cleanupReviewWorktrees(ctx, force), removed...)
+	}
+	return s.cleanupReviewWorktrees(ctx, force)
+}
+
+func (s *Service) cleanupReviewWorktrees(ctx context.Context, force bool) []string {
 	if s.Worktrees == nil || (!force && s.Settings.ReviewWorktreeTTLMin <= 0) {
 		return nil
 	}
@@ -2710,6 +2832,11 @@ func (s *Service) CleanupReviewWorktrees(ctx context.Context, force bool) []stri
 
 // RemoveReviewWorktree removes one review worktree by hand (Workspaces page) unless a run is active in it.
 func (s *Service) RemoveReviewWorktree(path string) error {
+	for _, v := range s.otherViews() {
+		if v.Worktrees != nil && v.Worktrees.IsReview(path) {
+			return v.RemoveReviewWorktree(path)
+		}
+	}
 	if s.Worktrees == nil || !s.Worktrees.IsReview(path) {
 		return userErr("%s is not a review worktree", path)
 	}
@@ -2758,7 +2885,14 @@ func (s *Service) idleFor(path string) (time.Duration, bool) {
 // dropReviewWorktree removes the review worktree of an MR that left the main list (merged, closed, approved,
 // hidden, deleted): nothing will review it again, so the checkout only takes disk space.
 func (s *Service) dropReviewWorktree(mr *db.MergeRequest) {
-	if mr == nil || s.Worktrees == nil {
+	if mr == nil {
+		return
+	}
+	if v := s.forMR(mr.ID); v != s {
+		v.dropReviewWorktree(mr)
+		return
+	}
+	if s.Worktrees == nil {
 		return
 	}
 	path := s.Worktrees.ReviewPath(mr.Ref())
@@ -2813,6 +2947,18 @@ type Workspace struct {
 
 // Workspaces lists the dashboard's worktrees with their git state and the run that created them.
 func (s *Service) Workspaces() ([]Workspace, error) {
+	if s == s.root {
+		out, err := s.workspaces()
+		for _, v := range s.otherViews() {
+			more, _ := v.workspaces()
+			out = append(out, more...)
+		}
+		return out, err
+	}
+	return s.workspaces()
+}
+
+func (s *Service) workspaces() ([]Workspace, error) {
 	if s.Worktrees == nil {
 		return nil, nil
 	}
@@ -2987,6 +3133,9 @@ func (s *Service) editRun(runID int64) (*db.Run, error) {
 
 // Commit commits everything in the run's worktree.
 func (s *Service) Commit(runID int64, message string) (string, error) {
+	if v := s.forRun(runID); v != s {
+		return v.Commit(runID, message)
+	}
 	run, err := s.editRun(runID)
 	if err != nil {
 		return "", err
@@ -3002,6 +3151,9 @@ func (s *Service) Commit(runID int64, message string) (string, error) {
 
 // Push pushes the run's branch to origin.
 func (s *Service) Push(runID int64) (string, error) {
+	if v := s.forRun(runID); v != s {
+		return v.Push(runID)
+	}
 	run, err := s.editRun(runID)
 	if err != nil {
 		return "", err
@@ -3017,6 +3169,9 @@ func (s *Service) Push(runID int64) (string, error) {
 
 // CreateMR opens a merge request for an implement run's branch.
 func (s *Service) CreateMR(runID int64, title, description string) (string, error) {
+	if v := s.forRun(runID); v != s {
+		return v.CreateMR(runID, title, description)
+	}
 	run, err := s.editRun(runID)
 	if err != nil {
 		return "", err
@@ -3049,6 +3204,9 @@ func (s *Service) CreateMR(runID int64, title, description string) (string, erro
 // branch in one worktree at a time). Refuses while there are uncommitted changes: nothing may be lost silently.
 // Returns the command to run in the main checkout; the developer's checkout itself is never switched by the dashboard.
 func (s *Service) ReleaseBranch(runID int64) (string, error) {
+	if v := s.forRun(runID); v != s {
+		return v.ReleaseBranch(runID)
+	}
 	run, err := s.editRun(runID)
 	if err != nil {
 		return "", err
@@ -3070,6 +3228,9 @@ func (s *Service) ReleaseBranch(runID int64) (string, error) {
 
 // RemoveWorktree deletes the worktree directory of a run (branch is kept).
 func (s *Service) RemoveWorktree(runID int64) error {
+	if v := s.forRun(runID); v != s {
+		return v.RemoveWorktree(runID)
+	}
 	run, err := s.editRun(runID)
 	if err != nil {
 		return err

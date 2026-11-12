@@ -48,6 +48,9 @@ const (
 // FindingCode returns the code a finding is about: the lines around it in the commit the review saw, the lines the
 // MR added marked. Sources: the local git objects (the review worktree fetched the commit), else the GitLab API.
 func (s *Service) FindingCode(findingID int64) (*FindingCode, error) {
+	if v := s.forFinding(findingID); v != s {
+		return v.FindingCode(findingID)
+	}
 	f, run, mr, err := s.findingTarget(findingID)
 	if err != nil {
 		return nil, err
@@ -99,6 +102,9 @@ type PostResult struct {
 // PostFinding posts the (edited) text of a finding to the MR in GitLab: as a diff comment on its line when the line is
 // part of the reviewed MR version, otherwise as an MR comment that names the file and line. The note link is stored.
 func (s *Service) PostFinding(findingID int64, body string) (*PostResult, error) {
+	if v := s.forFinding(findingID); v != s {
+		return v.PostFinding(findingID, body)
+	}
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return nil, userErr("пустой комментарий")
