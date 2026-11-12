@@ -518,3 +518,13 @@ details.card[open] > summary.card-head h2::before { content: "▾"; }
 /* header project switcher and the project badge of list rows */
 .project-switch { font-size: 12px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); color: var(--fg); max-width: 160px; }
 .badge-project { background: var(--info-soft, var(--neutral-soft)); color: var(--fg-2); margin-left: 4px; }
+@media (max-width: 600px) {
+  /* chips start at the right but overflow (and scroll) to the right, never over the brand */
+  .nav-context { justify-content: flex-start; }
+  .nav-context > :first-child { margin-left: auto; }
+  .project-switch { flex: none; max-width: 130px; }
+  /* the overview's «Нужно от меня»: the action goes under the text when both do not fit */
+  .inbox-item { flex-wrap: wrap; }
+  .inbox-item .inbox-text { flex: 1 1 180px; min-width: 0; }
+  .inbox-item > .btn, .inbox-item > form, .inbox-item > a.btn { margin-left: auto; }
+}
