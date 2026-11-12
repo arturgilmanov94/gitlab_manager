@@ -30,7 +30,7 @@
 {{$r := .Root}}{{$d := .T}}
 <article class="thread{{if $d.Resolved}} thread-resolved{{end}}{{if $d.WaitsForMe}} thread-waits{{end}}" id="thread-{{$d.ID}}">
   <header class="thread-head">
-    {{if and $r.Pickable $d.Open}}<input type="checkbox" class="pick tip" data-tip="Выбрать тред для «Исправить выбранные»" data-thread="{{$d.ID}}">{{end}}
+    {{if and $r.CanFixNow $d.Open}}<input type="checkbox" class="pick tip" data-tip="Выбрать тред для «Исправить выбранные»" data-thread="{{$d.ID}}">{{end}}
     <b>@{{$d.Author}}</b>{{if $d.Mine}} <span class="badge badge-info">мой</span>{{end}}
     {{if $d.File}}<span class="mono small thread-where">{{$d.File}}{{if $d.Line}}:{{$d.Line}}{{else if $d.OldLine}}:{{$d.OldLine}} <span class="muted">(удалённая строка)</span>{{end}}</span>{{else}}<span class="small muted">к MR целиком</span>{{end}}
     <span class="small muted">{{when $d.CreatedAt}}</span>
@@ -80,9 +80,15 @@
 {{define "pick-bar"}}
 <div class="pick-bar" id="pick-bar" hidden>
   <span class="small"><b id="pick-count">0</b> выбрано</span>
-  <input id="pick-notes" type="text" size="44" placeholder="Необязательно: что учесть при исправлении">
+  {{if .CanFixNow}}
+  <input id="pick-notes" type="text" size="36" placeholder="Необязательно: что учесть при исправлении">
   <button class="btn btn-primary btn-sm tip" data-tip="{{kindTip "fix_findings"}}" onclick="fixSelected('{{.MR.ID}}', this)">Исправить выбранные</button>
+  <span class="action-sep"></span>
+  {{end}}
+  <span class="small muted">замечания:</span>
+  <button class="btn btn-sm tip" data-tip="Выбранные замечания неверны: агент ошибся. Не считаются открытыми и не попадут в перепроверку." onclick="bulkFindings('{{.MR.ID}}', 'false_positive', this)">Ложные</button>
+  <button class="btn btn-sm tip" data-tip="Выбранные замечания по делу, но исправлять не будем." onclick="bulkFindings('{{.MR.ID}}', 'ignored', this)">Игнорировать</button>
+  <button class="btn btn-sm tip" data-tip="Выбранные замечания исправлены вручную." onclick="bulkFindings('{{.MR.ID}}', 'resolved', this)">Решены</button>
   <button class="btn btn-sm btn-link" onclick="clearPicks()">Снять выбор</button>
-  <span class="small muted">Агент перепроверит каждое замечание и тред, исправит подтверждённые в workspace ветки MR; commit и push — по вашим кнопкам.</span>
 </div>
 {{end}}

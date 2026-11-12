@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 )
 
 // DiscussionNote is one comment of a live MR discussion.
@@ -281,4 +282,35 @@ func (d *DB) MRDetailsOf(id int64) MRDetails {
 	_ = d.sql.QueryRow("SELECT gitlab_details FROM merge_requests WHERE id = ?", id).Scan(&raw)
 	_ = json.Unmarshal([]byte(raw), &out)
 	return out
+}
+
+// ArchiveFindings archives the still-open findings of an MR that was merged or closed and returns how many.
+func (d *DB) ArchiveFindings(mrID int64) (int64, error) {
+	res, err := d.sql.Exec("UPDATE findings SET status = 'archived' WHERE status = 'open' AND run_id IN (SELECT id FROM runs WHERE mr_id = ?)", mrID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// SetFindingsStatus records one decision for several findings at once (all or nothing).
+func (d *DB) SetFindingsStatus(ids []int64, status string) error {
+	if !ManualFindingStatuses[status] {
+		return fmt.Errorf("unknown finding status %q", status)
+	}
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		res, err := tx.Exec("UPDATE findings SET status = ? WHERE id = ?", status, id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("finding #%d not found", id)
+		}
+	}
+	return tx.Commit()
 }

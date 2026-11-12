@@ -498,6 +498,12 @@ func (s *Server) routes() {
 		body := readBody(r)
 		s.result(w, map[string]any{}, s.svc.Decide(pathID(r), body["decision"], body["note"]))
 	})
+	// Bulk triage: one decision for the picked findings of an MR.
+	s.mux.HandleFunc("POST /api/mrs/{id}/findings/status", func(w http.ResponseWriter, r *http.Request) {
+		body := readBody(r)
+		ids := idList(body["ids"])
+		s.result(w, map[string]any{"changed": len(ids)}, s.svc.ForMR(pathID(r)).SetFindingsStatus(pathID(r), ids, body["status"]))
+	})
 	s.mux.HandleFunc("POST /api/findings/{id}/status", func(w http.ResponseWriter, r *http.Request) {
 		s.result(w, map[string]any{}, s.svc.SetFindingStatus(pathID(r), readBody(r)["status"]))
 	})
@@ -1015,11 +1021,14 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 		"FailedJobs": svc.FailedJobsFor(mr), "CIAnalysis": latestCIAnalysis(runs, mr.HeadSHA),
 		"Findings": findings, "Threads": svc.ThreadsOf(mr), "Active": active, "LastRun": lastRun,
 		"Stale": stale, "State": state, "OpenMajor": major, "OpenMinor": minor, "OpenInfo": info,
-		"IsMine":   username != "" && mr.Author == username,
-		"CanFix":   mr.CanFix(username),
-		"Pickable": mr.CanFix(username) && active == nil && mr.State != "merged" && mr.State != "closed",
-		"Closed":   mr.State == "merged" || mr.State == "closed",
-		"Blob":     blobBase(mr.WebURL), "SHA": sha,
+		"IsMine": username != "" && mr.Author == username,
+		"CanFix": mr.CanFix(username),
+		// Findings can be picked for a bulk decision in any open MR; fixing the picked ones needs the right to
+		// change the branch and no run in progress.
+		"Pickable":  mr.State != "merged" && mr.State != "closed",
+		"CanFixNow": mr.CanFix(username) && active == nil && mr.State != "merged" && mr.State != "closed",
+		"Closed":    mr.State == "merged" || mr.State == "closed",
+		"Blob":      blobBase(mr.WebURL), "SHA": sha,
 	})
 }
 
@@ -1690,6 +1699,8 @@ func findingStatusLabel(status string) string {
 		return "игнорируется"
 	case "resolved":
 		return "решено вручную"
+	case "archived":
+		return "в архиве · MR закрыт"
 	}
 	return status
 }

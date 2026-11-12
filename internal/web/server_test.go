@@ -954,8 +954,26 @@ func TestFixSelectedPages(t *testing.T) {
 	if _, body := get(t, ts.URL+"/-/fix-findings/2"); !strings.Contains(body, "Выбранные замечания") || !strings.Contains(body, "Null deref") || !strings.Contains(body, ">исправлено<") || !strings.Contains(body, `id="workspace"`) {
 		t.Fatal("fix page must list the per-finding results and the workspace")
 	}
-	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, "исправлено агентом") || strings.Contains(body, `class="pick" data-finding="1"`) {
-		t.Fatal("fixed finding shows the agent's verdict and is no longer selectable")
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, "исправлено агентом") || !strings.Contains(body, `class="pick" data-finding="1" data-fixed="1"`) {
+		t.Fatal("fixed finding shows the agent's verdict; it can be picked for a decision but is marked as not fixable again")
+	}
+	// Bulk triage: one decision for several findings; a finding of another MR is refused and nothing changes.
+	for _, want := range []string{`bulkFindings('1', 'false_positive', this)`, `bulkFindings('1', 'ignored', this)`, `bulkFindings('1', 'resolved', this)`} {
+		if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, want) {
+			t.Fatalf("pick bar lacks %q", want)
+		}
+	}
+	if code, out := postJSON(t, ts.URL+"/api/mrs/1/findings/status", map[string]any{"ids": "1,999", "status": "ignored"}); code != 400 || !strings.Contains(out["error"].(string), "999") {
+		t.Fatalf("%d %v", code, out)
+	}
+	if f, _ := svc.DB.GetFinding(1); f.Status != "open" {
+		t.Fatalf("a refused bulk change must not touch anything: %s", f.Status)
+	}
+	if code, out := postJSON(t, ts.URL+"/api/mrs/1/findings/status", map[string]any{"ids": "1,2", "status": "ignored"}); code != 200 || out["changed"].(float64) != 2 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if f, _ := svc.DB.GetFinding(2); f.Status != "ignored" {
+		t.Fatalf("%s", f.Status)
 	}
 }
 

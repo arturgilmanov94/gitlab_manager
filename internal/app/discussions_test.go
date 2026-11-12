@@ -268,3 +268,31 @@ func TestReplyAndResolveThread(t *testing.T) {
 		t.Fatal("no draft in someone else's MR")
 	}
 }
+
+// When a sync sees the MR merged, its still-open findings are archived: they no longer count as open anywhere.
+func TestFindingsArchivedOnMerge(t *testing.T) {
+	svc, gl, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	id, _ := svc.StartReview(mr.ID, db.KindReviewFull, "", 0)
+	testutil.WaitFor(t, func() bool { return status(svc, id) == db.StatusDone })
+	findings, _ := svc.DB.ListFindings(id)
+	_ = svc.SetFindingStatus(findings[0].ID, "false_positive")
+	gl.MRs[42]["state"] = "merged"
+	if _, err := svc.RefreshMR(mr.ID); err != nil {
+		t.Fatal(err)
+	}
+	findings, _ = svc.DB.ListFindings(id)
+	if findings[0].Status != "false_positive" {
+		t.Fatalf("a decision of the developer is kept: %s", findings[0].Status)
+	}
+	for _, f := range findings[1:] {
+		if f.Status != "archived" {
+			t.Fatalf("finding %d: %s", f.ID, f.Status)
+		}
+	}
+	runs, _ := svc.DB.ListRunsForMR(mr.ID)
+	if runs[0].OpenFindings != 0 {
+		t.Fatalf("archived findings are not open: %d", runs[0].OpenFindings)
+	}
+}

@@ -351,7 +351,7 @@ details.fix .md pre { background: #fbfcfd; }
 .counter:hover { text-decoration: none; border-color: var(--border-strong); }
 .counter b { font-size: 18px; } .counter span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .counter.hot { border-color: var(--danger); background: var(--danger-soft); } .counter.warm { border-color: var(--warning); background: var(--warning-soft); } .counter.good { border-color: var(--success); background: var(--success-soft); }
-.fstatus-false_positive, .fstatus-ignored { color: var(--muted); } .fstatus-resolved { color: var(--success); }
+.fstatus-false_positive, .fstatus-ignored, .fstatus-archived { color: var(--muted); } .fstatus-resolved { color: var(--success); }
 tr.finding.f-false_positive td, tr.finding.f-ignored td, tr.finding.f-resolved td { opacity: 0.6; }
 
 /* technical log colouring */

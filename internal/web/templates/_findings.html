@@ -9,7 +9,7 @@
   {{$link := fileLink $.Blob $.SHA .File (deref .Line)}}
   {{$diff := mrDiffLink $mrURL .File}}
   <tr class="finding f-{{.Status}}" id="finding-{{.ID}}">
-    {{if $pick}}<td class="pick-col">{{if and (eq .Status "open") (ne .CheckStatus "fixed")}}<input type="checkbox" class="pick" data-finding="{{.ID}}">{{end}}</td>{{end}}
+    {{if $pick}}<td class="pick-col">{{if eq .Status "open"}}<input type="checkbox" class="pick" data-finding="{{.ID}}"{{if eq .CheckStatus "fixed"}} data-fixed="1"{{end}}>{{end}}</td>{{end}}
     <td class="col-sev"><span class="sev sev-{{.Severity}}">{{.Severity}}</span><div class="muted small">{{.Category}}</div></td>
     <td class="col-status"><span class="fstatus fstatus-{{.Status}}">{{fstatusLabel .Status}}</span></td>
     <td class="mono small col-where">{{if .File}}{{if $link}}<a class="file-ref tip" data-tip="Открыть файл в GitLab на проверенном коммите, на этой строке" href="{{$link}}" target="_blank" rel="noopener">{{.File}}{{if .Line}}:{{deref .Line}}{{end}}</a>{{else}}{{.File}}{{if .Line}}:{{deref .Line}}{{end}}{{end}}{{if $diff}} <a class="diff-ref tip" data-tip="Открыть этот файл в «Изменениях» MR" href="{{$diff}}" target="_blank" rel="noopener">diff</a>{{end}}{{else}}—{{end}}</td>
@@ -36,7 +36,7 @@
           <button class="btn btn-sm btn-link tip" data-tip="Замечание неверно: агент ошибся. Не считается открытым и не попадёт в проверку изменений." onclick="post('/api/findings/{{.ID}}/status', {status: 'false_positive'}, this).then(r => r && reload())">Ложное</button>
           <button class="btn btn-sm btn-link tip" data-tip="Замечание по делу, но исправлять не будем. Не считается открытым." onclick="post('/api/findings/{{.ID}}/status', {status: 'ignored'}, this).then(r => r && reload())">Игнорировать</button>
           <button class="btn btn-sm btn-link tip" data-tip="Исправлено вручную, без проверки агентом." onclick="post('/api/findings/{{.ID}}/status', {status: 'resolved'}, this).then(r => r && reload())">Решено</button>
-        {{else if or (eq .Status "false_positive") (eq .Status "ignored") (eq .Status "resolved")}}
+        {{else if or (eq .Status "false_positive") (eq .Status "ignored") (eq .Status "resolved") (eq .Status "archived")}}
           <button class="btn btn-sm btn-link" onclick="post('/api/findings/{{.ID}}/status', {status: 'open'}, this).then(r => r && reload())">Вернуть в открытые</button>
         {{end}}
       </div>

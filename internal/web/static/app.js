@@ -675,8 +675,18 @@
     document.querySelectorAll('input.pick, input.pick-all').forEach((el) => { el.checked = false; });
     refreshPickBar();
   };
+  // Bulk triage: one decision for every picked finding (threads are not findings and stay as they are).
+  window.bulkFindings = async function (mrId, status, button) {
+    const p = picks();
+    if (!p.findings.length) { flash('Выберите замечания AI: к тредам это решение не относится', false); return; }
+    const data = await call('POST', `/api/mrs/${mrId}/findings/status`, { ids: p.findings.join(','), status }, button);
+    if (data) { flash(`Отмечено замечаний: ${p.findings.length}`, true); clearPicks(); setTimeout(reload, 500); }
+  };
   window.fixSelected = function (mrId, button) {
     const p = picks();
+    // A finding the agent already fixed waits for the re-check: it can be triaged, not fixed again.
+    p.findings = p.findings.filter((id) => !document.querySelector(`input.pick[data-finding="${id}"][data-fixed]`));
+    if (!p.findings.length && !p.threads.length && !p.discussions.length) { flash('Выбранные замечания агент уже исправил: их подтвердит перепроверка', false); return; }
     const notes = (document.getElementById('pick-notes') || {}).value || '';
     return startRun(`/api/mrs/${mrId}/runs`, 'fix_findings', button, { findings: p.findings.join(','), discussions: p.discussions.join(','), threads: p.threads.join(','), notes });
   };

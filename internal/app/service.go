@@ -502,6 +502,9 @@ func (s *Service) fetchMRPartial(ref gitlab.Ref, manual, freshThreads bool) (*db
 	if err == nil && haveThreads {
 		s.storeDiscussions(mr, threads)
 	}
+	if err == nil && mr.Closed() {
+		_, _ = s.DB.ArchiveFindings(mr.ID) // merged or closed: its open findings are history now
+	}
 	if err == nil {
 		details := db.MRDetails{Reviewers: gitlab.Usernames(payload, "reviewers"), Assignees: gitlab.Usernames(payload, "assignees"),
 			HasConflicts: gitlab.Bool(payload, "has_conflicts"), MergeStatus: gitlab.Str(payload, "detailed_merge_status")}
@@ -2892,6 +2895,26 @@ func (s *Service) SetFindingStatus(findingID int64, status string) error {
 		return userErr("finding #%d not found", findingID)
 	}
 	if err := s.DB.SetFindingStatus(findingID, status); err != nil {
+		return &UserError{err.Error()}
+	}
+	return nil
+}
+
+// SetFindingsStatus records one decision for several findings of one MR at once (bulk triage).
+func (s *Service) SetFindingsStatus(mrID int64, ids []int64, status string) error {
+	if len(ids) == 0 {
+		return userErr("не выбрано ни одного замечания")
+	}
+	for _, id := range ids {
+		f, _ := s.DB.GetFinding(id)
+		if f == nil {
+			return userErr("finding #%d not found", id)
+		}
+		if run, _ := s.DB.GetRun(f.RunID); run == nil || run.MRID == nil || *run.MRID != mrID {
+			return userErr("finding #%d does not belong to this merge request", id)
+		}
+	}
+	if err := s.DB.SetFindingsStatus(ids, status); err != nil {
 		return &UserError{err.Error()}
 	}
 	return nil
