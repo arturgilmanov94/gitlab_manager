@@ -459,7 +459,13 @@
       diffRoot.classList.remove('loading');
       diffRoot.querySelectorAll('[data-diff-mode]').forEach((b) => b.addEventListener('click', () => { if (b.getAttribute('aria-disabled') !== 'true' && b.dataset.diffMode !== diffMode) loadDiff(b.dataset.diffMode); }));
       diffRoot.querySelectorAll('details.diff-file').forEach((f) => {
-        f.addEventListener('toggle', () => loadFile(f));
+        // A <details> inserted already open gets a «toggle» event too: only a file the developer unfolds by hand
+        // is loaded from it, the open ones load as they come near the screen.
+        f.dataset.wasOpen = f.open ? '1' : '0';
+        f.addEventListener('toggle', () => {
+          if (f.open && f.dataset.wasOpen === '0') loadFile(f);
+          f.dataset.wasOpen = f.open ? '1' : '0';
+        });
         if (watcher) watcher.observe(f); else loadFile(f);
       });
       if (then) then();
