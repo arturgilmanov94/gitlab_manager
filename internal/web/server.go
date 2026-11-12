@@ -149,10 +149,30 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 		"errorTitle": errorTitle,
 		"md":         renderMarkdown,
 		"noteText":   noteText,
-		"hasPrefix":  strings.HasPrefix,
-		"runPath":    runPath,
-		"mrPath":     mrPath,
-		"issuePath":  issuePath,
+		"roleWords":  func(roles string) string { return strings.ReplaceAll(roles, ",", " ") },
+		"hasRole": func(roles, role string) bool {
+			for _, r := range strings.Split(roles, ",") {
+				if r == role {
+					return true
+				}
+			}
+			return false
+		},
+		"people": func(names []string, me string) template.HTML {
+			var parts []string
+			for _, n := range names {
+				name := "@" + template.HTMLEscapeString(n)
+				if me != "" && n == me {
+					name = "<b>" + name + " (вы)</b>"
+				}
+				parts = append(parts, name)
+			}
+			return template.HTML(strings.Join(parts, ", "))
+		},
+		"hasPrefix": strings.HasPrefix,
+		"runPath":   runPath,
+		"mrPath":    mrPath,
+		"issuePath": issuePath,
 		"dict": func(pairs ...any) map[string]any {
 			out := map[string]any{}
 			for i := 0; i+1 < len(pairs); i += 2 {
@@ -295,6 +315,19 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/mrs/{id}/refresh", func(w http.ResponseWriter, r *http.Request) {
 		mr, err := s.svc.RefreshMR(pathID(r))
 		s.result(w, map[string]any{"mr": mr}, err)
+	})
+	// Approve / unapprove and a retry of the failed pipeline: writes to GitLab by the developer's button.
+	s.mux.HandleFunc("POST /api/mrs/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
+		_, err := s.svc.ApproveMR(pathID(r), true, readBody(r)["sha"])
+		s.result(w, nil, err)
+	})
+	s.mux.HandleFunc("POST /api/mrs/{id}/unapprove", func(w http.ResponseWriter, r *http.Request) {
+		_, err := s.svc.ApproveMR(pathID(r), false, "")
+		s.result(w, nil, err)
+	})
+	s.mux.HandleFunc("POST /api/mrs/{id}/pipeline/retry", func(w http.ResponseWriter, r *http.Request) {
+		_, err := s.svc.RetryPipeline(pathID(r))
+		s.result(w, nil, err)
 	})
 	s.mux.HandleFunc("DELETE /api/mrs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s.result(w, map[string]any{}, s.svc.DeleteMR(pathID(r)))
@@ -929,7 +962,10 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 	if active != nil && active.Status == db.StatusQueued {
 		queuePos = svc.DB.QueuePosition(active.ID)
 	}
+	details := svc.DB.MRDetailsOf(mr.ID)
+	readiness, readinessTone := app.MergeReadiness(details)
 	s.render(w, "mr", map[string]any{
+		"Details": details, "Readiness": readiness, "ReadinessTone": readinessTone, "Me": username,
 		"Base": base, "MR": mr, "QueuePos": queuePos, "Runs": runs, "Latest": latest,
 		"Sessions":   svc.Resumable(runs, svc.ReviewDirs(mr)...),
 		"Changes":    changesIf(stale, s.svc, mr, latest),

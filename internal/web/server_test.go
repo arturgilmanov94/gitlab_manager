@@ -100,7 +100,7 @@ func TestPagesAndFlow(t *testing.T) {
 	// Highlighted GitLab labels are badges (case-insensitive match, configured colour) and row filter attributes;
 	// the other labels stay out of the row. Filter chips: mine/others, draft, AI state, labels.
 	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, `label-red tip" data-tip="Метка GitLab «high»">high<`) || !strings.Contains(body, `data-labels="high"`) ||
-		!strings.Contains(body, `data-mine="1" data-draft="0" data-ai="never"`) || strings.Contains(body, ">backend<") ||
+		!strings.Contains(body, `data-mine="1" data-role="author assignee" data-draft="0" data-ai="never"`) || strings.Contains(body, ">backend<") ||
 		!strings.Contains(body, `data-facet="mine"`) || !strings.Contains(body, `data-facet="ai"`) || !strings.Contains(body, `class="fchip label-orange" data-value="bug"`) {
 		t.Fatal("list must show highlighted labels as badges, row facets and filter chips")
 	}
@@ -1014,6 +1014,43 @@ func TestDiscussionsTab(t *testing.T) {
 	}
 	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, "ещё никто ничего не написал") || !strings.Contains(body, "нет нерешённых обсуждений") {
 		t.Fatal("empty state after the threads are gone")
+	}
+}
+
+// The MR page shows who approved, reviewers, assignees and the merge readiness; Approve is offered in other
+// people's MRs, Unapprove after it, Retry for a failed pipeline. The list has role badges and the role filter.
+func TestApproveOnPages(t *testing.T) {
+	ts, svc, _ := newServer(t)
+	gl := svc.GitLab.(*testutil.FakeGitLab)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	_, body := get(t, ts.URL+"/-/mr/1")
+	if strings.Contains(body, "approveMR(this)") || !strings.Contains(body, "Retry pipeline") || !strings.Contains(body, "@carol") || !strings.Contains(body, "<b>@alice (вы)</b>") {
+		t.Fatal("own MR: no Approve, retry for the failed pipeline, people listed")
+	}
+	if code, _ := postJSON(t, ts.URL+"/api/mrs/1/pipeline/retry", map[string]any{}); code != 200 || gl.Writes[0] != "retry 9001" {
+		t.Fatalf("%d %v", code, gl.Writes)
+	}
+	gl.MRs[42]["author"] = map[string]any{"username": "bob"}
+	gl.MRs[42]["reviewers"] = []any{map[string]any{"username": "alice"}}
+	gl.MRs[42]["detailed_merge_status"] = "discussions_not_resolved"
+	postJSON(t, ts.URL+"/api/mrs/1/refresh", map[string]any{})
+	if _, body = get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `data-sha="sha-1"`) || !strings.Contains(body, "approveMR(this)") || !strings.Contains(body, "есть нерешённые обсуждения") || strings.Contains(body, "Retry pipeline") {
+		t.Fatal("someone else's MR offers Approve on the shown head and tells the readiness")
+	}
+	if _, list := get(t, ts.URL+"/mrs"); !strings.Contains(list, `data-role="assignee reviewer"`) || !strings.Contains(list, `data-facet="role"`) || !strings.Contains(list, ">reviewer</span>") {
+		t.Fatal("the list carries roles and the role filter")
+	}
+	if code, out := postJSON(t, ts.URL+"/api/mrs/1/approve", map[string]any{"sha": "old"}); code != 400 || !strings.Contains(out["error"].(string), "новые коммиты") {
+		t.Fatalf("%d %v", code, out)
+	}
+	if code, _ := postJSON(t, ts.URL+"/api/mrs/1/approve", map[string]any{"sha": "sha-1"}); code != 200 {
+		t.Fatal(code)
+	}
+	if _, body = get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, "Unapprove") || strings.Contains(body, "approveMR(this)") {
+		t.Fatal("after the approval the page offers to take it back")
+	}
+	if code, _ := postJSON(t, ts.URL+"/api/mrs/1/unapprove", map[string]any{}); code != 200 || gl.Writes[len(gl.Writes)-1] != "unapprove 42" {
+		t.Fatalf("%d %v", code, gl.Writes)
 	}
 }
 

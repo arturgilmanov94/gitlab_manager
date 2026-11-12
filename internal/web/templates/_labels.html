@@ -8,6 +8,9 @@
   {{if .Mine}}<div class="fgroup" data-facet="mine">
     <button type="button" class="fchip" data-value="1">Мои</button><button type="button" class="fchip" data-value="0">Чужие</button>
   </div>{{end}}
+  {{if .Role}}<div class="fgroup" data-facet="role">
+    <button type="button" class="fchip tip" data-value="reviewer" data-tip="MR, где вы назначены ревьюером">Я reviewer</button><button type="button" class="fchip tip" data-value="assignee" data-tip="MR, где вы assignee">Я assignee</button>
+  </div>{{end}}
   {{if .Draft}}<div class="fgroup" data-facet="draft">
     <button type="button" class="fchip tip" data-value="0" data-tip="Без Draft: MR, которые автор считает готовыми к ревью">Готовые</button><button type="button" class="fchip" data-value="1">Draft</button>
   </div>{{end}}

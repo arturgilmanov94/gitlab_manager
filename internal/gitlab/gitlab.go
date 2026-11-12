@@ -153,6 +153,9 @@ type Client interface {
 	CreateDiscussion(ref Ref, body string, pos *Position) (int64, error)
 	ReplyDiscussion(ref Ref, discussionID, body string) (int64, error)
 	ResolveDiscussion(ref Ref, discussionID string, resolved bool) error
+	Approve(ref Ref, sha string) error
+	Unapprove(ref Ref) error
+	RetryPipeline(ref Ref, pipelineID int64) error
 }
 
 // FileDiff is one changed file of an MR.

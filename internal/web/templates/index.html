@@ -11,7 +11,7 @@
     </form>
     <div class="tb-row tb-filter-row">
       <input type="text" data-filter="#mrs-table" placeholder="Фильтр: номер, название, автор, ветка…" size="30">
-      {{if .MRs}}{{template "filters" (dict "Target" "#mrs-table" "Labels" .Base.Labels "Mine" true "Draft" true "AI" true)}}{{end}}
+      {{if .MRs}}{{template "filters" (dict "Target" "#mrs-table" "Labels" .Base.Labels "Mine" true "Role" true "Draft" true "AI" true)}}{{end}}
     </div>
   </div>
   <div class="tb-agent">

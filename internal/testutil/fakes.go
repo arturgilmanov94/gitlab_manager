@@ -66,6 +66,7 @@ type FakeGitLab struct {
 	FailWrite      bool     // replies, resolves, approvals and retries are refused
 	Replies        []string // ReplyDiscussion calls
 	Resolves       []string // ResolveDiscussion calls
+	Writes         []string // Approve / Unapprove / RetryPipeline calls
 	FailApprovals  bool
 	FailUser       bool
 	UserCalls      int
@@ -202,6 +203,59 @@ func (f *FakeGitLab) ResolveDiscussion(ref gitlab.Ref, discussionID string, reso
 		}
 	}
 	return errors.New("GitLab did not change the thread: 404 Discussion Not Found")
+}
+
+// Approve adds alice to the approvers (refused when sha is not the MR's head) and records the call in Writes.
+func (f *FakeGitLab) Approve(ref gitlab.Ref, sha string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailWrite {
+		return errors.New("GitLab did not accept the approval: 403 Forbidden")
+	}
+	if head := gitlab.HeadSHA(f.MRs[ref.IID]); sha != "" && sha != head {
+		return errors.New("GitLab did not accept the approval: 409 SHA does not match HEAD of source branch")
+	}
+	by, ok := f.ApprovedBy[ref.IID]
+	if !ok && ref.IID == 42 {
+		by = []string{"carol"}
+	}
+	f.ApprovedBy[ref.IID] = append(append([]string(nil), by...), "alice")
+	f.Writes = append(f.Writes, fmt.Sprintf("approve %d %s", ref.IID, sha))
+	return nil
+}
+
+// Unapprove removes alice from the approvers.
+func (f *FakeGitLab) Unapprove(ref gitlab.Ref) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailWrite {
+		return errors.New("GitLab did not take the approval back: 403 Forbidden")
+	}
+	var rest []string
+	for _, name := range f.ApprovedBy[ref.IID] {
+		if name != "alice" {
+			rest = append(rest, name)
+		}
+	}
+	f.ApprovedBy[ref.IID] = rest
+	f.Writes = append(f.Writes, fmt.Sprintf("unapprove %d", ref.IID))
+	return nil
+}
+
+// RetryPipeline marks the head pipeline of every MR that has this pipeline as running.
+func (f *FakeGitLab) RetryPipeline(ref gitlab.Ref, pipelineID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailWrite {
+		return errors.New("GitLab did not restart the pipeline: 403 Forbidden")
+	}
+	for _, mr := range f.MRs {
+		if p, ok := mr["head_pipeline"].(map[string]any); ok && gitlab.Int(p, "id") == pipelineID {
+			p["status"] = "running"
+		}
+	}
+	f.Writes = append(f.Writes, fmt.Sprintf("retry %d", pipelineID))
+	return nil
 }
 
 func (f *FakeGitLab) setThreadsLocked(iid int64, list []gitlab.Discussion) {

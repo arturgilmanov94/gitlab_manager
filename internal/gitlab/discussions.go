@@ -290,3 +290,32 @@ func Unresolved(list []Discussion) int64 {
 	}
 	return n
 }
+
+// Approve approves an MR as the current user. sha is the head the developer looked at: GitLab refuses when the
+// MR has moved on since, so an approval never lands on commits nobody saw.
+func (g *Glab) Approve(ref Ref, sha string) error {
+	payload := map[string]any{}
+	if sha != "" {
+		payload["sha"] = sha
+	}
+	if _, err := g.apiWrite(ref.Host, "POST", fmt.Sprintf("projects/%s/merge_requests/%d/approve", ref.EncodedProject(), ref.IID), payload); err != nil {
+		return fmt.Errorf("GitLab did not accept the approval: %w", err)
+	}
+	return nil
+}
+
+// Unapprove takes the current user's approval back.
+func (g *Glab) Unapprove(ref Ref) error {
+	if _, err := g.apiWrite(ref.Host, "POST", fmt.Sprintf("projects/%s/merge_requests/%d/unapprove", ref.EncodedProject(), ref.IID), nil); err != nil {
+		return fmt.Errorf("GitLab did not take the approval back: %w", err)
+	}
+	return nil
+}
+
+// RetryPipeline restarts the failed and cancelled jobs of a pipeline.
+func (g *Glab) RetryPipeline(ref Ref, pipelineID int64) error {
+	if _, err := g.apiWrite(ref.Host, "POST", fmt.Sprintf("projects/%s/pipelines/%d/retry", ref.EncodedProject(), pipelineID), nil); err != nil {
+		return fmt.Errorf("GitLab did not restart the pipeline: %w", err)
+	}
+	return nil
+}

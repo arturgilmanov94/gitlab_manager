@@ -468,7 +468,9 @@ func (s *Service) fetchMRPartial(ref gitlab.Ref, manual, freshThreads bool) (*db
 		}
 	}
 	me := s.CurrentUser()
+	var approvedBy *[]string
 	if approvals, err := s.GitLab.GetApprovals(ref); err == nil {
+		approvedBy = &approvals.ApprovedBy
 		row.ApprovalsGiven, row.ApprovalsRequired = approvals.Given, approvals.Required
 		row.ApprovedByMe = me != "" && contains(approvals.ApprovedBy, me)
 	} else {
@@ -498,6 +500,16 @@ func (s *Service) fetchMRPartial(ref gitlab.Ref, manual, freshThreads bool) (*db
 	s.assignMR(mr)
 	if err == nil && haveThreads {
 		s.storeDiscussions(mr, threads)
+	}
+	if err == nil {
+		details := db.MRDetails{Reviewers: gitlab.Usernames(payload, "reviewers"), Assignees: gitlab.Usernames(payload, "assignees"),
+			HasConflicts: gitlab.Bool(payload, "has_conflicts"), MergeStatus: gitlab.Str(payload, "detailed_merge_status")}
+		if approvedBy != nil {
+			details.ApprovedBy = *approvedBy
+		} else {
+			details.ApprovedBy = s.DB.MRDetailsOf(mr.ID).ApprovedBy // approvals could not be read: keep the names
+		}
+		_ = s.DB.SetMRDetails(mr.ID, details)
 	}
 	return mr, strings.Join(problems, "; "), err
 }

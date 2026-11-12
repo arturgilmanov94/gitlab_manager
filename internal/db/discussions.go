@@ -255,3 +255,30 @@ func (d *DB) discussionsFingerprint(mrID int64) string {
 		FROM mr_discussions WHERE mr_id = ? ORDER BY id)`, mrID).Scan(&x)
 	return x
 }
+
+// MRDetails are the people and the merge readiness of an MR as GitLab reports them.
+type MRDetails struct {
+	ApprovedBy   []string `json:"approved_by"`
+	Reviewers    []string `json:"reviewers"`
+	Assignees    []string `json:"assignees"`
+	HasConflicts bool     `json:"has_conflicts"`
+	// MergeStatus is GitLab's detailed_merge_status: mergeable, not_approved, discussions_not_resolved, conflict,
+	// ci_must_pass, ci_still_running, draft_status, need_rebase, checking… ("" on old GitLab versions).
+	MergeStatus string `json:"merge_status"`
+}
+
+// SetMRDetails stores the details of an MR.
+func (d *DB) SetMRDetails(id int64, details MRDetails) error {
+	raw, _ := json.Marshal(details)
+	_, err := d.sql.Exec("UPDATE merge_requests SET gitlab_details = ? WHERE id = ?", string(raw), id)
+	return err
+}
+
+// MRDetailsOf returns the stored details of an MR (zero value when never read).
+func (d *DB) MRDetailsOf(id int64) MRDetails {
+	var raw string
+	var out MRDetails
+	_ = d.sql.QueryRow("SELECT gitlab_details FROM merge_requests WHERE id = ?", id).Scan(&raw)
+	_ = json.Unmarshal([]byte(raw), &out)
+	return out
+}

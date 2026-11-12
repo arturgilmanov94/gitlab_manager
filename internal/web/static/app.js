@@ -304,6 +304,19 @@
     setTimeout(reload, 900);
   };
 
+  // Approve: the confirmation says what exactly is being approved and what is still open.
+  window.approveMR = async function (button) {
+    const d = button.dataset;
+    const lines = [`Одобрить !${d.iid} в GitLab на коммите ${d.sha.slice(0, 8)}?`];
+    if (Number(d.unresolved) > 0) lines.push(`• нерешённых обсуждений: ${d.unresolved}`);
+    if (d.ai === 'never') lines.push('• AI-ревью не запускалось');
+    else if (d.ai === 'stale') lines.push('• после AI-ревью появились новые коммиты');
+    if (Number(d.major) > 0) lines.push(`• открытых серьёзных замечаний AI: ${d.major}`);
+    if (!confirm(lines.join('\n'))) return;
+    const data = await call('POST', `/api/mrs/${d.mr}/approve`, { sha: d.sha }, button);
+    if (data) { flash('MR одобрен', true); setTimeout(reload, 600); }
+  };
+
   // Threads: reply (optionally resolving), resolve / reopen, preview of the reply as it will read.
   window.replyThread = async function (id, button, resolve) {
     const area = document.querySelector(`textarea[data-reply-thread="${id}"]`);

@@ -408,6 +408,12 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
 .btn.danger, .btn-link.danger { color: var(--danger); }
 
 /* findings: code excerpt, inline actions, GitLab post editor */
+/* MR page: people, merge readiness and the actions on the MR itself */
+.people { margin-top: 8px; display: grid; gap: 2px; }
+.people .k { display: inline-block; min-width: 78px; color: var(--muted); }
+.gitlab-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+.btn-success { background: var(--success); border-color: var(--success); color: #fff; }
+.btn-success:hover { filter: brightness(0.95); }
 /* MR page tabs and live threads */
 .page-tabs { display: flex; gap: 2px; margin: 0 0 14px; border-bottom: 1px solid var(--border); }
 .page-tabs a { color: var(--fg-2); padding: 8px 14px; display: flex; align-items: center; gap: 6px; border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500; white-space: nowrap; }

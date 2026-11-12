@@ -64,6 +64,19 @@
     <div class="detail">
       {{if .MR.ApprovalsRequired}}approvals {{.MR.ApprovalsGiven}}/{{.MR.ApprovalsRequired}}{{if ge .MR.ApprovalsGiven .MR.ApprovalsRequired}} ✓{{end}} · {{else if .MR.ApprovalsGiven}}approvals {{.MR.ApprovalsGiven}} · {{end}}<a href="#discussions">{{if .MR.Unresolved}}{{.MR.Unresolved}} нерешённых обсуждений{{else}}нет нерешённых обсуждений{{end}}</a>{{if .MR.Diverged}} · <span class="tip" data-tip="На сколько коммитов {{.MR.TargetBranch}} ушёл вперёд с момента ветвления.">отстаёт от {{.MR.TargetBranch}} на {{.MR.Diverged}}</span>{{end}}{{if .MR.ChangesCount}} · {{.MR.ChangesCount}} файлов{{end}} · обновлён {{when .MR.GitLabUpdatedAt}}
     </div>
+    {{if not .Closed}}
+    <div class="people small">
+      {{if .Readiness}}<div><span class="k">merge</span><span class="state state-{{.ReadinessTone}}">{{.Readiness}}</span></div>{{end}}
+      <div><span class="k">одобрили</span>{{if .Details.ApprovedBy}}{{people .Details.ApprovedBy .Me}}{{else}}<span class="muted">пока никто</span>{{end}}</div>
+      {{if .Details.Reviewers}}<div><span class="k">reviewers</span>{{people .Details.Reviewers .Me}}</div>{{end}}
+      {{if .Details.Assignees}}<div><span class="k">assignees</span>{{people .Details.Assignees .Me}}</div>{{end}}
+    </div>
+    <div class="gitlab-actions">
+      {{if .MR.ApprovedByMe}}<button class="btn btn-sm tip" data-tip="Забрать своё одобрение в GitLab" onclick="confirm('Забрать approve у !{{.MR.IID}}?') && post('/api/mrs/{{.MR.ID}}/unapprove', {}, this).then(r => r && (flash('Одобрение снято', true), reload()))">Unapprove</button>
+      {{else if not .IsMine}}<button class="btn btn-sm btn-success tip" data-tip="Одобрить MR в GitLab от вашего имени на коммите {{shortSHA .MR.HeadSHA}}. Если в MR успеют появиться новые коммиты, GitLab откажет." onclick="approveMR(this)" data-mr="{{.MR.ID}}" data-iid="{{.MR.IID}}" data-sha="{{.MR.HeadSHA}}" data-unresolved="{{.MR.Unresolved}}" data-major="{{.OpenMajor}}" data-ai="{{.State}}">Approve</button>{{end}}
+      {{if eq .MR.PipelineStatus "failed" "canceled"}}<button class="btn btn-sm tip" data-tip="Перезапустить упавшие jobs head pipeline в GitLab" onclick="confirm('Перезапустить упавшие jobs pipeline в GitLab?') && post('/api/mrs/{{.MR.ID}}/pipeline/retry', {}, this).then(r => r && (flash('Pipeline перезапущен', true), reload()))">Retry pipeline</button>{{end}}
+    </div>
+    {{end}}
   </div>
   <div class="status-block tone-{{aiTone .State}}">
     <div class="label">AI review</div>

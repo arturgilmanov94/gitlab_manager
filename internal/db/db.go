@@ -1004,7 +1004,7 @@ func (d *DB) SetFindingGitLabNote(id int64, url string) error {
 func (d *DB) DataFingerprint(mrID int64) string {
 	const mrRow = `id || ':' || head_sha || ':' || state || ':' || unresolved || ':' || gitlab_updated_at || ':' || pipeline_status || ':' ||
 		approvals_given || ':' || my_roles || ':' || approved_by_me || ':' || hidden || ':' || notes_count || ':' || labels || ':' || title || ':' ||
-		draft || ':' || diverged || ':' || seen_at`
+		draft || ':' || diverged || ':' || seen_at || ':' || gitlab_details`
 	const runRow = `id || ':' || status || ':' || (SELECT COUNT(*) FROM findings f WHERE f.run_id = runs.id AND f.status = 'open')`
 	var mrs, issues, runs string
 	if mrID > 0 {
