@@ -304,6 +304,22 @@
     setTimeout(reload, 900);
   };
 
+  // Local tasks: create one and open it; edit its title and description.
+  window.newTask = async function (event) {
+    event.preventDefault();
+    const f = event.target;
+    const data = await call('POST', '/api/issues/local', { project: f.project ? f.project.value : '', title: f.title.value, description: f.description.value }, f.querySelector('button[type=submit]'));
+    if (data) go(data.redirect);
+    return false;
+  };
+  window.editTask = async function (event, id) {
+    event.preventDefault();
+    const f = event.target;
+    const data = await call('POST', `/api/issues/${id}/edit`, { title: f.title.value, description: f.description.value }, f.querySelector('button[type=submit]'));
+    if (data) reload();
+    return false;
+  };
+
   // Approve: the confirmation says what exactly is being approved and what is still open.
   window.approveMR = async function (button) {
     const d = button.dataset;

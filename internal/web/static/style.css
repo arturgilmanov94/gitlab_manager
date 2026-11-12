@@ -408,6 +408,11 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
 .btn.danger, .btn-link.danger { color: var(--danger); }
 
 /* findings: code excerpt, inline actions, GitLab post editor */
+/* new local task */
+.new-task > summary { list-style: none; display: inline-flex; }
+.new-task > summary::-webkit-details-marker { display: none; }
+.new-task-form { display: grid; gap: 8px; margin-top: 8px; max-width: 640px; }
+.new-task-form input[type=text], .new-task-form textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--fg); }
 /* task page: stage picker, comments */
 .stage-pick { color: var(--muted); }
 .stage-pick select { font-size: 12px; padding: 1px 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--fg); margin-left: 4px; }

@@ -2,7 +2,7 @@
 <section class="page-head">
   <div>
     <div class="crumbs"><a class="back tip" data-back href="/issues" data-tip="Назад к списку (Esc). Ведёт туда, откуда вы пришли: список задач с вашими фильтрами, сессии или обзор.">← Задачи</a> · {{.Issue.ProjectPath}}</div>
-    <h1><a class="ref" href="{{.Issue.WebURL}}" target="_blank" rel="noopener">#{{.Issue.IID}}</a> {{.Issue.Title}}</h1>
+    <h1>{{if .Issue.Local}}<span class="ref">#{{.Issue.IID}}</span> <span class="badge tip" data-tip="Задача создана в dashboard, без issue в GitLab. Закрыть — стадия «Закрыта».">локальная</span>{{else}}<a class="ref" href="{{.Issue.WebURL}}" target="_blank" rel="noopener">#{{.Issue.IID}}</a>{{end}} {{.Issue.Title}}</h1>
     <div class="meta"><span>{{.Issue.Author}}</span><span class="sep"></span><span>{{.Issue.State}}</span>{{if keyLabels .Issue.Labels}}<span class="sep"></span><span>{{template "labels" .Issue.Labels}}</span>{{end}}{{with otherLabels .Issue.Labels}}<span class="sep"></span><span>{{.}}</span>{{end}}<span class="sep"></span><span>GitLab обновлена {{when .Issue.GitLabUpdatedAt}}</span>
       <span class="sep"></span><label class="stage-pick tip" data-tip="Стадия задачи. Считается сама по запускам и связанным MR; можно поставить вручную — тогда держится, пока не вернёте «авто».">стадия
         <select onchange="post('/api/issues/{{.Issue.ID}}/stage', {stage: this.value}, this).then(r => r && reload())">
@@ -34,7 +34,7 @@
       <button class="btn btn-primary tip" data-tip="{{kindTip "plan"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'plan', this, {notes: document.getElementById('notes').value, mode: planMode()})">Исследовать</button>
       <button class="btn tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Решить сразу</button>
     {{end}}
-    <a class="btn btn-link ext tip" data-tip="Открыть задачу #{{.Issue.IID}} в GitLab (новая вкладка)." href="{{.Issue.WebURL}}" target="_blank" rel="noopener">GitLab</a>
+    {{if not .Issue.Local}}<a class="btn btn-link ext tip" data-tip="Открыть задачу #{{.Issue.IID}} в GitLab (новая вкладка)." href="{{.Issue.WebURL}}" target="_blank" rel="noopener">GitLab</a>{{end}}
     <details class="menu">
       <summary title="Ещё действия">⋯</summary>
       <div class="menu-items">
@@ -43,9 +43,9 @@
           <button class="item tip" data-tip="{{kindTip "implement"}}" onclick="startRun('/api/issues/{{.Issue.ID}}/runs', 'implement', this, {notes: document.getElementById('notes').value, branch: document.getElementById('branch').value})">Решить без плана<span class="sub">агент сам спланирует и реализует</span></button>
           <div class="divider"></div>
         {{end}}
-        <button class="item tip" data-tip="{{kindTip "refresh"}}" onclick="post('/api/issues/{{.Issue.ID}}/refresh', {}, this).then(r => r && reload())">Обновить из GitLab</button>
+        {{if not .Issue.Local}}<button class="item tip" data-tip="{{kindTip "refresh"}}" onclick="post('/api/issues/{{.Issue.ID}}/refresh', {}, this).then(r => r && reload())">Обновить из GitLab</button>{{end}}
         <a class="item" href="#history">История сессий</a>
-        <button class="item" onclick="copyText('{{.Issue.WebURL}}')">Скопировать ссылку на задачу</button>
+        {{if not .Issue.Local}}<button class="item" onclick="copyText('{{.Issue.WebURL}}')">Скопировать ссылку на задачу</button>{{end}}
         <div class="divider"></div>
         {{if .Active}}<button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Active.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}
         <button class="item danger tip" data-tip="{{kindTip "remove"}}" onclick="confirm('Убрать задачу из dashboard? Ветки и workspace не удаляются.') && del('/api/issues/{{.Issue.ID}}', this).then(r => r && go('/issues'))">Убрать из dashboard</button>
@@ -122,8 +122,13 @@
 {{end}}
 
 <section class="card">
-  <div class="card-head"><h2>Описание задачи</h2></div>
-  <div class="description-md">{{if .Issue.Description}}{{md .Issue.Description (blobBase .Issue.WebURL) ""}}{{else}}<span class="muted">(описание в GitLab пустое)</span>{{end}}</div>
+  <div class="card-head"><h2>Описание задачи</h2>{{if .Issue.Local}}<button class="btn btn-sm btn-link" onclick="document.getElementById('task-edit').hidden = false; this.hidden = true">Изменить</button>{{end}}</div>
+  {{if .Issue.Local}}<form id="task-edit" class="new-task-form" hidden onsubmit="return editTask(event, '{{.Issue.ID}}')">
+    <input type="text" name="title" value="{{.Issue.Title}}" maxlength="300" required>
+    <textarea name="description" rows="6">{{.Issue.Description}}</textarea>
+    <div class="inline"><button type="submit" class="btn btn-primary btn-sm">Сохранить</button><button type="button" class="btn btn-sm btn-link" onclick="reload()">Отмена</button></div>
+  </form>{{end}}
+  <div class="description-md">{{if .Issue.Description}}{{md .Issue.Description (blobBase .Issue.WebURL) ""}}{{else}}<span class="muted">{{if .Issue.Local}}(без описания){{else}}(описание в GitLab пустое){{end}}</span>{{end}}</div>
 </section>
 
 {{if .LinkedMRs}}

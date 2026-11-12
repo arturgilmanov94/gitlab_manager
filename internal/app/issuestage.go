@@ -2,6 +2,7 @@ package app
 
 import (
 	"strconv"
+	"strings"
 
 	"mr-review/internal/db"
 	"mr-review/internal/gitlab"
@@ -9,6 +10,29 @@ import (
 
 // Task stage and links (T20). The stage is stored on the task so that the list, the page and the inbox agree; it is
 // computed from the task's runs and its linked MRs unless the developer set it by hand.
+
+// refreshLocalLinks stores the dashboard's MRs on a local task's branch (a local task has no GitLab links).
+func (s *Service) refreshLocalLinks(issue *db.Issue) {
+	_, notes := s.DB.IssueLinks(issue.ID)
+	_ = s.DB.SetIssueLinks(issue.ID, s.branchMRs(issue, nil), notes)
+}
+
+// branchMRs are the dashboard's MRs opened from the task's branch that are not in seen.
+func (s *Service) branchMRs(issue *db.Issue, seen map[string]bool) []db.LinkedMR {
+	var out []db.LinkedMR
+	branch := s.IssueBranch(issue)
+	all, err := s.DB.ListMRs()
+	if err != nil {
+		return nil
+	}
+	for _, m := range all {
+		if m.SourceBranch != branch || seen[m.ProjectPath+"!"+itoa64(m.IID)] {
+			continue
+		}
+		out = append(out, db.LinkedMR{Host: m.GitLabHost, ProjectPath: m.ProjectPath, IID: m.IID, Title: m.Title, State: m.State, WebURL: m.WebURL, SourceBranch: m.SourceBranch, Via: "branch", MRID: m.ID})
+	}
+	return out
+}
 
 // refreshIssueLinks stores the MRs GitLab links to the task (closes / related), the dashboard's MRs on the task's
 // branch, and the task's comments. A GitLab error keeps what was stored.
@@ -45,15 +69,7 @@ func (s *Service) refreshIssueLinks(issue *db.Issue, ref gitlab.Ref) {
 		mrs = append(mrs, row)
 	}
 	// MRs of the dashboard opened from the task's branch, even when nobody linked them in GitLab.
-	branch := s.IssueBranch(issue)
-	if all, err := s.DB.ListMRs(); err == nil {
-		for _, m := range all {
-			if m.SourceBranch != branch || seen[m.ProjectPath+"!"+itoa64(m.IID)] {
-				continue
-			}
-			mrs = append(mrs, db.LinkedMR{Host: m.GitLabHost, ProjectPath: m.ProjectPath, IID: m.IID, Title: m.Title, State: m.State, WebURL: m.WebURL, SourceBranch: m.SourceBranch, Via: "branch", MRID: m.ID})
-		}
-	}
+	mrs = append(mrs, s.branchMRs(issue, seen)...)
 	_ = s.DB.SetIssueLinks(issue.ID, mrs, stored)
 }
 
@@ -72,7 +88,7 @@ func (s *Service) UpdateIssueStage(issueID int64) {
 // otherwise from its runs: one working → research / implementing; a finished implementation → implemented;
 // a finished plan → planned; else new.
 func ComputeStage(issue *db.Issue, runs []db.RunSummary, mrs []db.LinkedMR) string {
-	if issue.Closed() {
+	if !issue.Local() && issue.Closed() {
 		return "done"
 	}
 	merged, open := false, false
@@ -146,3 +162,38 @@ func (s *Service) IssuesOfMR(mr *db.MergeRequest) []db.Issue {
 }
 
 func itoa64(n int64) string { return strconv.FormatInt(n, 10) }
+
+// CreateLocalTask creates a task without a GitLab issue in a project (0 = the default one).
+func (s *Service) CreateLocalTask(projectID int64, title, description string) (*db.Issue, error) {
+	title, description = strings.TrimSpace(title), strings.TrimSpace(description)
+	if title == "" {
+		return nil, userErr("у задачи должно быть название")
+	}
+	if len([]rune(title)) > 300 {
+		return nil, userErr("название длиннее 300 символов")
+	}
+	var pid *int64
+	if projectID > 0 {
+		if s.ForProject(projectID) == s.root && projectID != s.root.ProjectID {
+			return nil, userErr("проект #%d не найден", projectID)
+		}
+		pid = &projectID
+	} else if s.root.ProjectID > 0 {
+		id := s.root.ProjectID
+		pid = &id
+	}
+	return s.DB.CreateLocalIssue(title, description, pid)
+}
+
+// EditLocalTask changes the title and description of a local task.
+func (s *Service) EditLocalTask(issueID int64, title, description string) error {
+	issue, _ := s.DB.GetIssue(issueID)
+	if issue == nil || !issue.Local() {
+		return userErr("редактировать можно только локальную задачу")
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return userErr("у задачи должно быть название")
+	}
+	return s.DB.UpdateLocalIssue(issueID, title, strings.TrimSpace(description))
+}

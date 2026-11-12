@@ -420,6 +420,21 @@ func (s *Server) routes() {
 	})
 
 	s.mux.HandleFunc("POST /api/issues", s.apiAddIssue)
+	// Local tasks (G2): created and edited here, no GitLab issue behind them.
+	s.mux.HandleFunc("POST /api/issues/local", func(w http.ResponseWriter, r *http.Request) {
+		body := readBody(r)
+		pid, _ := strconv.ParseInt(body["project"], 10, 64)
+		issue, err := s.svc.CreateLocalTask(pid, body["title"], body["description"])
+		if err != nil {
+			s.result(w, nil, err)
+			return
+		}
+		s.result(w, map[string]any{"redirect": issuePath(issue.ID)}, nil)
+	})
+	s.mux.HandleFunc("POST /api/issues/{id}/edit", func(w http.ResponseWriter, r *http.Request) {
+		body := readBody(r)
+		s.result(w, nil, s.svc.EditLocalTask(pathID(r), body["title"], body["description"]))
+	})
 	s.mux.HandleFunc("POST /api/issues/sync", func(w http.ResponseWriter, r *http.Request) {
 		res, err := s.svc.SyncIssues()
 		s.result(w, map[string]any{"synced": res.Synced, "archived": res.Archived, "pruned": res.Pruned,

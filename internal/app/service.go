@@ -769,6 +769,11 @@ func (s *Service) RefreshIssue(id int64) (*db.Issue, error) {
 	if err != nil || issue == nil {
 		return nil, userErr("issue #%d is not in the dashboard", id)
 	}
+	if issue.Local() { // nothing to read from GitLab: only the MRs of its branch
+		s.refreshLocalLinks(issue)
+		s.UpdateIssueStage(issue.ID)
+		return s.DB.GetIssue(id)
+	}
 	return s.fetchIssue(gitlab.Ref{Host: issue.GitLabHost, ProjectPath: issue.ProjectPath, IID: issue.IID})
 }
 
@@ -841,7 +846,7 @@ func (s *Service) SyncIssues() (SyncResult, error) {
 	known, _ := s.DB.ListIssues()
 	var stale []db.Issue
 	for _, item := range known {
-		if listed[issueKey(item.GitLabHost, item.ProjectPath, item.IID)] || item.Closed() {
+		if listed[issueKey(item.GitLabHost, item.ProjectPath, item.IID)] || item.Closed() || item.Local() { // local tasks are not GitLab's
 			continue
 		}
 		stale = append(stale, item.Issue)
@@ -3259,7 +3264,7 @@ func (s *Service) MRDraftFor(run *db.Run, issue *db.Issue) MRDraft {
 	}
 	_ = json.Unmarshal([]byte(run.ResultJSON), &report)
 	var b strings.Builder
-	if issue != nil {
+	if issue != nil && !issue.Local() {
 		fmt.Fprintf(&b, "Closes %s\n\n", issue.WebURL)
 	}
 	if report.Summary != "" {
@@ -3370,13 +3375,16 @@ func (s *Service) CreateMR(runID int64, title, description string) (string, erro
 		return "", userErr("issue not found")
 	}
 	host, project := issue.GitLabHost, issue.ProjectPath
-	if _, defProject := s.DefaultProject(); defProject != "" {
+	if defHost, defProject := s.DefaultProject(); defProject != "" {
 		project = defProject // the branch lives in the code repository, not necessarily the issue's project
+		if issue.Local() {
+			host = defHost
+		}
 	}
 	if strings.TrimSpace(title) == "" {
 		title = fmt.Sprintf("%s %s", issue.Ref(), issue.Title)
 	}
-	if strings.TrimSpace(description) == "" {
+	if strings.TrimSpace(description) == "" && !issue.Local() {
 		description = "Closes " + issue.WebURL
 	}
 	url, err := s.GitLab.CreateMR(host, project, run.Branch, s.Settings.BaseBranch, title, description)
@@ -3432,7 +3440,7 @@ func (s *Service) RemoveWorktree(runID int64) error {
 // ---------------------------------------------------------------------------------- helpers
 
 func (s *Service) promptIssue(issue *db.Issue) prompts.Issue {
-	out := prompts.Issue{WebURL: issue.WebURL, ProjectPath: issue.ProjectPath, Host: issue.GitLabHost, IID: issue.IID, Title: issue.Title, Description: issue.Description}
+	out := prompts.Issue{WebURL: issue.WebURL, ProjectPath: issue.ProjectPath, Host: issue.GitLabHost, IID: issue.IID, Title: issue.Title, Description: issue.Description, Local: issue.Local()}
 	mrs, notes := s.DB.IssueLinks(issue.ID)
 	for _, n := range notes {
 		out.Comments = append(out.Comments, prompts.IssueComment{Author: n.Author, Body: n.Body, CreatedAt: n.CreatedAt})

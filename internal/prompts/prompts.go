@@ -365,6 +365,7 @@ type Issue struct {
 	WebURL, ProjectPath, Host string
 	IID                       int64
 	Title, Description        string
+	Local                     bool           // created in the dashboard: no GitLab issue behind it
 	Comments                  []IssueComment // people's comments on the task, oldest first
 	MRs                       []string       // MRs linked to the task, one line each
 }
@@ -464,8 +465,13 @@ const summaryRule = "The `summary` MUST start with 2-5 sentences describing what
 
 func issueBlock(issue Issue, notes string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Issue: %s\nProject path: %s (GitLab host: %s)\nIssue IID: %d\nTitle: %s\n\n--- issue description ---\n%s\n--- end description ---\n",
-		issue.WebURL, issue.ProjectPath, issue.Host, issue.IID, issue.Title, strings.TrimSpace(issue.Description))
+	if issue.Local {
+		fmt.Fprintf(&b, "Task: a local task #%d of the developer (there is NO GitLab issue: do not look for one)\nTitle: %s\n\n--- task description ---\n%s\n--- end description ---\n",
+			issue.IID, issue.Title, firstNonEmpty(strings.TrimSpace(issue.Description), "(no description: the title is all there is)"))
+	} else {
+		fmt.Fprintf(&b, "Issue: %s\nProject path: %s (GitLab host: %s)\nIssue IID: %d\nTitle: %s\n\n--- issue description ---\n%s\n--- end description ---\n",
+			issue.WebURL, issue.ProjectPath, issue.Host, issue.IID, issue.Title, strings.TrimSpace(issue.Description))
+	}
 	if len(issue.Comments) > 0 {
 		comments := issue.Comments
 		if len(comments) > maxIssueComments {

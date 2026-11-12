@@ -1125,6 +1125,36 @@ func TestIssueStageAndLinksPages(t *testing.T) {
 	}
 }
 
+// «Новая задача» creates a local task and opens its page; it has no GitLab links and can be edited.
+func TestLocalTaskPages(t *testing.T) {
+	ts, _, _ := newServer(t)
+	if _, list := get(t, ts.URL+"/issues"); !strings.Contains(list, "Новая задача") || !strings.Contains(list, "newTask(event)") {
+		t.Fatal("the list offers a new task")
+	}
+	code, out := postJSON(t, ts.URL+"/api/issues/local", map[string]any{"title": "Local thing", "description": "**do** it"})
+	if code != 200 || out["redirect"] != "/-/issue/1" {
+		t.Fatalf("%d %v", code, out)
+	}
+	_, body := get(t, ts.URL+"/-/issue/1")
+	for _, want := range []string{">локальная<", "Local thing", "<strong>do</strong>", `editTask(event, '1')`, `value="task-1"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("local task page lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "Обновить из GitLab") || strings.Contains(body, "Скопировать ссылку на задачу") {
+		t.Fatal("no GitLab actions on a local task")
+	}
+	if code, _ := postJSON(t, ts.URL+"/api/issues/1/edit", map[string]any{"title": "Renamed", "description": ""}); code != 200 {
+		t.Fatal(code)
+	}
+	if _, list := get(t, ts.URL+"/issues"); !strings.Contains(list, "Renamed") || !strings.Contains(list, ">локальная<") {
+		t.Fatal("the list shows the local task")
+	}
+	if code, _ := postJSON(t, ts.URL+"/api/issues/local", map[string]any{"title": ""}); code != 400 {
+		t.Fatal(code)
+	}
+}
+
 func TestNoteText(t *testing.T) {
 	got := noteText("see ![image](/uploads/abc/image.png){width=814 height=474} and [log](/uploads/d/log.txt)", "https://gl.example.com/g/p/-/merge_requests/5")
 	if got != "see [вложение: image](https://gl.example.com/g/p/uploads/abc/image.png) and [вложение: log](https://gl.example.com/g/p/uploads/d/log.txt)" {

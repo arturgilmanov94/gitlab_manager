@@ -8,6 +8,15 @@
       <input type="text" name="ref" placeholder="Ссылка на задачу или #123" size="30" required>
       <button type="submit" class="btn tip" data-tip="{{kindTip "add"}}">Добавить</button>
     </form>
+    <details class="tb-row new-task">
+      <summary class="btn tip" data-tip="Задача без issue в GitLab: та же страница, исследование, план и реализация в своём workspace. Синхронизация её не удаляет.">Новая задача</summary>
+      <form class="new-task-form" onsubmit="return newTask(event)">
+        {{if gt (len .Base.Projects) 1}}<label class="small">Проект <select name="project">{{range .Base.Projects}}<option value="{{.ID}}"{{if eq .ID $.Base.Project}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>{{end}}
+        <input type="text" name="title" placeholder="Что сделать" maxlength="300" required>
+        <textarea name="description" rows="4" placeholder="Описание: контекст, ожидаемый результат, ограничения (markdown)"></textarea>
+        <div class="inline"><button type="submit" class="btn btn-primary btn-sm">Создать</button><button type="button" class="btn btn-sm btn-link" onclick="this.closest('details').removeAttribute('open')">Отмена</button></div>
+      </form>
+    </details>
     <div class="tb-row tb-filter-row">
       <input type="text" data-filter="#issues-table" placeholder="Фильтр: номер, название, метки…" size="30">
       {{if .Issues}}{{template "filters" (dict "Target" "#issues-table" "Labels" .Base.Labels)}}{{end}}
@@ -20,7 +29,7 @@
 </section>
 
 {{if not .Issues}}
-<div class="empty"><b>Пока нет задач.</b><br>Вставьте ссылку на issue или синхронизируйте назначенные вам.</div>
+<div class="empty"><b>Пока нет задач.</b><br>Вставьте ссылку на issue, синхронизируйте назначенные вам или создайте «Новую задачу» без GitLab.</div>
 {{else}}
 <div class="card table-card">
 <table class="table list" id="issues-table">
@@ -30,7 +39,7 @@
   {{$busy := and .Last (or (eq .Last.Status "running") (eq .Last.Status "queued") (eq .Last.Status "waiting"))}}
   {{$waiting := and .Last (eq .Last.Status "waiting")}}
   <tr data-labels="{{labelSlugs .Labels}}">
-    <td class="nowrap ref-cell"><a class="ref" href="{{issuePath .ID}}">#{{.IID}}</a><div class="muted small">{{.ProjectPath}}</div>{{$pid := .ProjectID}}{{with $.Base.ProjectNames}}{{with index . $pid}}<span class="badge badge-project">{{.}}</span>{{end}}{{end}}</td>
+    <td class="nowrap ref-cell"><a class="ref" href="{{issuePath .ID}}">#{{.IID}}</a><div class="muted small">{{if .Local}}<span class="badge tip" data-tip="Задача создана в dashboard, без issue в GitLab">локальная</span>{{else}}{{.ProjectPath}}{{end}}</div>{{$pid := .ProjectID}}{{with $.Base.ProjectNames}}{{with index . $pid}}<span class="badge badge-project">{{.}}</span>{{end}}{{end}}</td>
     <td class="title-cell">
       <a class="title" href="{{issuePath .ID}}">{{.Title}}</a>
       <div class="sub">{{.Author}}{{template "labels" .Labels}}{{if and .ContextRunID (not $busy)}}<a class="badge badge-ctx tip" href="{{issuePath .ID}}#context-picker" data-tip="У агента есть сессия с контекстом этой задачи (запуск #{{.ContextRunID}}). На странице задачи её можно продолжить вместо нового чата.">контекст #{{.ContextRunID}}</a>{{end}} · обновлена {{when .GitLabUpdatedAt}}{{with otherLabels .Labels}} · <span class="muted">{{.}}</span>{{end}}</div>
@@ -73,7 +82,7 @@
               <a class="item" href="{{issuePath .ID}}#solve">Решить с указаниями…<span class="sub">свои указания агенту, имя ветки</span></a>
               <div class="divider"></div>
             {{end}}
-            <a class="item ext" href="{{.WebURL}}" target="_blank" rel="noopener">GitLab</a>
+            {{if not .Local}}<a class="item ext" href="{{.WebURL}}" target="_blank" rel="noopener">GitLab</a>{{end}}
             <a class="item" href="{{issuePath .ID}}#history">История сессий</a>
             <div class="divider"></div>
             {{if $busy}}<button class="item danger tip" data-tip="{{kindTip "stop"}}" onclick="post('/api/runs/{{.Last.ID}}/cancel', {}, this).then(() => setTimeout(reload, 800))">Остановить</button>{{end}}

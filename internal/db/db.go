@@ -451,12 +451,29 @@ type Issue struct {
 	StageManual     bool   // the developer set the stage by hand
 }
 
-// Ref is "project#iid" — also the project's branch naming convention.
-func (i Issue) Ref() string { return fmt.Sprintf("%s#%d", i.ProjectPath, i.IID) }
+// LocalHost marks a task created in the dashboard, without a GitLab issue (G2).
+const LocalHost = "local"
+
+// Local reports a task created in the dashboard, without a GitLab issue.
+func (i Issue) Local() bool { return i.GitLabHost == LocalHost }
+
+// Ref is "project#iid" — also the project's branch naming convention; a local task is "task-<n>".
+func (i Issue) Ref() string {
+	if i.Local() {
+		return fmt.Sprintf("task-%d", i.IID)
+	}
+	return fmt.Sprintf("%s#%d", i.ProjectPath, i.IID)
+}
 
 // Closed reports whether the issue is done in GitLab and so out of the task list. An empty state is an issue
 // added by hand that has not been fetched yet — it stays in the list.
-func (i Issue) Closed() bool { return i.State != "" && i.State != "opened" }
+// A local task is closed by setting its stage to «Закрыта».
+func (i Issue) Closed() bool {
+	if i.Local() {
+		return i.Stage == "done"
+	}
+	return i.State != "" && i.State != "opened"
+}
 
 const issueColumns = "id, gitlab_host, project_path, iid, web_url, title, description, author, state, labels, gitlab_updated_at, synced_at, added_at, agent_notes, project_id, stage, stage_manual"
 
@@ -499,6 +516,25 @@ func (d *DB) CountRunsForIssue(issueID int64) int64 {
 	var n int64
 	_ = d.sql.QueryRow("SELECT COUNT(*) FROM runs WHERE issue_id = ?", issueID).Scan(&n)
 	return n
+}
+
+// CreateLocalIssue stores a task without a GitLab issue, numbered after the other local tasks.
+func (d *DB) CreateLocalIssue(title, description string, projectID *int64) (*Issue, error) {
+	now := Now()
+	res, err := d.sql.Exec(`INSERT INTO issues (gitlab_host, project_path, iid, web_url, title, description, author, state, labels, gitlab_updated_at, synced_at, added_at, project_id, stage)
+		VALUES (?, 'local', (SELECT COALESCE(MAX(iid), 0) + 1 FROM issues WHERE gitlab_host = ?), '', ?, ?, '', 'opened', '', ?, ?, ?, ?, 'new')`,
+		LocalHost, LocalHost, title, description, now, now, now, nullInt(projectID))
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	return d.GetIssue(id)
+}
+
+// UpdateLocalIssue changes the title and description of a local task.
+func (d *DB) UpdateLocalIssue(id int64, title, description string) error {
+	_, err := d.sql.Exec("UPDATE issues SET title = ?, description = ?, gitlab_updated_at = ? WHERE id = ? AND gitlab_host = ?", title, description, Now(), id, LocalHost)
+	return err
 }
 
 // DeleteIssue removes an issue and its runs.
