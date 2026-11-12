@@ -1883,9 +1883,12 @@ func (s *Service) Cancel(runID int64) bool {
 	if cancel != nil {
 		cancel()
 	}
+	// A run waiting for answers to its questions has no agent process any more (the session is continued with the
+	// answers), even when its goroutine is still finishing — so it is cancelled here, not by the goroutine.
+	pending, _ := s.DB.PendingQuestions(runID)
 	if run.Status == db.StatusQueued {
 		_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusCancelled, "error": "Cancelled before start", "finished_at": db.Now()})
-	} else if run.Status == db.StatusWaiting && cancel == nil {
+	} else if run.Status == db.StatusWaiting && (cancel == nil || len(pending) > 0) {
 		_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusCancelled, "error": "Cancelled while waiting for your answers", "finished_at": db.Now(), "progress": ""})
 	}
 	return true
