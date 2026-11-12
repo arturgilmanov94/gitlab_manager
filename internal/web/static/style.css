@@ -408,6 +408,32 @@ pre.log .l-denied { color: var(--danger); } pre.log .l-init, pre.log .l-sep { co
 .btn.danger, .btn-link.danger { color: var(--danger); }
 
 /* findings: code excerpt, inline actions, GitLab post editor */
+/* MR page tabs and live threads */
+.page-tabs { display: flex; gap: 2px; margin: 0 0 14px; border-bottom: 1px solid var(--border); }
+.page-tabs a { color: var(--fg-2); padding: 8px 14px; display: flex; align-items: center; gap: 6px; border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500; white-space: nowrap; }
+.page-tabs a:hover { color: var(--fg); text-decoration: none; background: var(--surface-2); }
+.page-tabs a.active { color: var(--fg); border-bottom-color: var(--primary); }
+.thread { border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin: 0 0 10px; background: var(--surface); scroll-margin-top: 70px; }
+.thread.thread-waits { border-left-color: var(--warning); }
+.thread.thread-resolved { border-left-color: var(--success); }
+.thread-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.thread-head .thread-where { overflow-wrap: anywhere; }
+.thread-head .thread-link { margin-left: auto; }
+.thread-notes { margin-top: 6px; }
+.note { padding: 6px 0 2px; }
+.note + .note { border-top: 1px dashed var(--border); }
+.note-reply { margin-left: 18px; }
+.note-body { overflow-wrap: anywhere; }
+.note-body > :first-child { margin-top: 2px; } .note-body > :last-child { margin-bottom: 2px; }
+.note-body img { max-width: 100%; }
+.thread-ai { margin-top: 8px; padding: 8px 10px; border-radius: var(--radius); background: var(--surface-2); }
+.note-body.long { max-height: 240px; overflow: hidden; position: relative; }
+.note-body.long::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 48px; background: linear-gradient(transparent, var(--surface)); }
+.note-more { margin: 2px 0 4px; }
+.pick-bar[hidden] { display: none; }
+.threads-group { margin-top: 12px; }
+.threads-group > summary { margin-bottom: 10px; }
+.pick-bar { position: sticky; bottom: 0; z-index: 40; box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06); }
 .code-snippet { margin: 8px 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface-2); }
 .code-snippet .snippet-head { padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .code-snippet .snippet { max-height: 320px; overflow: auto; font-size: 12px; line-height: 1.5; position: relative; }

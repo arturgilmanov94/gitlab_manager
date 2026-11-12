@@ -138,7 +138,6 @@ type Client interface {
 	CurrentUser(host string) (string, error)
 	GetMR(ref Ref) (map[string]any, error)
 	GetApprovals(ref Ref) (Approvals, error)
-	CountUnresolved(ref Ref) (int64, error)
 	ListOpenMRs(host, username string, roles []string, projectPath string) ([]map[string]any, error)
 	GetIssue(ref Ref) (map[string]any, error)
 	ListOpenIssues(host, username, projectPath string) ([]map[string]any, error)
@@ -147,7 +146,7 @@ type Client interface {
 	FailedJobs(ref Ref, pipelineID int64) ([]Job, error)
 	JobTrace(ref Ref, jobID int64, tailLines int) (string, error)
 	MRDiffs(ref Ref) ([]FileDiff, error)
-	UnresolvedThreads(ref Ref) ([]Thread, error)
+	Discussions(ref Ref) ([]Discussion, error)
 	MRVersions(ref Ref) ([]Version, error)
 	MRVersionDiffs(ref Ref, versionID int64) ([]FileDiff, error)
 	RawFile(ref Ref, path, sha string) (string, error)
@@ -159,16 +158,6 @@ type FileDiff struct {
 	OldPath, NewPath      string
 	New, Deleted, Renamed bool
 	Diff                  string // unified diff of this file
-}
-
-// Thread is an unresolved reviewer discussion (first note).
-type Thread struct {
-	ID     string
-	Author string
-	File   string
-	Line   int64
-	Body   string
-	Notes  int
 }
 
 // Job is one CI job of a pipeline.
@@ -519,28 +508,6 @@ func Bool(obj map[string]any, key string) bool {
 	return v
 }
 
-// CountUnresolved counts unresolved, resolvable discussions of a merge request.
-func (g *Glab) CountUnresolved(ref Ref) (int64, error) {
-	items, err := g.apiList(ref.Host, fmt.Sprintf("projects/%s/merge_requests/%d/discussions?per_page=100", ref.EncodedProject(), ref.IID))
-	if err != nil {
-		return 0, err
-	}
-	var count int64
-	for _, disc := range items {
-		notes, _ := disc["notes"].([]any)
-		if len(notes) == 0 {
-			continue
-		}
-		first, _ := notes[0].(map[string]any)
-		resolvable, _ := first["resolvable"].(bool)
-		resolved, _ := first["resolved"].(bool)
-		if resolvable && !resolved {
-			count++
-		}
-	}
-	return count, nil
-}
-
 // MRDiffs returns the per-file diffs of an MR (the /diffs endpoint, falling back to the older /changes).
 func (g *Glab) MRDiffs(ref Ref) ([]FileDiff, error) {
 	list, err := g.apiList(ref.Host, fmt.Sprintf("projects/%s/merge_requests/%d/diffs?per_page=100", ref.EncodedProject(), ref.IID))
@@ -565,40 +532,6 @@ func ParseDiffs(list []map[string]any) []FileDiff {
 	for _, item := range list {
 		out = append(out, FileDiff{OldPath: Str(item, "old_path"), NewPath: Str(item, "new_path"), New: Bool(item, "new_file"),
 			Deleted: Bool(item, "deleted_file"), Renamed: Bool(item, "renamed_file"), Diff: Str(item, "diff")})
-	}
-	return out
-}
-
-// UnresolvedThreads returns the unresolved resolvable discussions with their first note.
-func (g *Glab) UnresolvedThreads(ref Ref) ([]Thread, error) {
-	items, err := g.apiList(ref.Host, fmt.Sprintf("projects/%s/merge_requests/%d/discussions?per_page=100", ref.EncodedProject(), ref.IID))
-	if err != nil {
-		return nil, err
-	}
-	return ParseThreads(items), nil
-}
-
-// ParseThreads picks the unresolved resolvable discussions out of a discussions payload.
-func ParseThreads(items []map[string]any) []Thread {
-	var out []Thread
-	for _, disc := range items {
-		notes, _ := disc["notes"].([]any)
-		if len(notes) == 0 {
-			continue
-		}
-		first, _ := notes[0].(map[string]any)
-		if !Bool(first, "resolvable") || Bool(first, "resolved") {
-			continue
-		}
-		pos := Nested(first, "position")
-		t := Thread{ID: Str(disc, "id"), Author: Str(Nested(first, "author"), "username"), Body: Str(first, "body"), Notes: len(notes),
-			File: firstNonEmpty(Str(pos, "new_path"), Str(pos, "old_path"))}
-		if line := Int(pos, "new_line"); line != 0 {
-			t.Line = line
-		} else {
-			t.Line = Int(pos, "old_line")
-		}
-		out = append(out, t)
 	}
 	return out
 }

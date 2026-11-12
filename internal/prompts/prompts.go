@@ -31,6 +31,7 @@ const findingSchema = `{
 const discussionSchema = `{
   "type": "object",
   "properties": {
+    "discussion_id": {"type": "string", "description": "the id in [brackets] of this thread in the prefetched list of discussions; empty string when the thread is not in that list"},
     "author": {"type": "string"},
     "file": {"type": "string"},
     "line": {"type": ["integer", "null"]},
@@ -38,7 +39,7 @@ const discussionSchema = `{
     "assessment": {"type": "string", "description": "is it addressed in the current head? what remains?"},
     "addressed": {"type": "boolean"}
   },
-  "required": ["author", "file", "line", "body", "assessment", "addressed"],
+  "required": ["discussion_id", "author", "file", "line", "body", "assessment", "addressed"],
   "additionalProperties": false
 }`
 
@@ -291,9 +292,17 @@ type FileChange struct {
 
 // ThreadNote is an unresolved reviewer discussion for the prompt.
 type ThreadNote struct {
+	ID      string // GitLab discussion id: the review returns it with its assessment
+	Author  string
+	File    string
+	Line    int64
+	Body    string
+	Replies []ThreadReply
+}
+
+// ThreadReply is a later note of a thread.
+type ThreadReply struct {
 	Author string
-	File   string
-	Line   int64
 	Body   string
 }
 
@@ -318,8 +327,12 @@ func contextBlock(c *MRContext, head string) string {
 			if t.Line > 0 {
 				where = fmt.Sprintf("%s:%d", t.File, t.Line)
 			}
-			fmt.Fprintf(&b, "  - @%s at %s: %s\n", t.Author, firstNonEmpty(where, "(general)"), strings.ReplaceAll(strings.TrimSpace(t.Body), "\n", " "))
+			fmt.Fprintf(&b, "  - [%s] @%s at %s: %s\n", t.ID, t.Author, firstNonEmpty(where, "(general)"), oneLine(t.Body, 1200))
+			for _, r := range t.Replies {
+				fmt.Fprintf(&b, "      reply @%s: %s\n", r.Author, oneLine(r.Body, 600))
+			}
 		}
+		b.WriteString("In `unresolved_discussions` return one entry per thread above, with its id from the [brackets] as `discussion_id`.\n")
 	} else {
 		b.WriteString("Unresolved reviewer discussions: none.\n")
 	}
@@ -780,4 +793,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// oneLine flattens a comment for a list in the prompt and cuts it at max runes.
+func oneLine(text string, max int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if r := []rune(text); len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return text
 }

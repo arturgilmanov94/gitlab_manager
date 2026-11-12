@@ -149,3 +149,90 @@ func NewFileLines(diff string) map[int64]DiffLine {
 	}
 	return out
 }
+
+// Note is one comment of a discussion.
+type Note struct {
+	ID         int64  `json:"id"`
+	Author     string `json:"author"`      // username
+	AuthorName string `json:"author_name"` // display name
+	Body       string `json:"body"`
+	CreatedAt  string `json:"created_at"`
+	System     bool   `json:"system,omitempty"` // written by GitLab ("changed this line in version 3")
+}
+
+// Discussion is one discussion of an MR as people see it: a thread on a diff line, a thread on the MR itself or a
+// plain comment (Resolvable false). Discussions made only of system notes are not people talking and are left out.
+type Discussion struct {
+	ID         string
+	Resolvable bool
+	Resolved   bool
+	ResolvedBy string
+	// Where the thread sits ("" = on the MR itself). Line is the line of the new file; a comment on a removed line
+	// has OldLine alone. The SHAs are the diff version the comment was written against.
+	File, OldPath    string
+	Line, OldLine    int64
+	HeadSHA, BaseSHA string
+	Notes            []Note
+}
+
+// Author is who started the discussion.
+func (d Discussion) Author() string {
+	if len(d.Notes) == 0 {
+		return ""
+	}
+	return d.Notes[0].Author
+}
+
+// Discussions returns every discussion of an MR with all its notes.
+func (g *Glab) Discussions(ref Ref) ([]Discussion, error) {
+	items, err := g.apiList(ref.Host, fmt.Sprintf("projects/%s/merge_requests/%d/discussions?per_page=100", ref.EncodedProject(), ref.IID))
+	if err != nil {
+		return nil, err
+	}
+	return ParseDiscussions(items), nil
+}
+
+// ParseDiscussions converts a discussions payload.
+func ParseDiscussions(items []map[string]any) []Discussion {
+	var out []Discussion
+	for _, disc := range items {
+		raw, _ := disc["notes"].([]any)
+		d := Discussion{ID: Str(disc, "id")}
+		people := false
+		for i, item := range raw {
+			note, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			author := Nested(note, "author")
+			n := Note{ID: Int(note, "id"), Author: Str(author, "username"), AuthorName: Str(author, "name"), Body: Str(note, "body"),
+				CreatedAt: Str(note, "created_at"), System: Bool(note, "system")}
+			people = people || !n.System
+			if i == 0 {
+				d.Resolvable, d.Resolved = Bool(note, "resolvable"), Bool(note, "resolved")
+				d.ResolvedBy = Str(Nested(note, "resolved_by"), "username")
+				pos := Nested(note, "position")
+				d.File, d.OldPath = firstNonEmpty(Str(pos, "new_path"), Str(pos, "old_path")), Str(pos, "old_path")
+				d.Line, d.OldLine = Int(pos, "new_line"), Int(pos, "old_line")
+				d.HeadSHA, d.BaseSHA = Str(pos, "head_sha"), Str(pos, "base_sha")
+			}
+			d.Notes = append(d.Notes, n)
+		}
+		if d.ID == "" || !people {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+// Unresolved counts the threads that still wait for an answer: resolvable and not resolved.
+func Unresolved(list []Discussion) int64 {
+	var n int64
+	for _, d := range list {
+		if d.Resolvable && !d.Resolved {
+			n++
+		}
+	}
+	return n
+}

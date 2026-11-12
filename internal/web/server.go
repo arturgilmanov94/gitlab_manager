@@ -148,6 +148,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 		},
 		"errorTitle": errorTitle,
 		"md":         renderMarkdown,
+		"noteText":   noteText,
 		"hasPrefix":  strings.HasPrefix,
 		"runPath":    runPath,
 		"mrPath":     mrPath,
@@ -332,6 +333,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/findings/{id}/code", func(w http.ResponseWriter, r *http.Request) {
 		code, err := s.svc.FindingCode(pathID(r))
 		s.result(w, map[string]any{"code": code}, err)
+	})
+	s.mux.HandleFunc("GET /api/threads/{id}/code", func(w http.ResponseWriter, r *http.Request) {
+		code, err := s.svc.ThreadCode(pathID(r))
+		s.result(w, map[string]any{"code": code}, err)
+	})
+	// Opening the «Обсуждения» tab reads the threads from GitLab; "changed" tells the page to reload itself.
+	s.mux.HandleFunc("POST /api/mrs/{id}/threads/sync", func(w http.ResponseWriter, r *http.Request) {
+		changed, err := s.svc.RefreshThreads(pathID(r))
+		s.result(w, map[string]any{"changed": changed}, err)
 	})
 	s.mux.HandleFunc("POST /api/findings/{id}/gitlab", func(w http.ResponseWriter, r *http.Request) {
 		res, err := s.svc.PostFinding(pathID(r), readBody(r)["body"])
@@ -860,10 +870,8 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 	runs, _ := svc.DB.ListRunsForMR(mr.ID)
 	latest, _ := svc.DB.LatestDoneReview(mr.ID)
 	var findings []db.Finding
-	var discussions []db.Discussion
 	if latest != nil {
 		findings, _ = svc.DB.ListFindings(latest.ID)
-		discussions, _ = svc.DB.ListDiscussions(latest.ID)
 	}
 	active, _ := svc.DB.ActiveRunForMR(mr.ID)
 	username := svc.CurrentUser()
@@ -913,7 +921,7 @@ func (s *Server) mrPage(w http.ResponseWriter, r *http.Request) {
 		"Changes":    changesIf(stale, s.svc, mr, latest),
 		"StandSkill": svc.StandSkill(), "StandTestSkill": svc.SkillFor(db.KindStandTest), "Stand": app.LatestStandFor(runs, mr.SourceBranch),
 		"FailedJobs": svc.FailedJobsFor(mr), "CIAnalysis": latestCIAnalysis(runs, mr.HeadSHA),
-		"Findings": findings, "Discussions": discussions, "Active": active, "LastRun": lastRun,
+		"Findings": findings, "Threads": svc.ThreadsOf(mr), "Active": active, "LastRun": lastRun,
 		"Stale": stale, "State": state, "OpenMajor": major, "OpenMinor": minor, "OpenInfo": info,
 		"IsMine":   username != "" && mr.Author == username,
 		"CanFix":   mr.CanFix(username),
@@ -1215,7 +1223,7 @@ func (s *Server) apiStartMRRun(w http.ResponseWriter, r *http.Request) {
 		analysisID, _ := strconv.ParseInt(body["analysis_run"], 10, 64)
 		runID, err = s.svc.StartCIFix(id, body["runner"], analysisID, cont)
 	case "fix_findings":
-		runID, err = s.svc.StartFixFindings(id, body["runner"], body["notes"], idList(body["findings"]), idList(body["discussions"]), cont)
+		runID, err = s.svc.StartFixFindings(id, body["runner"], body["notes"], db.Selection{Findings: idList(body["findings"]), Discussions: idList(body["discussions"]), Threads: idList(body["threads"])}, cont)
 	default:
 		writeJSON(w, 400, map[string]any{"error": "kind must be quick, full, verify, verify_finding, fix_findings, stand, ci_analyze, ci_fix or fix"})
 		return

@@ -1,0 +1,68 @@
+{{define "threads"}}
+{{$t := .Threads}}
+<section class="card">
+  <div class="card-head">
+    <h2>Обсуждения в GitLab</h2>
+    <div class="small muted"><span id="threads-sync">{{if $t.SyncedAt}}прочитаны {{when $t.SyncedAt}}{{else}}ещё не читались{{end}}</span>
+      <button class="btn btn-sm btn-link tip" data-tip="Прочитать обсуждения из GitLab сейчас" onclick="syncThreads('{{.MR.ID}}', this, true)">Обновить</button></div>
+  </div>
+  {{if not $t.Total}}<p class="muted">В этом MR ещё никто ничего не написал.</p>{{end}}
+  {{if $t.Open}}
+    <h3>Открытые треды ({{len $t.Open}})</h3>
+    {{range $t.Open}}{{template "thread" (dict "T" . "Root" $)}}{{end}}
+  {{else if $t.Total}}<p class="muted">Открытых тредов нет.</p>{{end}}
+  {{if $t.Resolved}}
+  <details class="section threads-group">
+    <summary>Решённые треды ({{len $t.Resolved}})</summary>
+    {{range $t.Resolved}}{{template "thread" (dict "T" . "Root" $)}}{{end}}
+  </details>
+  {{end}}
+  {{if $t.Comments}}
+  <details class="section threads-group">
+    <summary>Комментарии без треда ({{len $t.Comments}})</summary>
+    {{range $t.Comments}}{{template "thread" (dict "T" . "Root" $)}}{{end}}
+  </details>
+  {{end}}
+</section>
+{{end}}
+
+{{define "thread"}}
+{{$r := .Root}}{{$d := .T}}
+<article class="thread{{if $d.Resolved}} thread-resolved{{end}}{{if $d.WaitsForMe}} thread-waits{{end}}" id="thread-{{$d.ID}}">
+  <header class="thread-head">
+    {{if and $r.Pickable $d.Open}}<input type="checkbox" class="pick tip" data-tip="Выбрать тред для «Исправить выбранные»" data-thread="{{$d.ID}}">{{end}}
+    <b>@{{$d.Author}}</b>{{if $d.Mine}} <span class="badge badge-info">мой</span>{{end}}
+    {{if $d.File}}<span class="mono small thread-where">{{$d.File}}{{if $d.Line}}:{{$d.Line}}{{else if $d.OldLine}}:{{$d.OldLine}} <span class="muted">(удалённая строка)</span>{{end}}</span>{{else}}<span class="small muted">к MR целиком</span>{{end}}
+    <span class="small muted">{{when $d.CreatedAt}}</span>
+    {{if $d.WaitsForMe}}<span class="badge badge-warning tip" data-tip="Тред открыт, последнее слово не за вами">ждёт ответа</span>{{end}}
+    {{if $d.Resolved}}<span class="badge badge-success">решён{{if $d.ResolvedBy}} · @{{$d.ResolvedBy}}{{end}}</span>{{end}}
+    {{if $d.URL}}<a class="small ext thread-link" href="{{$d.URL}}" target="_blank" rel="noopener">в GitLab</a>{{end}}
+  </header>
+  {{if $d.File}}<div class="code-snippet" data-thread-code="{{$d.ID}}" hidden></div>{{end}}
+  <div class="thread-notes">
+    {{range $i, $n := $d.People}}
+    <div class="note{{if $i}} note-reply{{end}}">
+      <div class="note-head small"><b>@{{$n.Author}}</b>{{if $n.AuthorName}} <span class="muted">{{$n.AuthorName}}</span>{{end}} <span class="muted">· {{when $n.CreatedAt}}</span></div>
+      <div class="note-body">{{md (noteText $n.Body $r.MR.WebURL) $r.Blob $r.SHA}}</div>
+    </div>
+    {{end}}
+  </div>
+  {{with $d.Assessment}}
+  <div class="thread-ai small">
+    <b>Оценка AI:</b> {{if .Addressed}}<span class="fstatus fstatus-fixed">учтено</span>{{else}}<span class="fstatus fstatus-open">не учтено</span>{{end}}
+    <span class="muted">· <a href="{{runPath .Kind .RunID}}">ревью #{{.RunID}}</a>{{if .HeadSHA}} на <span class="mono">{{shortSHA .HeadSHA}}</span>{{end}}</span>
+    <div>{{md .Text $r.Blob $r.SHA}}</div>
+  </div>
+  {{end}}
+</article>
+{{end}}
+
+{{define "pick-bar"}}
+<div class="pick-bar" id="pick-bar" hidden>
+  <span class="small"><b id="pick-count">0</b> выбрано</span>
+  <input id="pick-notes" type="text" size="44" placeholder="Необязательно: что учесть при исправлении">
+  <button class="btn btn-primary btn-sm tip" data-tip="{{kindTip "fix_findings"}}" onclick="fixSelected('{{.MR.ID}}', this)">Исправить выбранные</button>
+  <button class="btn btn-sm btn-link" onclick="clearPicks()">Снять выбор</button>
+  <span class="small muted">Агент перепроверит каждое замечание и тред, исправит подтверждённые в workspace ветки MR; commit и push — по вашим кнопкам.</span>
+</div>
+{{end}}

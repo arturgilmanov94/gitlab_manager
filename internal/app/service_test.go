@@ -533,8 +533,8 @@ func TestFindingCodeAndPostToGitLab(t *testing.T) {
 	if err != nil || !res.OnLine || !strings.HasSuffix(res.URL, "#note_1001") {
 		t.Fatalf("post on line: %+v %v", res, err)
 	}
-	if gl.Discussions[0] != "edited text @src/A.php:10" {
-		t.Fatalf("discussion %q", gl.Discussions[0])
+	if gl.Posted[0] != "edited text @src/A.php:10" {
+		t.Fatalf("discussion %q", gl.Posted[0])
 	}
 	if _, err := svc.PostFinding(findings[0].ID, "again"); err == nil {
 		t.Fatal("posted twice")
@@ -543,8 +543,8 @@ func TestFindingCodeAndPostToGitLab(t *testing.T) {
 		t.Fatalf("note url %q", f.GitLabNoteURL)
 	}
 	// No line: a general MR comment naming the file.
-	if res, err := svc.PostFinding(findings[1].ID, "naming"); err != nil || res.OnLine || gl.Discussions[1] != "`src/B.php`\n\nnaming" {
-		t.Fatalf("general: %+v %v %q", res, err, gl.Discussions)
+	if res, err := svc.PostFinding(findings[1].ID, "naming"); err != nil || res.OnLine || gl.Posted[1] != "`src/B.php`\n\nnaming" {
+		t.Fatalf("general: %+v %v %q", res, err, gl.Posted)
 	}
 	if _, err := svc.PostFinding(findings[1].ID, "   "); err == nil {
 		t.Fatal("empty body accepted")
@@ -563,8 +563,8 @@ func TestPostFindingFallsBackWhenGitLabRejectsTheLine(t *testing.T) {
 	findings, _ := svc.DB.ListFindings(reviewID)
 	gl.RejectPosition = true
 	res, err := svc.PostFinding(findings[0].ID, "text")
-	if err != nil || res.OnLine || gl.Discussions[0] != "`src/A.php:10`\n\ntext" {
-		t.Fatalf("%+v %v %q", res, err, gl.Discussions)
+	if err != nil || res.OnLine || gl.Posted[0] != "`src/A.php:10`\n\ntext" {
+		t.Fatalf("%+v %v %q", res, err, gl.Posted)
 	}
 }
 
@@ -1366,7 +1366,7 @@ func TestFixSelectedFindings(t *testing.T) {
 	findings, _ := svc.DB.ListFindings(reviewID)
 	discussions, _ := svc.DB.ListDiscussions(reviewID)
 
-	if _, err := svc.StartFixFindings(mr.ID, "", "", nil, nil, 0); err == nil || !strings.Contains(err.Error(), "at least one") {
+	if _, err := svc.StartFixFindings(mr.ID, "", "", db.Selection{}, 0); err == nil || !strings.Contains(err.Error(), "at least one") {
 		t.Fatalf("%v", err)
 	}
 	other := testutil.MRPayload(43, "sha-x")
@@ -1374,10 +1374,10 @@ func TestFixSelectedFindings(t *testing.T) {
 	other["assignees"] = []any{} // an assignee may fix: this MR is bob's alone
 	gl.MRs[43] = other
 	bobs, _ := svc.AddMR("!43")
-	if _, err := svc.StartFixFindings(bobs.ID, "", "", []int64{findings[0].ID}, nil, 0); err == nil || !strings.Contains(err.Error(), "only the author") {
+	if _, err := svc.StartFixFindings(bobs.ID, "", "", db.Selection{Findings: []int64{findings[0].ID}}, 0); err == nil || !strings.Contains(err.Error(), "only the author") {
 		t.Fatalf("others' MRs are refused: %v", err)
 	}
-	if _, err := svc.StartFixFindings(mr.ID, "", "", []int64{999}, nil, 0); err == nil || !strings.Contains(err.Error(), "not found") {
+	if _, err := svc.StartFixFindings(mr.ID, "", "", db.Selection{Findings: []int64{999}}, 0); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("%v", err)
 	}
 	fr.Outputs = []map[string]any{{"summary": "Fixed the null dereference; the naming remark was already handled.",
@@ -1385,7 +1385,7 @@ func TestFixSelectedFindings(t *testing.T) {
 			map[string]any{"finding_id": float64(findings[1].ID), "status": "not_confirmed", "note": "already renamed"}},
 		"addressed": []any{map[string]any{"author": "bob", "file": "src/A.php", "line": 12.0, "comment": "why?", "action": "explained in a code comment", "done": true}},
 		"changes":   []any{map[string]any{"path": "src/A.php", "description": "guard"}}, "tests": "phpunit ok", "todo": []any{}, "self_review": "ok", "commit_message": "fix review findings", "ask": []any{}}}
-	runID, err := svc.StartFixFindings(mr.ID, "", "keep the public API", []int64{findings[0].ID, findings[1].ID}, []int64{discussions[0].ID}, 0)
+	runID, err := svc.StartFixFindings(mr.ID, "", "keep the public API", db.Selection{Findings: []int64{findings[0].ID, findings[1].ID}, Discussions: []int64{discussions[0].ID}}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1410,7 +1410,7 @@ func TestFixSelectedFindings(t *testing.T) {
 	if f1.Status != "open" || f1.CheckStatus != "not_confirmed" {
 		t.Fatalf("%+v", f1)
 	}
-	if _, err := svc.StartFixFindings(mr.ID, "", "", []int64{findings[0].ID}, nil, 0); err == nil || !strings.Contains(err.Error(), "not open") {
+	if _, err := svc.StartFixFindings(mr.ID, "", "", db.Selection{Findings: []int64{findings[0].ID}}, 0); err == nil || !strings.Contains(err.Error(), "not open") {
 		t.Fatalf("fixed findings cannot be selected again: %v", err)
 	}
 	fr.Outputs = []map[string]any{{"summary": "Again.", "results": []any{}, "addressed": []any{}, "changes": []any{}, "tests": "none", "todo": []any{}, "self_review": "ok", "commit_message": "", "ask": []any{}}}

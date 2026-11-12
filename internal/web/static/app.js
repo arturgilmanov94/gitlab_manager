@@ -319,34 +319,106 @@
   }));
 
   // ---- findings: the code around each finding (lines the MR changed are marked), loaded after the page
-  (function findingCode() {
-    const boxes = Array.from(document.querySelectorAll('[data-finding-code]'));
-    if (!boxes.length) return;
+  const loadCode = (function () {
     const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const render = (box, code) => {
       if (!code || !code.Lines || !code.Lines.length) return;
       const rows = code.Lines.map((l) => `<div class="cl${l.Added ? ' add' : ''}${l.Target ? ' target' : ''}"><span class="ln">${l.N}</span><span class="mk">${l.Added ? '+' : ' '}</span><span class="tx">${esc(l.Text) || ' '}</span></div>`).join('');
       const head = `<div class="snippet-head small muted"><span class="mono">${esc(code.File)}${code.Line ? ':' + code.Line : ''}</span> · коммит <span class="mono">${esc((code.SHA || '').slice(0, 8))}</span>` +
-        (code.InDiff ? ' · строка в изменениях MR' : (code.Line ? ' · строка вне изменений MR' : '')) + (code.Note ? ' · ' + esc(code.Note) : '') + '</div>';
+        (code.InDiff ? ' · строка в изменениях MR' : (code.Line && !code.Note ? ' · строка вне изменений MR' : '')) + (code.Note ? ' · ' + esc(code.Note) : '') + '</div>';
       box.innerHTML = head + `<div class="snippet mono">${rows}</div>`;
       box.hidden = false;
       const target = box.querySelector('.cl.target');
       const scroller = box.querySelector('.snippet');
       if (target && scroller) scroller.scrollTop = Math.max(0, target.offsetTop - scroller.clientHeight / 2);
     };
-    let next = 0;
-    const worker = async () => {
-      while (next < boxes.length) {
-        const box = boxes[next++];
-        try {
-          const res = await fetch(`/api/findings/${box.dataset.findingCode}/code`);
-          const data = await res.json();
-          if (res.ok && data.ok !== false) render(box, data.code);
-          else { box.innerHTML = `<div class="small muted">код недоступен: ${esc(data.error || res.statusText)}</div>`; box.hidden = false; }
-        } catch (e) { /* server restarting */ }
+    // Loads the excerpts of the given boxes, three at a time. A box is loaded once.
+    return function (boxes) {
+      boxes = boxes.filter((box) => !box.dataset.loaded);
+      boxes.forEach((box) => { box.dataset.loaded = '1'; });
+      let next = 0;
+      const worker = async () => {
+        while (next < boxes.length) {
+          const box = boxes[next++];
+          const url = box.dataset.findingCode ? `/api/findings/${box.dataset.findingCode}/code` : `/api/threads/${box.dataset.threadCode}/code`;
+          try {
+            const res = await fetch(url);
+            const data = await res.json();
+            if (res.ok && data.ok !== false) render(box, data.code);
+            else { box.innerHTML = `<div class="small muted">код недоступен: ${esc(data.error || res.statusText)}</div>`; box.hidden = false; }
+          } catch (e) { /* server restarting */ }
+        }
+      };
+      for (let i = 0; i < 3; i++) worker();
+    };
+  })();
+  loadCode(Array.from(document.querySelectorAll('[data-finding-code]')));
+
+  // ---- MR page tabs: «Ревью и действия» / «Обсуждения». The tab lives in the hash, so a reload keeps it and links
+  // like #discussions or #thread-12 open the right one. Opening «Обсуждения» reads the threads from GitLab.
+  window.syncThreads = async function (mrId, button, byHand) {
+    let data = null;
+    if (byHand) {
+      data = await call('POST', `/api/mrs/${mrId}/threads/sync`, {}, button);
+    } else {
+      // Opening the tab: GitLab being away is not news worth a red message, the stored threads stay on screen.
+      try { const res = await fetch(`/api/mrs/${mrId}/threads/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); if (res.ok) data = await res.json(); } catch (e) { /* offline */ }
+    }
+    if (!data || data.ok === false) return;
+    if (data.changed) { reload(); return; }
+    const label = document.getElementById('threads-sync');
+    if (label) label.textContent = 'прочитаны только что';
+    if (byHand) flash('Обсуждения актуальны', true);
+  };
+  (function pageTabs() {
+    const nav = document.querySelector('[data-page-tabs]');
+    if (!nav) return;
+    const panes = Array.from(document.querySelectorAll('[data-pane]'));
+    let synced = false;
+    // A long comment (a bot's review, a pasted log) is folded so that the thread list stays a list.
+    const foldLong = (root) => root.querySelectorAll('.note-body:not([data-measured])').forEach((body) => {
+      if (!body.offsetParent) return; // not on screen yet: measured when its tab or group opens
+      body.dataset.measured = '1';
+      if (body.scrollHeight < 320) return;
+      body.classList.add('long');
+      const more = document.createElement('button');
+      more.className = 'btn btn-sm btn-link note-more';
+      more.textContent = 'Показать полностью';
+      more.addEventListener('click', () => {
+        const folded = body.classList.toggle('long');
+        more.textContent = folded ? 'Показать полностью' : 'Свернуть';
+      });
+      body.after(more);
+    });
+    const paneOf = (hash) => (hash === '#discussions' || hash.startsWith('#thread-')) ? 'discussions' : 'review';
+    const show = (hash, scroll) => {
+      const name = paneOf(hash);
+      panes.forEach((p) => { p.hidden = p.dataset.pane !== name; });
+      nav.querySelectorAll('a').forEach((a) => a.classList.toggle('active', a.dataset.tab === name));
+      if (name === 'discussions') {
+        loadCode(Array.from(document.querySelectorAll('[data-thread-code]')).filter((box) => !box.closest('details:not([open])')));
+        foldLong(document);
+        if (!synced) { synced = true; syncThreads(nav.querySelector('[data-tab="discussions"]').dataset.mr, null, false); }
+      }
+      if (scroll && hash.length > 1 && hash !== '#discussions') {
+        const target = document.getElementById(hash.slice(1));
+        if (target && target.tagName !== 'NAV') {
+          const group = target.closest('details');
+          if (group) group.open = true;
+          target.scrollIntoView({ block: 'start' });
+        }
       }
     };
-    for (let i = 0; i < 3; i++) worker();
+    nav.querySelectorAll('a').forEach((a) => a.addEventListener('click', (e) => {
+      e.preventDefault();
+      history.replaceState(null, '', a.dataset.tab === 'review' ? location.pathname + location.search : '#discussions');
+      show(a.dataset.tab === 'review' ? '' : '#discussions', false);
+    }));
+    window.addEventListener('hashchange', () => show(location.hash, true));
+    document.querySelectorAll('details.threads-group').forEach((g) => g.addEventListener('toggle', () => {
+      if (g.open) { loadCode(Array.from(g.querySelectorAll('[data-thread-code]'))); foldLong(g); }
+    }));
+    show(location.hash, true);
   })();
 
   // ---- live refresh: the server syncs GitLab in the background; a page reloads itself once what it shows changed,
@@ -496,13 +568,14 @@
   function picks() {
     const findings = Array.from(document.querySelectorAll('input.pick[data-finding]:checked')).map((el) => el.dataset.finding);
     const discussions = Array.from(document.querySelectorAll('input.pick[data-discussion]:checked')).map((el) => el.dataset.discussion);
-    return { findings, discussions };
+    const threads = Array.from(document.querySelectorAll('input.pick[data-thread]:checked')).map((el) => el.dataset.thread);
+    return { findings, discussions, threads };
   }
   function refreshPickBar() {
     const bar = document.getElementById('pick-bar');
     if (!bar) return;
     const p = picks();
-    const n = p.findings.length + p.discussions.length;
+    const n = p.findings.length + p.discussions.length + p.threads.length;
     bar.hidden = n === 0;
     const count = document.getElementById('pick-count');
     if (count) count.textContent = String(n);
@@ -520,7 +593,7 @@
   window.fixSelected = function (mrId, button) {
     const p = picks();
     const notes = (document.getElementById('pick-notes') || {}).value || '';
-    return startRun(`/api/mrs/${mrId}/runs`, 'fix_findings', button, { findings: p.findings.join(','), discussions: p.discussions.join(','), notes });
+    return startRun(`/api/mrs/${mrId}/runs`, 'fix_findings', button, { findings: p.findings.join(','), discussions: p.discussions.join(','), threads: p.threads.join(','), notes });
   };
 
   // «Довести до MR»: create the merge request from the prefilled form on the run page.

@@ -83,6 +83,10 @@ type Settings struct {
 	ReviewWorktreeTTLMin int
 	// PrefetchMaxDiffChars caps the MR diff inlined into review prompts (PREFETCH_MAX_DIFF_CHARS; 0 = never inline).
 	PrefetchMaxDiffChars int
+	// DiscussionsMaxAgeSec is how long a background sync trusts the stored discussions of an MR whose comment count,
+	// head and update time did not change (DISCUSSIONS_MAX_AGE_SEC; 0 = read them on every sync). Resolving a thread
+	// changes none of the three, so the stored state is re-read after this long anyway.
+	DiscussionsMaxAgeSec int
 	// UsagePollMin is how often the agents' subscription usage (5-hour / weekly windows) is refreshed for the header
 	// (USAGE_POLL_MIN, default 5; 0 = do not poll).
 	UsagePollMin int
@@ -301,6 +305,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		ReviewWorktreeTTLMin:  num("REVIEW_WORKTREE_TTL_MIN", 60),
 		UsagePollMin:          num("USAGE_POLL_MIN", 5),
 		PrefetchMaxDiffChars:  num("PREFETCH_MAX_DIFF_CHARS", 60000),
+		DiscussionsMaxAgeSec:  num("DISCUSSIONS_MAX_AGE_SEC", 600),
 	}
 	if s.RunConcurrency < 1 {
 		s.RunConcurrency = 1

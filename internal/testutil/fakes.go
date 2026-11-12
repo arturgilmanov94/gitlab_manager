@@ -53,12 +53,13 @@ type FakeGitLab struct {
 	MRs        map[int64]map[string]any
 	Issues     map[int64]map[string]any
 	Unresolved map[int64]int64
-	ApprovedBy map[int64][]string // overrides the approvals of an MR
-	Listed     []int64            // MRs returned by ListOpenMRs; nil = every MR in MRs
+	Threads    map[int64][]gitlab.Discussion // overrides the canned discussions of an MR
+	ApprovedBy map[int64][]string            // overrides the approvals of an MR
+	Listed     []int64                       // MRs returned by ListOpenMRs; nil = every MR in MRs
 	Calls      []string
 	CreatedMR  string
-	// Discussions records CreateDiscussion calls ("body" or "body @path:line"); RejectPosition makes diff comments fail.
-	Discussions    []string
+	// Posted records CreateDiscussion calls ("body" or "body @path:line"); RejectPosition makes diff comments fail.
+	Posted         []string
 	RejectPosition bool
 	// Fail* make the corresponding calls fail (GitLab hiccups); UserCalls counts CurrentUser lookups.
 	FailUnresolved bool
@@ -114,13 +115,49 @@ func (f *FakeGitLab) GetMR(ref gitlab.Ref) (map[string]any, error) {
 	}
 	return nil, errors.New("404 Not Found")
 }
-func (f *FakeGitLab) CountUnresolved(ref gitlab.Ref) (int64, error) {
+
+// SetThreads replaces the discussions GitLab returns for an MR (nil = none at all).
+func (f *FakeGitLab) SetThreads(iid int64, list []gitlab.Discussion) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.FailUnresolved {
-		return 0, errors.New("glab api discussions failed: 502")
+	if f.Threads == nil {
+		f.Threads = map[int64][]gitlab.Discussion{}
 	}
-	return f.Unresolved[ref.IID], nil
+	f.Threads[iid] = list
+}
+
+// CallsCopy returns the calls recorded so far.
+func (f *FakeGitLab) CallsCopy() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.Calls...)
+}
+
+// Discussions returns Threads[iid] when set; otherwise Unresolved[iid] canned unresolved threads (the first one is
+// bob's «why?» on src/A.php:12 with a reply) followed by one resolved thread and one plain comment.
+func (f *FakeGitLab) Discussions(ref gitlab.Ref) ([]gitlab.Discussion, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, fmt.Sprintf("discussions %d", ref.IID))
+	if f.FailUnresolved {
+		return nil, errors.New("glab api discussions failed: 502")
+	}
+	if list, ok := f.Threads[ref.IID]; ok {
+		return list, nil
+	}
+	var out []gitlab.Discussion
+	for i := int64(0); i < f.Unresolved[ref.IID]; i++ {
+		d := gitlab.Discussion{ID: fmt.Sprintf("d%d", i+1), Resolvable: true, File: "src/A.php", Line: 12 + i, HeadSHA: "sha-1",
+			Notes: []gitlab.Note{{ID: 100 + i, Author: "bob", AuthorName: "Bob", Body: "why?", CreatedAt: "2026-09-01T10:00:00+03:00"}}}
+		if i == 0 {
+			d.Notes = append(d.Notes, gitlab.Note{ID: 199, Author: "alice", AuthorName: "Alice", Body: "because", CreatedAt: "2026-09-01T11:00:00+03:00"})
+		}
+		out = append(out, d)
+	}
+	out = append(out, gitlab.Discussion{ID: "dr", Resolvable: true, Resolved: true, ResolvedBy: "alice", File: "src/A.php", Line: 3,
+		Notes: []gitlab.Note{{ID: 300, Author: "carol", Body: "typo", CreatedAt: "2026-09-01T09:00:00+03:00"}}})
+	out = append(out, gitlab.Discussion{ID: "dc", Notes: []gitlab.Note{{ID: 301, Author: "carol", Body: "LGTM overall", CreatedAt: "2026-09-01T09:30:00+03:00"}}})
+	return out, nil
 }
 func (f *FakeGitLab) GetApprovals(ref gitlab.Ref) (gitlab.Approvals, error) {
 	f.mu.Lock()
@@ -174,11 +211,6 @@ func (f *FakeGitLab) MRDiffs(ref gitlab.Ref) ([]gitlab.FileDiff, error) {
 	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, fmt.Sprintf("diffs %d", ref.IID))
 	return []gitlab.FileDiff{{OldPath: "src/A.php", NewPath: "src/A.php", Diff: "@@ -1,3 +1,4 @@\n-old\n+new line\n+another\n context\n"}}, nil
-}
-
-// UnresolvedThreads returns one canned reviewer thread.
-func (f *FakeGitLab) UnresolvedThreads(ref gitlab.Ref) ([]gitlab.Thread, error) {
-	return []gitlab.Thread{{ID: "d1", Author: "bob", File: "src/A.php", Line: 12, Body: "why?", Notes: 2}}, nil
 }
 
 // FailedJobs returns the canned failed jobs of any pipeline (two jobs, one allowed to fail).
@@ -246,8 +278,8 @@ func (f *FakeGitLab) CreateDiscussion(ref gitlab.Ref, body string, pos *gitlab.P
 	if pos != nil {
 		entry = fmt.Sprintf("%s @%s:%d", body, pos.NewPath, pos.NewLine)
 	}
-	f.Discussions = append(f.Discussions, entry)
-	return int64(1000 + len(f.Discussions)), nil
+	f.Posted = append(f.Posted, entry)
+	return int64(1000 + len(f.Posted)), nil
 }
 
 func containsInt(list []int64, v int64) bool {
@@ -494,7 +526,7 @@ func Settings(t *testing.T) (*config.Settings, string) {
 	project := GitRepo(t, filepath.Join(tmp, "project"))
 	dash := filepath.Join(tmp, "dash")
 	_ = os.MkdirAll(dash, 0o755)
-	s := config.Load(dash, map[string]string{"PROJECT_ROOT": project, "RUN_TIMEOUT_SEC": "30", "REVIEW_WORKTREE": "0", "GITLAB_REACH_CHECK": "0", "GITLAB_HOST": "gitlab.example.com", "GITLAB_PROJECT": "group/sub/project"}, false)
+	s := config.Load(dash, map[string]string{"PROJECT_ROOT": project, "RUN_TIMEOUT_SEC": "30", "REVIEW_WORKTREE": "0", "GITLAB_REACH_CHECK": "0", "DISCUSSIONS_MAX_AGE_SEC": "0", "GITLAB_HOST": "gitlab.example.com", "GITLAB_PROJECT": "group/sub/project"}, false)
 	if s.ProjectRoot == "" {
 		t.Fatalf("project root not resolved: %s", s.ProjectRootError)
 	}

@@ -55,19 +55,24 @@ func (s *Service) FindingCode(findingID int64) (*FindingCode, error) {
 	if err != nil {
 		return nil, err
 	}
-	sha := firstOf(run.HeadSHA, mr.HeadSHA)
-	out := &FindingCode{File: f.File, SHA: sha}
+	var line int64
 	if f.Line != nil {
-		out.Line = *f.Line
+		line = *f.Line
 	}
-	lines, err := s.fileLines(mr, sha, f.File)
+	return s.codeExcerpt(mr, firstOf(run.HeadSHA, mr.HeadSHA), f.File, line)
+}
+
+// codeExcerpt returns the lines around file:line at sha, the lines the MR added marked.
+func (s *Service) codeExcerpt(mr *db.MergeRequest, sha, file string, line int64) (*FindingCode, error) {
+	out := &FindingCode{File: file, SHA: sha, Line: line}
+	lines, err := s.fileLines(mr, sha, file)
 	if err != nil {
-		return nil, userErr("не удалось получить %s на коммите %s: %v", f.File, shortID(sha), err)
+		return nil, userErr("не удалось получить %s на коммите %s: %v", file, shortID(sha), err)
 	}
 	var marks map[int64]gitlab.DiffLine
 	if v := s.diffVersionFor(mr, sha); v != nil {
-		if file, ok := v.Files[f.File]; ok {
-			marks = file.Lines
+		if f, ok := v.Files[file]; ok {
+			marks = f.Lines
 		}
 	} else {
 		out.Note = "изменённые строки не отмечены: версия diff для этого коммита недоступна"

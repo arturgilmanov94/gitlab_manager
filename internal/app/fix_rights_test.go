@@ -42,7 +42,7 @@ func TestFixRightsAuthorOrAssignee(t *testing.T) {
 	reviewID, _ := svc.StartReview(asReviewer.ID, db.KindReviewFull, "", 0)
 	testutil.WaitFor(t, func() bool { return status(svc, reviewID) == db.StatusDone })
 	findings, _ := svc.DB.ListFindings(reviewID)
-	if _, err := svc.StartFixFindings(asReviewer.ID, "", "", []int64{findings[0].ID}, nil, 0); !refused(err) {
+	if _, err := svc.StartFixFindings(asReviewer.ID, "", "", db.Selection{Findings: []int64{findings[0].ID}}, 0); !refused(err) {
 		t.Fatalf("fix findings: %v", err)
 	}
 	// The assignee may.

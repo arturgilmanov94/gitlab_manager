@@ -68,7 +68,7 @@ type core struct {
 	cancels   map[int64]context.CancelFunc
 	changes   map[string]gitlab.Changes       // compare results per "ref from..to" (Changes)
 	jobs      map[string][]prompts.FailedJob  // failed jobs with log tails per "ref pipeline" (FailedJobsFor)
-	contexts  map[string]*prompts.MRContext   // prefetched diff/discussions per "ref sha" (reviewContext)
+	contexts  map[string]*prompts.MRContext   // prefetched files and diff per "ref sha" (reviewContext)
 	decisions map[int64]chan approvalDecision // pending approval id → channel the run goroutine waits on
 	runRules  map[int64]map[string]bool       // «allow such calls until the end of the run»: run id → SimilarKey
 	sessions  map[string]int64                // agent session id → the run resuming it now (one --resume at a time)
@@ -437,13 +437,15 @@ func (s *Service) mrFromPayload(payload map[string]any, ref gitlab.Ref) db.Merge
 // fetchMR reads an MR from GitLab with its discussions, approvals and my roles, and stores it.
 // manual marks MRs added by hand (they stay in the list regardless of roles).
 func (s *Service) fetchMR(ref gitlab.Ref, manual bool) (*db.MergeRequest, error) {
-	mr, _, err := s.fetchMRPartial(ref, manual)
+	mr, _, err := s.fetchMRPartial(ref, manual, true)
 	return mr, err
 }
 
 // fetchMRPartial is fetchMR that also reports what could not be refreshed (discussions, approvals, username):
 // those values keep what was stored before instead of turning into zeros — a failed call is not "0 threads".
-func (s *Service) fetchMRPartial(ref gitlab.Ref, manual bool) (*db.MergeRequest, string, error) {
+// freshThreads reads the discussions even when nothing says they changed (a refresh by hand, a run about to start);
+// a background sync passes false and re-reads them only on a sign of change or once they are old (discussionsStale).
+func (s *Service) fetchMRPartial(ref gitlab.Ref, manual, freshThreads bool) (*db.MergeRequest, string, error) {
 	payload, err := s.GitLab.GetMR(ref)
 	if err != nil {
 		return nil, "", &UserError{err.Error()}
@@ -452,12 +454,17 @@ func (s *Service) fetchMRPartial(ref gitlab.Ref, manual bool) (*db.MergeRequest,
 	var problems []string
 	row := s.mrFromPayload(payload, ref)
 	row.Manual = manual
-	if n, err := s.GitLab.CountUnresolved(ref); err == nil {
-		row.Unresolved = n
-	} else {
-		problems = append(problems, "обсуждения: "+err.Error())
-		if previous != nil {
-			row.Unresolved = previous.Unresolved
+	var threads []gitlab.Discussion
+	haveThreads := false
+	if previous != nil {
+		row.Unresolved = previous.Unresolved
+	}
+	if freshThreads || s.discussionsStale(previous, &row) {
+		if threads, err = s.GitLab.Discussions(ref); err == nil {
+			haveThreads = true
+			row.Unresolved = gitlab.Unresolved(threads)
+		} else {
+			problems = append(problems, "обсуждения: "+err.Error())
 		}
 	}
 	me := s.CurrentUser()
@@ -489,6 +496,9 @@ func (s *Service) fetchMRPartial(ref gitlab.Ref, manual bool) (*db.MergeRequest,
 	}
 	mr, err := s.DB.UpsertMR(row)
 	s.assignMR(mr)
+	if err == nil && haveThreads {
+		s.storeDiscussions(mr, threads)
+	}
 	return mr, strings.Join(problems, "; "), err
 }
 
@@ -601,7 +611,7 @@ func (s *Service) SyncMRs() (SyncResult, error) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			fresh, partial, err := s.fetchMRPartial(ref, false)
+			fresh, partial, err := s.fetchMRPartial(ref, false, false)
 			if err != nil || partial != "" {
 				mu.Lock()
 				result.Problems = append(result.Problems, fmt.Sprintf("!%d: %s", ref.IID, firstOf(partial, errText(err))))
@@ -1122,8 +1132,8 @@ func (s *Service) cancelled(runID int64, message string) {
 	_ = s.DB.UpdateRun(runID, map[string]any{"status": db.StatusCancelled, "error": message, "finished_at": db.Now(), "progress": ""})
 }
 
-// reviewContext prefetches what a review needs from GitLab (changed files, diff, unresolved discussions),
-// cached per head SHA. worktree names the read-only checkout the run uses ("" when the project root).
+// reviewContext prefetches what a review needs from GitLab: changed files and the diff, cached per head SHA, and
+// the unresolved discussions as they are right now. worktree names the read-only checkout the run uses ("" when the project root).
 func (s *Service) reviewContext(mr *db.MergeRequest, worktree string) *prompts.MRContext {
 	key := fmt.Sprintf("%s/%s!%d %s", mr.GitLabHost, mr.ProjectPath, mr.IID, mr.HeadSHA)
 	s.mu.Lock()
@@ -1155,11 +1165,6 @@ func (s *Service) reviewContext(mr *db.MergeRequest, worktree string) *prompts.M
 		} else {
 			ctx.DiffTruncated = true
 		}
-		if threads, err := s.GitLab.UnresolvedThreads(ref); err == nil {
-			for _, t := range threads {
-				ctx.Threads = append(ctx.Threads, prompts.ThreadNote{Author: t.Author, File: t.File, Line: t.Line, Body: t.Body})
-			}
-		}
 		s.mu.Lock()
 		if s.contexts == nil {
 			s.contexts = map[string]*prompts.MRContext{}
@@ -1170,6 +1175,8 @@ func (s *Service) reviewContext(mr *db.MergeRequest, worktree string) *prompts.M
 	}
 	copy := *cached
 	copy.Worktree = worktreeOrEmpty(worktree, s.Settings.ProjectRoot)
+	// The threads are not part of the cache: people answer and resolve them while the head stays the same.
+	copy.Threads = s.promptThreads(mr)
 	return &copy
 }
 
@@ -1302,14 +1309,15 @@ func (s *Service) StartCIFix(mrID int64, runnerName string, analysisRunID, conti
 
 // StartFixFindings queues an edit run in the MR worktree that addresses the findings and reviewer discussions the
 // developer selected («Исправить выбранные»). Own MRs only: the branch will be pushed to the MR.
-func (s *Service) StartFixFindings(mrID int64, runnerName, notes string, findingIDs, discussionIDs []int64, continueRunID int64) (int64, error) {
+func (s *Service) StartFixFindings(mrID int64, runnerName, notes string, sel db.Selection, continueRunID int64) (int64, error) {
 	if v := s.forMR(mrID); v != s {
-		return v.StartFixFindings(mrID, runnerName, notes, findingIDs, discussionIDs, continueRunID)
+		return v.StartFixFindings(mrID, runnerName, notes, sel, continueRunID)
 	}
+	findingIDs, discussionIDs := sel.Findings, sel.Discussions
 	if _, err := s.requireRoot(); err != nil {
 		return 0, err
 	}
-	if len(findingIDs)+len(discussionIDs) == 0 {
+	if len(findingIDs)+len(discussionIDs)+len(sel.Threads) == 0 {
 		return 0, userErr("select at least one finding or discussion")
 	}
 	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil {
@@ -1349,6 +1357,18 @@ func (s *Service) StartFixFindings(mrID int64, runnerName, notes string, finding
 			return 0, userErr("discussion #%d does not belong to this merge request", id)
 		}
 	}
+	for _, id := range sel.Threads {
+		d, _ := s.DB.GetMRDiscussion(id)
+		if d == nil {
+			return 0, userErr("thread #%d not found: the discussions were refreshed, reload the page", id)
+		}
+		if d.MRID != mrID {
+			return 0, userErr("thread #%d does not belong to this merge request", id)
+		}
+		if !d.Open() {
+			return 0, userErr("the thread of @%s is already resolved", d.Author)
+		}
+	}
 	prev, err := s.continuation(continueRunID, &mrID, nil, s.Worktrees.Path(mr.SourceBranch))
 	if err != nil {
 		return 0, err
@@ -1360,7 +1380,7 @@ func (s *Service) StartFixFindings(mrID int64, runnerName, notes string, finding
 	if err != nil {
 		return 0, err
 	}
-	selection, _ := json.Marshal(db.Selection{Findings: findingIDs, Discussions: discussionIDs})
+	selection, _ := json.Marshal(sel)
 	run := db.Run{Kind: db.KindFixFindings, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), RequestedModel: model, Notes: notes, SelectionJSON: string(selection), ContinueRunID: runIDPtr(prev),
 		Branch: mr.SourceBranch, WorkDir: s.Worktrees.Path(mr.SourceBranch), SkillIdentifier: skillID(s.SkillFor(db.KindFixFindings))}
 	return s.enqueue(run)
@@ -1801,7 +1821,7 @@ func (s *Service) Retry(runID int64) (int64, error) {
 			return 0, userErr("run has no merge request")
 		}
 		sel := run.SelectionOf()
-		return s.StartFixFindings(*run.MRID, run.AgentSelector(), run.Notes, sel.Findings, sel.Discussions, derefID(run.ContinueRunID))
+		return s.StartFixFindings(*run.MRID, run.AgentSelector(), run.Notes, sel, derefID(run.ContinueRunID))
 	case db.KindPlan:
 		if run.IssueID == nil {
 			return 0, userErr("run has no issue")
@@ -2055,6 +2075,19 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		for _, id := range sel.Discussions {
 			if d, _ := s.DB.GetDiscussion(id); d != nil {
 				threads = append(threads, prompts.SelectedDiscussion{ID: d.ID, Author: d.Author, File: d.File, Line: d.Line, Body: d.Body})
+			}
+		}
+		for _, id := range sel.Threads {
+			if d, _ := s.DB.GetMRDiscussion(id); d != nil {
+				body := d.First().Body
+				for _, r := range d.Replies() {
+					body += "\n\nreply @" + r.Author + ": " + r.Body
+				}
+				item := prompts.SelectedDiscussion{ID: d.ID, Author: d.Author, File: d.File, Body: body}
+				if n := firstPositive(d.Line, d.OldLine); n > 0 {
+					item.Line = &n
+				}
+				threads = append(threads, item)
 			}
 		}
 		_ = s.DB.AddRunEvent(runID, "workspace", "worktree", run.Branch)
@@ -2577,6 +2610,8 @@ type reviewResult struct {
 		Body       string `json:"body"`
 		Assessment string `json:"assessment"`
 		Addressed  bool   `json:"addressed"`
+		// DiscussionID is the GitLab id from the prefetched list ("" when the agent found the thread itself).
+		DiscussionID string `json:"discussion_id"`
 	} `json:"unresolved_discussions"`
 }
 
@@ -2681,9 +2716,14 @@ func (s *Service) store(run *db.Run, structured json.RawMessage, previous []db.F
 	if err := s.DB.ReplaceFindings(run.ID, findings); err != nil {
 		return err
 	}
+	var live []db.MRDiscussion
+	if run.MRID != nil {
+		live, _ = s.DB.ListMRDiscussions(*run.MRID)
+	}
 	var discussions []db.Discussion
 	for _, d := range res.Discussions {
-		discussions = append(discussions, db.Discussion{Author: d.Author, File: d.File, Line: d.Line, Body: d.Body, Assessment: d.Assessment, Addressed: d.Addressed})
+		discussions = append(discussions, db.Discussion{Author: d.Author, File: d.File, Line: d.Line, Body: d.Body, Assessment: d.Assessment, Addressed: d.Addressed,
+			GitLabID: matchThread(live, d.DiscussionID, d.Author, d.File, d.Line)})
 	}
 	return s.DB.ReplaceDiscussions(run.ID, discussions)
 }

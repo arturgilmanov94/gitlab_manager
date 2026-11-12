@@ -1010,6 +1010,7 @@ func (d *DB) DataFingerprint(mrID int64) string {
 	if mrID > 0 {
 		_ = d.sql.QueryRow("SELECT COALESCE("+mrRow+", '') FROM merge_requests WHERE id = ?", mrID).Scan(&mrs)
 		_ = d.sql.QueryRow("SELECT COALESCE(group_concat(x, '|'), '') FROM (SELECT "+runRow+" AS x FROM runs WHERE mr_id = ? ORDER BY id)", mrID).Scan(&runs)
+		issues = d.discussionsFingerprint(mrID) // the slot is free for one MR: its live threads
 	} else {
 		_ = d.sql.QueryRow("SELECT COALESCE(group_concat(x, '|'), '') FROM (SELECT " + mrRow + " AS x FROM merge_requests ORDER BY id)").Scan(&mrs)
 		_ = d.sql.QueryRow(`SELECT COALESCE(group_concat(x, '|'), '') FROM (SELECT id || ':' || state || ':' || gitlab_updated_at || ':' || labels || ':' || title AS x
@@ -1314,6 +1315,8 @@ type Discussion struct {
 	Body       string
 	Assessment string
 	Addressed  bool
+	// GitLabID is the GitLab discussion the assessment is about ("" = unknown: a run before 0.32).
+	GitLabID string
 }
 
 // ReplaceDiscussions replaces a run's unresolved discussions.
@@ -1331,8 +1334,8 @@ func (d *DB) ReplaceDiscussions(runID int64, items []Discussion) error {
 		if it.Addressed {
 			addressed = 1
 		}
-		if _, err := tx.Exec("INSERT INTO discussions (run_id, author, file, line, body, assessment, addressed) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			runID, it.Author, it.File, nullInt(it.Line), it.Body, it.Assessment, addressed); err != nil {
+		if _, err := tx.Exec("INSERT INTO discussions (run_id, author, file, line, body, assessment, addressed, gitlab_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			runID, it.Author, it.File, nullInt(it.Line), it.Body, it.Assessment, addressed, it.GitLabID); err != nil {
 			return err
 		}
 	}
@@ -1341,7 +1344,7 @@ func (d *DB) ReplaceDiscussions(runID int64, items []Discussion) error {
 
 // ListDiscussions returns a run's discussions.
 func (d *DB) ListDiscussions(runID int64) ([]Discussion, error) {
-	rows, err := d.sql.Query("SELECT id, run_id, author, file, line, body, assessment, addressed FROM discussions WHERE run_id = ? ORDER BY id", runID)
+	rows, err := d.sql.Query("SELECT id, run_id, author, file, line, body, assessment, addressed, gitlab_id FROM discussions WHERE run_id = ? ORDER BY id", runID)
 	if err != nil {
 		return nil, err
 	}
@@ -1351,7 +1354,7 @@ func (d *DB) ListDiscussions(runID int64) ([]Discussion, error) {
 		var it Discussion
 		var line sql.NullInt64
 		var addressed int
-		if err := rows.Scan(&it.ID, &it.RunID, &it.Author, &it.File, &line, &it.Body, &it.Assessment, &addressed); err != nil {
+		if err := rows.Scan(&it.ID, &it.RunID, &it.Author, &it.File, &line, &it.Body, &it.Assessment, &addressed, &it.GitLabID); err != nil {
 			return nil, err
 		}
 		if line.Valid {
@@ -1754,7 +1757,7 @@ func (d *DB) GetDiscussion(id int64) (*Discussion, error) {
 	var x Discussion
 	var line sql.NullInt64
 	var addressed int
-	err := d.sql.QueryRow("SELECT id, run_id, author, file, line, body, assessment, addressed FROM discussions WHERE id = ?", id).Scan(&x.ID, &x.RunID, &x.Author, &x.File, &line, &x.Body, &x.Assessment, &addressed)
+	err := d.sql.QueryRow("SELECT id, run_id, author, file, line, body, assessment, addressed, gitlab_id FROM discussions WHERE id = ?", id).Scan(&x.ID, &x.RunID, &x.Author, &x.File, &line, &x.Body, &x.Assessment, &addressed, &x.GitLabID)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1771,7 +1774,8 @@ func (d *DB) GetDiscussion(id int64) (*Discussion, error) {
 // Selection is what a fix_findings run was asked to address.
 type Selection struct {
 	Findings    []int64 `json:"findings"`
-	Discussions []int64 `json:"discussions"`
+	Discussions []int64 `json:"discussions"`       // per-run discussion rows (runs before 0.32)
+	Threads     []int64 `json:"threads,omitempty"` // live threads (mr_discussions)
 }
 
 // SelectionOf decodes a run's selection ("" → empty).

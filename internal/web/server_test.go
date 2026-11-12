@@ -939,7 +939,7 @@ func TestFixSelectedPages(t *testing.T) {
 	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
 	postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "full"})
 	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
-	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `class="pick" data-finding="1"`) || !strings.Contains(body, `class="pick" data-discussion="1"`) || !strings.Contains(body, `fixSelected('1', this)`) {
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, `class="pick" data-finding="1"`) || !strings.Contains(body, `data-thread="1"`) || !strings.Contains(body, `fixSelected('1', this)`) {
 		t.Fatal("own MR must offer the selection")
 	}
 	if _, body := get(t, ts.URL+"/-/review/1"); strings.Contains(body, `class="pick"`) {
@@ -956,6 +956,50 @@ func TestFixSelectedPages(t *testing.T) {
 	}
 	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, "исправлено агентом") || strings.Contains(body, `class="pick" data-finding="1"`) {
 		t.Fatal("fixed finding shows the agent's verdict and is no longer selectable")
+	}
+}
+
+// The MR page has the «Обсуждения» tab with the live threads: replies, resolved ones folded, the AI assessment of
+// the latest review on its thread; the code under a thread and a re-read from GitLab are separate calls.
+func TestDiscussionsTab(t *testing.T) {
+	ts, svc, fr := newServer(t)
+	postJSON(t, ts.URL+"/api/mrs", map[string]any{"url": "!42"})
+	fr.Outputs = []map[string]any{testutil.FullReviewOutput("sha-1")}
+	postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "full"})
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(1); return r != nil && r.Status == db.StatusDone })
+	_, body := get(t, ts.URL+"/-/mr/1")
+	for _, want := range []string{`data-tab="discussions"`, `data-pane="discussions" hidden`, `id="thread-1"`, "Открытые треды (2)", "Решённые треды (1)", "Комментарии без треда (1)",
+		"because", "ждёт ответа", "Оценка AI:", "not addressed", `data-thread-code="1"`, `#note_100`, "LGTM overall", `<a href="#discussions">2 нерешённых обсуждений</a>`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("MR page lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "Нерешённые обсуждения ревьюеров") {
+		t.Fatal("the per-review snapshot of threads is replaced by the tab")
+	}
+	if _, run := get(t, ts.URL+"/-/review/1"); !strings.Contains(run, "Нерешённые обсуждения ревьюеров") {
+		t.Fatal("the run page keeps what the review saw")
+	}
+	code, out := getJSON(t, ts.URL+"/api/threads/1/code")
+	if code != 200 || out["code"].(map[string]any)["Line"].(float64) != 12 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if code, out := postJSON(t, ts.URL+"/api/mrs/1/threads/sync", map[string]any{}); code != 200 || out["changed"] != false {
+		t.Fatalf("%d %v", code, out)
+	}
+	svc.GitLab.(*testutil.FakeGitLab).SetThreads(42, nil)
+	if code, out := postJSON(t, ts.URL+"/api/mrs/1/threads/sync", map[string]any{}); code != 200 || out["changed"] != true {
+		t.Fatalf("%d %v", code, out)
+	}
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, "ещё никто ничего не написал") || !strings.Contains(body, "нет нерешённых обсуждений") {
+		t.Fatal("empty state after the threads are gone")
+	}
+}
+
+func TestNoteText(t *testing.T) {
+	got := noteText("see ![image](/uploads/abc/image.png){width=814 height=474} and [log](/uploads/d/log.txt)", "https://gl.example.com/g/p/-/merge_requests/5")
+	if got != "see [вложение: image](https://gl.example.com/g/p/uploads/abc/image.png) and [вложение: log](https://gl.example.com/g/p/uploads/d/log.txt)" {
+		t.Fatal(got)
 	}
 }
 

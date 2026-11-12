@@ -62,7 +62,7 @@
     <div class="label">GitLab</div>
     <div class="value">{{if .Closed}}<span class="glyph">—</span> {{if eq .MR.State "merged"}}Merged{{else}}Closed{{end}}{{else}}<span class="glyph">{{glyph (pipelineTone .MR.PipelineStatus)}}</span> {{pipelineLabel .MR.PipelineStatus}}{{if .MR.Draft}} <span class="badge">Draft</span>{{end}}{{end}}</div>
     <div class="detail">
-      {{if .MR.ApprovalsRequired}}approvals {{.MR.ApprovalsGiven}}/{{.MR.ApprovalsRequired}}{{if ge .MR.ApprovalsGiven .MR.ApprovalsRequired}} ✓{{end}} · {{else if .MR.ApprovalsGiven}}approvals {{.MR.ApprovalsGiven}} · {{end}}{{if .MR.Unresolved}}{{.MR.Unresolved}} нерешённых обсуждений{{else}}нет нерешённых обсуждений{{end}}{{if .MR.Diverged}} · <span class="tip" data-tip="На сколько коммитов {{.MR.TargetBranch}} ушёл вперёд с момента ветвления.">отстаёт от {{.MR.TargetBranch}} на {{.MR.Diverged}}</span>{{end}}{{if .MR.ChangesCount}} · {{.MR.ChangesCount}} файлов{{end}} · обновлён {{when .MR.GitLabUpdatedAt}}
+      {{if .MR.ApprovalsRequired}}approvals {{.MR.ApprovalsGiven}}/{{.MR.ApprovalsRequired}}{{if ge .MR.ApprovalsGiven .MR.ApprovalsRequired}} ✓{{end}} · {{else if .MR.ApprovalsGiven}}approvals {{.MR.ApprovalsGiven}} · {{end}}<a href="#discussions">{{if .MR.Unresolved}}{{.MR.Unresolved}} нерешённых обсуждений{{else}}нет нерешённых обсуждений{{end}}</a>{{if .MR.Diverged}} · <span class="tip" data-tip="На сколько коммитов {{.MR.TargetBranch}} ушёл вперёд с момента ветвления.">отстаёт от {{.MR.TargetBranch}} на {{.MR.Diverged}}</span>{{end}}{{if .MR.ChangesCount}} · {{.MR.ChangesCount}} файлов{{end}} · обновлён {{when .MR.GitLabUpdatedAt}}
     </div>
   </div>
   <div class="status-block tone-{{aiTone .State}}">
@@ -95,6 +95,16 @@
 </div>
 {{end}}
 
+<nav class="page-tabs" data-page-tabs>
+  <a href="#review" data-tab="review" class="active">Ревью и действия</a>
+  <a href="#discussions" data-tab="discussions" data-mr="{{.MR.ID}}">Обсуждения{{if .Threads.Open}} <span class="count{{if .Threads.Waiting}} hot{{end}} tip" data-tip="Открытых тредов: {{len .Threads.Open}}{{if .Threads.Waiting}}, ждут вашего ответа: {{.Threads.Waiting}}{{end}}">{{len .Threads.Open}}</span>{{else if .Threads.Total}} <span class="count">✓</span>{{end}}</a>
+</nav>
+
+<div data-pane="discussions" hidden>
+{{template "threads" .}}
+</div>
+
+<div data-pane="review">
 {{if not .Closed}}
 <section class="card review-box" id="review">
   <div class="card-head"><h2>Ревью и действия</h2>{{if .Active}}<span class="small muted">пока идёт запуск, новые по этому MR недоступны — остановите текущий или дождитесь его</span>{{end}}</div>
@@ -157,6 +167,7 @@
   </div>
   <div class="summary"><span class="verdict-{{.Latest.Verdict}}">{{verdict .Latest.Verdict}}.</span> {{md .Latest.Summary .Blob .SHA}}</div>
   {{template "findings" .}}
+  {{if .Threads.Open}}<p class="small muted">Открытые треды ревьюеров ({{len .Threads.Open}}) с оценкой AI — на вкладке <a href="#discussions">«Обсуждения»</a>; оттуда же их можно выбрать для исправления.</p>{{end}}
 </section>
 {{else if not .Active}}
 <div class="empty"><b>AI review ещё не выполнялось.</b><br>Нажмите «Запустить ревью»: агент стартует из корня проекта с его правилами и review-skill. Ничего в MR и коде не меняется.</div>
@@ -186,4 +197,6 @@
   </table>
   {{end}}
 </section>
+</div>
+{{if .Pickable}}{{template "pick-bar" .}}{{end}}
 {{end}}

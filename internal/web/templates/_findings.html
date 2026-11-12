@@ -68,15 +68,6 @@
   </tbody>
 </table>
 {{else}}<p class="muted">Замечаний нет.</p>{{end}}
-{{if $pick}}
-<div class="pick-bar" id="pick-bar" hidden>
-  <span class="small"><b id="pick-count">0</b> выбрано</span>
-  <input id="pick-notes" type="text" size="44" placeholder="Необязательно: что учесть при исправлении">
-  <button class="btn btn-primary btn-sm tip" data-tip="{{kindTip "fix_findings"}}" onclick="fixSelected('{{$.MR.ID}}', this)">Исправить выбранные</button>
-  <button class="btn btn-sm btn-link" onclick="clearPicks()">Снять выбор</button>
-  <span class="small muted">Агент перепроверит каждое замечание, исправит подтверждённые в workspace ветки MR; commit и push — по вашим кнопкам.</span>
-</div>
-{{end}}
 
 {{if .Discussions}}
 <h3>Нерешённые обсуждения ревьюеров ({{len .Discussions}})</h3>

@@ -173,3 +173,15 @@ func linkFileRefs(escaped, base, sha string, insideCode bool) string {
 		return `<a class="file-ref" href="` + url + `" target="_blank" rel="noopener">` + m + `</a>`
 	})
 }
+
+var uploadRe = regexp.MustCompile(`!?\[([^\]\n]*)\]\((/uploads/[^)\s]+)\)(\{[^}\n]*\})?`)
+
+// noteText prepares a GitLab comment for the page: attachments and pasted images are project-relative there
+// («![image](/uploads/…){width=814}»), here they become links to the file in GitLab.
+func noteText(body, mrURL string) string {
+	project, _, ok := strings.Cut(mrURL, "/-/merge_requests/")
+	if !ok {
+		return body
+	}
+	return uploadRe.ReplaceAllString(body, "[вложение: ${1}]("+project+"${2})")
+}

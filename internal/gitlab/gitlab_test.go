@@ -115,12 +115,20 @@ func TestParseDiffsAndThreads(t *testing.T) {
 	if len(diffs) != 2 || !diffs[0].Renamed || diffs[0].NewPath != "b.php" || !diffs[1].New {
 		t.Fatalf("%+v", diffs)
 	}
-	threads := ParseThreads([]map[string]any{
-		{"id": "d1", "notes": []any{map[string]any{"resolvable": true, "resolved": false, "body": "why?", "author": map[string]any{"username": "bob"}, "position": map[string]any{"new_path": "src/A.php", "new_line": 12.0}}, map[string]any{"body": "reply"}}},
-		{"id": "d2", "notes": []any{map[string]any{"resolvable": true, "resolved": true, "body": "done"}}},
+	threads := ParseDiscussions([]map[string]any{
+		{"id": "d1", "notes": []any{map[string]any{"id": 11.0, "resolvable": true, "resolved": false, "body": "why?", "author": map[string]any{"username": "bob", "name": "Bob"},
+			"position": map[string]any{"new_path": "src/A.php", "old_path": "src/Old.php", "new_line": 12.0, "head_sha": "h1", "base_sha": "b1"}}, map[string]any{"id": 12.0, "body": "reply", "author": map[string]any{"username": "alice"}}}},
+		{"id": "d2", "notes": []any{map[string]any{"resolvable": true, "resolved": true, "body": "done", "resolved_by": map[string]any{"username": "alice"}}}},
 		{"id": "d3", "notes": []any{map[string]any{"resolvable": false, "body": "general note"}}},
+		{"id": "d4", "notes": []any{map[string]any{"system": true, "body": "added 2 commits"}}},
 	})
-	if len(threads) != 1 || threads[0].Author != "bob" || threads[0].File != "src/A.php" || threads[0].Line != 12 || threads[0].Notes != 2 {
+	if len(threads) != 3 || Unresolved(threads) != 1 {
+		t.Fatalf("%+v", threads)
+	}
+	if d := threads[0]; d.Author() != "bob" || d.File != "src/A.php" || d.OldPath != "src/Old.php" || d.Line != 12 || d.HeadSHA != "h1" || len(d.Notes) != 2 || d.Notes[1].Author != "alice" || d.Notes[0].ID != 11 {
+		t.Fatalf("%+v", d)
+	}
+	if d := threads[1]; !d.Resolved || d.ResolvedBy != "alice" || threads[2].Resolvable {
 		t.Fatalf("%+v", threads)
 	}
 }
@@ -164,16 +172,12 @@ func TestPaginatedLists(t *testing.T) {
 	}
 	g := NewGlab(bin)
 	ref := Ref{Host: "gl", ProjectPath: "g/p", IID: 1}
-	n, err := g.CountUnresolved(ref)
-	if err != nil || n != 250 {
-		t.Fatalf("want 250 unresolved, got %d %v", n, err)
+	list, err := g.Discussions(ref)
+	if err != nil || Unresolved(list) != 250 {
+		t.Fatalf("want 250 unresolved, got %d %v", Unresolved(list), err)
 	}
 	calls, _ := os.ReadFile(bin + ".calls")
 	if got := strings.Count(string(calls), "\n"); got != 3 {
 		t.Fatalf("three pages expected, got %d:\n%s", got, calls)
-	}
-	threads, err := g.UnresolvedThreads(ref)
-	if err != nil || len(threads) != 250 {
-		t.Fatalf("threads: %d %v", len(threads), err)
 	}
 }
