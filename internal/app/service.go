@@ -2646,6 +2646,15 @@ func (s *Service) store(run *db.Run, structured json.RawMessage, previous []db.F
 		for _, v := range res.Verified {
 			verified[v.FindingID] = struct{ Status, Note string }{v.Status, v.Note}
 		}
+		// The carried findings were written against the base run's head; their lines are moved to the head
+		// this run read, so that «file:line» means the same thing as the MR's current diff in GitLab.
+		baseSHA := ""
+		if run.BaseRunID != nil {
+			if base, _ := s.DB.GetRun(*run.BaseRunID); base != nil {
+				baseSHA = base.HeadSHA
+			}
+		}
+		shift := s.lineShift(baseSHA, run.HeadSHA)
 		for _, prev := range previous {
 			status, note := "open", "Not addressed by the verify run"
 			if rejected(prev.Status) {
@@ -2655,7 +2664,7 @@ func (s *Service) store(run *db.Run, structured json.RawMessage, previous []db.F
 			}
 			origin := prev.ID
 			findings = append(findings, db.Finding{OriginFindingID: &origin, Status: status, Severity: prev.Severity, Category: prev.Category, File: prev.File,
-				Line: prev.Line, Title: prev.Title, Description: prev.Description, Suggestion: prev.Suggestion, VerifyNote: note,
+				Line: shift(prev.File, prev.Line), Title: prev.Title, Description: prev.Description, Suggestion: prev.Suggestion, VerifyNote: note,
 				CheckStatus: prev.CheckStatus, CheckRunID: prev.CheckRunID, GitLabNoteURL: prev.GitLabNoteURL})
 		}
 		for _, f := range res.NewFindings {

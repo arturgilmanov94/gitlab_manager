@@ -389,6 +389,16 @@ func (m *Manager) HasBranch(ctx context.Context, branch string) bool {
 	return err == nil
 }
 
+// FileHunks returns the hunk headers of one file between two commits (`git diff -U0`), the map from line
+// numbers of `from` to line numbers of `to`. Runs in the main checkout: worktrees share its object database,
+// so both commits are there as long as the run that fetched them did so into this repository.
+func (m *Manager) FileHunks(ctx context.Context, from, to, file string) (string, error) {
+	if from == "" || to == "" || file == "" {
+		return "", errors.New("from, to and file are required")
+	}
+	return m.git(ctx, m.Root, "diff", "--unified=0", "--no-color", "--no-ext-diff", from, to, "--", file)
+}
+
 // Status returns `git status --short` of the worktree.
 func (m *Manager) Status(ctx context.Context, path string) (string, error) {
 	return m.git(ctx, path, append([]string{"status", "--short"}, m.linkedPathspec(path)...)...)
