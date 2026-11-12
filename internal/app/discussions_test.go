@@ -165,6 +165,58 @@ func TestFixSelectedThreads(t *testing.T) {
 	}
 }
 
+// «Исследовать тред»: a read-only mini run on one thread with the developer's note; its verdict and suggested reply
+// show on the thread; several thread checks may run together, a second one on the same thread may not.
+func TestThreadCheck(t *testing.T) {
+	svc, _, fr := newService(t)
+	mr, _ := svc.AddMR("!42")
+	var d1 ThreadView
+	for _, v := range svc.ThreadsOf(mr).Open {
+		if v.GitLabID == "d1" {
+			d1 = v
+		}
+	}
+	if _, err := svc.StartThreadCheck(mr.ID, 9999, "", "", 0); err == nil {
+		t.Fatal("a thread of another MR accepted")
+	}
+	fr.Outputs = []map[string]any{{"verdict": "partly", "summary": "The reviewer is right about the null check, not about the loop.",
+		"evidence": "`src/A.php:12`", "fix": "add a guard", "reply": "Добавлю проверку на null, цикл оставлю."}}
+	id, err := svc.StartThreadCheck(mr.ID, d1.ID, "", "  только про null  ", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, id) == db.StatusDone })
+	prompt := fr.Requests[0].Prompt
+	for _, want := range []string{"LOOK INTO ONE REVIEW THREAD", "Thread d1 by @", "why?", "Reply by @alice:\nbecause", "developer's note", "только про null", "READ-ONLY"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+	run, _ := svc.DB.GetRun(id)
+	if run.Kind != db.KindThreadCheck || run.Verdict != "partly" || run.Notes != "только про null" || !strings.Contains(run.Summary, "null check") {
+		t.Fatalf("%+v", run)
+	}
+	var got *ThreadCheck
+	for _, v := range svc.ThreadsOf(mr).Open {
+		if v.ID == d1.ID {
+			got = v.Check
+		}
+	}
+	if got == nil || got.Verdict != "partly" || got.Reply != "Добавлю проверку на null, цикл оставлю." || got.Active() {
+		t.Fatalf("%+v", got)
+	}
+	// Retry repeats the thread and the note.
+	fr.Outputs = []map[string]any{{"verdict": "valid", "summary": "Still right about the null check here.", "evidence": "", "fix": "", "reply": ""}}
+	again, err := svc.Retry(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, func() bool { return status(svc, again) == db.StatusDone })
+	if r, _ := svc.DB.GetRun(again); r.Notes != "только про null" || r.SelectionOf().Threads[0] != d1.ID {
+		t.Fatalf("%+v", r)
+	}
+}
+
 // Telegram: a new thread somebody opened in my MR is reported once; my own threads and the first sync are not news.
 func TestTelegramNewThread(t *testing.T) {
 	var mu sync.Mutex

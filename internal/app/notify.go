@@ -16,7 +16,7 @@ var notifyKinds = map[string]string{
 	db.KindReviewQuick: "Быстрое ревью", db.KindReviewFull: "Полное ревью", db.KindReviewVerify: "Проверка изменений",
 	db.KindVerifyFinding: "Проверка замечания", db.KindFixComments: "Исправление замечаний", db.KindPlan: "Исследование",
 	db.KindImplement: "Реализация", db.KindStandTest: "Проверка на стенде", db.KindCIAnalyze: "Разбор CI",
-	db.KindCIFix: "Исправление CI", db.KindFixFindings: "Исправление выбранного", db.KindAsk: "Вопрос агенту",
+	db.KindCIFix: "Исправление CI", db.KindFixFindings: "Исправление выбранного", db.KindAsk: "Вопрос агенту", db.KindThreadCheck: "Исследование треда",
 }
 
 // TelegramEnabled reports whether notifications are configured.

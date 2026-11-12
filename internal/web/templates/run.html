@@ -167,6 +167,27 @@
 {{end}}
 {{end}}
 
+{{if .Thread}}
+<section class="card">
+  <div class="card-head"><h2>Тред</h2>{{if .MR}}<a class="small" href="{{mrPath .MR.ID}}#discussions">все обсуждения MR</a>{{end}}</div>
+  <p class="small"><b>@{{.Thread.Author}}</b> · {{if .Thread.File}}<span class="mono">{{.Thread.File}}{{if .Thread.Line}}:{{.Thread.Line}}{{end}}</span>{{else}}к MR целиком{{end}}</p>
+  {{range .Thread.People}}<div class="note"><div class="note-head small"><b>@{{.Author}}</b> <span class="muted">· {{when .CreatedAt}}</span></div><div class="note-body">{{note .Body $.Blob $.SHA}}</div></div>{{end}}
+  {{with .Run.Notes}}<p class="small"><b>Ваш комментарий:</b> {{.}}</p>{{end}}
+</section>
+{{end}}
+
+{{if and (eq .Run.Status "done") .ThreadCheck}}
+{{$v := threadVerdict (index .ThreadCheck "verdict")}}
+<section class="card">
+  <div class="card-head"><h2>Итог исследования</h2><span class="badge {{index $v "class"}}">{{index $v "label"}}</span></div>
+  <div class="summary">{{md (index .ThreadCheck "summary") .Blob .SHA}}</div>
+  {{with index .ThreadCheck "evidence"}}<h3>Доказательства</h3>{{md . $.Blob $.SHA}}{{end}}
+  {{with index .ThreadCheck "fix"}}<h3>Что поменять</h3>{{md . $.Blob $.SHA}}{{end}}
+  {{with index .ThreadCheck "reply"}}<h3>Предлагаемый ответ</h3><div class="note-body">{{md . $.Blob $.SHA}}</div>
+  {{if $.MR}}<p class="small muted">Ответ можно вставить и отправить во вкладке <a href="{{mrPath $.MR.ID}}#discussions">«Обсуждения»</a> — в GitLab ничего не ушло.</p>{{end}}{{end}}
+</section>
+{{end}}
+
 {{if and (eq .Run.Status "done") .CIAnalysis}}
 <section class="card">
   <div class="card-head"><h2>Почему упал pipeline</h2>{{if index .CIAnalysis "fixable_in_mr"}}<span class="badge badge-warning">можно исправить в MR</span>{{else}}<span class="badge">в MR не исправить</span>{{end}}</div>

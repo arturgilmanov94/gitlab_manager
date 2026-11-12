@@ -167,6 +167,7 @@ REPORT_LANGUAGE=ru      # язык текстов агента: ru | en | de | u
 | Быстрое ревью | `mr-review-quick` | `SKILL_REVIEW_QUICK` | необязательно (возьмёт полное ревью) |
 | Проверить изменения | `mr-review-verify` | `SKILL_REVIEW_VERIFY` | необязательно (возьмёт полное ревью) |
 | Проверить замечание | `mr-verify-finding` | `SKILL_VERIFY_FINDING` | необязательно |
+| Исследовать тред | `mr-thread-check` | `SKILL_THREAD_CHECK` | необязательно |
 | Исследовать задачу | `task-plan` | `SKILL_PLAN` | полезно |
 | Решить задачу | `task-implement` | `SKILL_IMPLEMENT` | полезно |
 | Исправить замечания ревьюеров | `mr-fix-comments` | `SKILL_FIX_COMMENTS` | полезно |

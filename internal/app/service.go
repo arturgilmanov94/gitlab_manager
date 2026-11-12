@@ -979,7 +979,7 @@ func (s *Service) StartVerifyFinding(mrID, findingID int64, runnerName string, c
 	if err != nil {
 		return 0, err
 	}
-	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil && active.Kind != db.KindVerifyFinding {
+	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil && !active.IsSideCheck() {
 		return 0, userErr("a run for this merge request is already queued or running (#%d)", active.ID)
 	}
 	if active, _ := s.DB.ActiveFindingCheck(findingID); active != nil {
@@ -992,6 +992,46 @@ func (s *Service) StartVerifyFinding(mrID, findingID int64, runnerName string, c
 	fid := finding.ID
 	return s.enqueue(db.Run{Kind: db.KindVerifyFinding, MRID: &mr.ID, FindingID: &fid, HeadSHA: mr.HeadSHA, Runner: r.Name(), RequestedModel: model,
 		SkillIdentifier: skillID(s.SkillFor(db.KindVerifyFinding)), ContinueRunID: runIDPtr(prev)})
+}
+
+// StartThreadCheck queues a read-only mini run that looks into one GitLab thread of the MR («Исследовать тред»), with
+// the developer's note on what to find out. Like finding checks, several may run together, but not next to a review.
+func (s *Service) StartThreadCheck(mrID, threadID int64, runnerName, note string, continueRunID int64) (int64, error) {
+	if v := s.forMR(mrID); v != s {
+		return v.StartThreadCheck(mrID, threadID, runnerName, note, continueRunID)
+	}
+	if _, err := s.requireRoot(); err != nil {
+		return 0, err
+	}
+	thread, _ := s.DB.GetMRDiscussion(threadID)
+	if thread == nil || thread.MRID != mrID {
+		return 0, userErr("тред #%d не найден в этом MR", threadID)
+	}
+	current, _ := s.DB.GetMR(mrID)
+	prev, err := s.continuation(continueRunID, &mrID, nil, s.reviewDirs(current)...)
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		runnerName = prev.AgentSelector()
+	}
+	r, model, err := s.pickRunner(runnerName)
+	if err != nil {
+		return 0, err
+	}
+	if active, _ := s.DB.ActiveRunForMR(mrID); active != nil && !active.IsSideCheck() {
+		return 0, userErr("a run for this merge request is already queued or running (#%d)", active.ID)
+	}
+	if checks, _ := s.DB.ThreadChecks(mrID); checks[threadID] != nil && checks[threadID].Active() {
+		return 0, userErr("этот тред уже исследуется (#%d)", checks[threadID].ID)
+	}
+	mr, err := s.RefreshMR(mrID)
+	if err != nil {
+		return 0, err
+	}
+	sel, _ := json.Marshal(db.Selection{Threads: []int64{threadID}})
+	return s.enqueue(db.Run{Kind: db.KindThreadCheck, MRID: &mr.ID, HeadSHA: mr.HeadSHA, Runner: r.Name(), RequestedModel: model, Notes: strings.TrimSpace(note),
+		SelectionJSON: string(sel), SkillIdentifier: skillID(s.SkillFor(db.KindThreadCheck)), ContinueRunID: runIDPtr(prev)})
 }
 
 // TerminalAvailable reports whether «Открыть в терминале» can work here, with the reason when it cannot.
@@ -1833,6 +1873,12 @@ func (s *Service) Retry(runID int64) (int64, error) {
 			return 0, userErr("run has no finding")
 		}
 		return s.StartVerifyFinding(*run.MRID, *run.FindingID, run.AgentSelector(), derefID(run.ContinueRunID))
+	case db.KindThreadCheck:
+		threads := run.SelectionOf().Threads
+		if run.MRID == nil || len(threads) == 0 {
+			return 0, userErr("run has no thread")
+		}
+		return s.StartThreadCheck(*run.MRID, threads[0], run.AgentSelector(), run.Notes, derefID(run.ContinueRunID))
 	case db.KindStandTest:
 		if run.IssueID != nil {
 			return s.StartStandTestIssue(*run.IssueID, run.AgentSelector(), run.Notes, run.Branch, derefID(run.ContinueRunID))
@@ -2080,6 +2126,32 @@ func (s *Service) execute(ctx context.Context, runID int64) {
 		req.Prompt, req.Schema = prompts.VerifyFinding(pm, sk, prompts.CheckedFinding{ID: finding.ID, Severity: finding.Severity, Category: finding.Category,
 			File: finding.File, Line: finding.Line, Title: finding.Title, Description: finding.Description, Suggestion: finding.Suggestion}), prompts.VerifyFindingSchema
 		req.SessionName = fmt.Sprintf("verify-finding !%d #%d", mr.IID, runID)
+	case db.KindThreadCheck:
+		mr, _ := s.DB.GetMR(*run.MRID)
+		if mr == nil {
+			s.fail(runID, "merge request disappeared")
+			return
+		}
+		threads := run.SelectionOf().Threads
+		var thread *db.MRDiscussion
+		if len(threads) > 0 {
+			thread, _ = s.DB.GetMRDiscussion(threads[0])
+		}
+		if thread == nil {
+			s.fail(runID, "thread disappeared")
+			return
+		}
+		dir, err := s.prepareReviewDir(ctx, runID, mr, logln)
+		if err != nil {
+			s.prepareFailed(ctx, runID, err)
+			return
+		}
+		req.Dir = dir
+		req.ProtectDirs = protectDirs(s.Settings.ProjectRoot, req.Dir)
+		pm := promptMR(mr)
+		pm.Context = s.reviewContext(mr, req.Dir)
+		req.Prompt, req.Schema = prompts.ThreadCheck(pm, sk, threadNote(*thread), run.Notes), prompts.ThreadCheckSchema
+		req.SessionName = fmt.Sprintf("thread-check !%d #%d", mr.IID, runID)
 	case db.KindCIAnalyze:
 		mr, _ := s.DB.GetMR(*run.MRID)
 		if mr == nil {
@@ -2721,9 +2793,13 @@ func (s *Service) store(run *db.Run, structured json.RawMessage, previous []db.F
 	if !run.IsReview() {
 		var generic struct {
 			Summary string `json:"summary"`
+			Verdict string `json:"verdict"`
 		}
 		_ = json.Unmarshal(structured, &generic)
 		fields["summary"] = generic.Summary
+		if run.Kind == db.KindThreadCheck {
+			fields["verdict"] = generic.Verdict
+		}
 		return nil
 	}
 	var res reviewResult

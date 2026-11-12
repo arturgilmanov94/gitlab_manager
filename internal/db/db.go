@@ -36,6 +36,7 @@ const (
 	KindCIAnalyze     = "ci_analyze"     // read-only: why the head pipeline failed (job traces + diff)
 	KindCIFix         = "ci_fix"         // edit in the MR worktree: fix what makes the pipeline fail
 	KindFixFindings   = "fix_findings"   // edit in the MR worktree: address the findings/discussions the developer selected
+	KindThreadCheck   = "thread_check"   // read-only: look into one GitLab thread of an MR with the developer's note, suggest a reply
 	KindAsk           = "ask"            // a follow-up question in the agent session of a finished run (BaseRunID), read-only
 
 	StatusQueued    = "queued"
@@ -394,7 +395,7 @@ func (d *DB) ListMRs() ([]MRListItem, error) {
 		       (SELECT COUNT(*) FROM findings f WHERE f.run_id = d.id AND f.status = 'open' AND f.severity IN ('LOW', 'INFO')),
 		       COALESCE(` + fmt.Sprintf(contextRunSQL, "mr_id", "mr") + `, 0)
 		FROM merge_requests mr
-		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE mr_id = mr.id AND kind NOT IN ('verify_finding', 'ask') ORDER BY id DESC LIMIT 1)
+		LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE mr_id = mr.id AND kind NOT IN ('verify_finding', 'thread_check', 'ask') ORDER BY id DESC LIMIT 1)
 		LEFT JOIN runs d ON d.id = (SELECT id FROM runs WHERE mr_id = mr.id AND status = 'done' AND kind IN ('review_full', 'review_verify', 'review_quick') ORDER BY id DESC LIMIT 1)
 		ORDER BY CASE WHEN mr.gitlab_updated_at = '' THEN mr.added_at ELSE mr.gitlab_updated_at END DESC, mr.id DESC`)
 	if err != nil {
@@ -651,6 +652,10 @@ func (r Run) Active() bool {
 const activeStatuses = "('queued', 'running', 'waiting')"
 
 // IsReview reports whether the run is a review kind (produces findings).
+// IsSideCheck reports whether the run is a small read-only check of one item of an MR (a finding, a thread):
+// several of them may run together, next to each other but not next to other runs of the MR.
+func (r Run) IsSideCheck() bool { return r.Kind == KindVerifyFinding || r.Kind == KindThreadCheck }
+
 func (r Run) IsReview() bool {
 	return r.Kind == KindReviewFull || r.Kind == KindReviewVerify || r.Kind == KindReviewQuick
 }
@@ -716,7 +721,7 @@ func (d *DB) CreateRun(r Run) (int64, error) {
 	var active int64
 	switch {
 	case r.MRID != nil:
-		err = tx.QueryRow("SELECT id FROM runs WHERE mr_id = ? AND status IN "+activeStatuses+" AND NOT (kind = 'verify_finding' AND ? = 'verify_finding') ORDER BY id LIMIT 1",
+		err = tx.QueryRow("SELECT id FROM runs WHERE mr_id = ? AND status IN "+activeStatuses+" AND NOT (kind IN ('verify_finding', 'thread_check') AND ? IN ('verify_finding', 'thread_check')) ORDER BY id LIMIT 1",
 			*r.MRID, r.Kind).Scan(&active)
 	case r.IssueID != nil:
 		err = tx.QueryRow("SELECT id FROM runs WHERE issue_id = ? AND status IN "+activeStatuses+" ORDER BY id LIMIT 1", *r.IssueID).Scan(&active)
@@ -1879,4 +1884,24 @@ func (d *DB) ActiveAsk(baseRunID int64) (*Run, error) {
 		return nil, nil
 	}
 	return r, err
+}
+
+// ThreadChecks returns the latest «Исследовать тред» run of every thread of an MR, by mr_discussions id.
+func (d *DB) ThreadChecks(mrID int64) (map[int64]*Run, error) {
+	rows, err := d.sql.Query("SELECT "+runColumns+" FROM runs WHERE mr_id = ? AND kind = 'thread_check' ORDER BY id", mrID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]*Run{}
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range r.SelectionOf().Threads {
+			out[id] = r
+		}
+	}
+	return out, rows.Err()
 }

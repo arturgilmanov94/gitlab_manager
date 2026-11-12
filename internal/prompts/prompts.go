@@ -586,6 +586,47 @@ func VerifyFinding(mr MR, s *skill.Skill, f CheckedFinding) string {
 		"Stay focused on this one finding: do not review the rest of the MR.\n\nFinding (JSON):\n" + string(body) + "\n\n" + readOnlyRules()
 }
 
+// ThreadCheckSchema is the structured result of looking into one GitLab thread («Исследовать тред»).
+var ThreadCheckSchema = []byte(`{
+  "type": "object",
+  "properties": {
+    "verdict": {"type": "string", "enum": ["valid", "partly", "invalid", "addressed", "question", "unclear"], "description": "valid = the reviewer is right and the code should change; partly = right in part; invalid = the concern does not hold for this code; addressed = already fixed at the current head; question = the thread asks a question rather than requesting a change; unclear = cannot decide from the code alone"},
+    "summary": {"type": "string", "minLength": 40, "description": "markdown, 3-8 sentences: what the thread is about and your conclusion, answering the developer's note when there is one"},
+    "evidence": {"type": "string", "description": "markdown: what exactly in the code (path:line in inline code) supports the conclusion; empty when nothing to cite"},
+    "fix": {"type": "string", "description": "markdown: what to change in the MR and where, with a code snippet when short; empty when nothing should change"},
+    "reply": {"type": "string", "description": "a ready reply to post in the thread on the developer's behalf: polite, to the point, in the language of the thread, GitLab markdown, no greetings or signatures; empty when no reply makes sense"}
+  },
+  "required": ["verdict", "summary", "evidence", "fix", "reply"],
+  "additionalProperties": false
+}`)
+
+// ThreadCheck builds the prompt that looks into one review thread of an MR, with the developer's note on what to find out.
+func ThreadCheck(mr MR, s *skill.Skill, t ThreadNote, note string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Thread %s by @%s", t.ID, t.Author)
+	if t.File != "" {
+		fmt.Fprintf(&b, " on `%s", t.File)
+		if t.Line > 0 {
+			fmt.Fprintf(&b, ":%d", t.Line)
+		}
+		b.WriteString("`")
+	} else {
+		b.WriteString(" on the MR as a whole")
+	}
+	b.WriteString(":\n\n" + strings.TrimSpace(t.Body) + "\n")
+	for _, r := range t.Replies {
+		fmt.Fprintf(&b, "\nReply by @%s:\n%s\n", r.Author, strings.TrimSpace(r.Body))
+	}
+	out := SlashPrefix(s, mr.WebURL) + "Mode: LOOK INTO ONE REVIEW THREAD (the developer asks for your analysis of a GitLab discussion)\n\n" + mrBlock(mr) + "\n" + skillLine(s) + "\n\n" +
+		"A reviewer discussion of this MR is quoted below. Do NOT assume the reviewer (or the MR author) is right. Read the code at the head SHA above, " +
+		"the MR diff and whatever else the question needs, then decide whether the concern holds, what (if anything) should change and how to answer. " +
+		"Give concrete evidence with file paths and lines. Stay focused on this thread: do not review the rest of the MR.\n\n" + b.String()
+	if note = strings.TrimSpace(note); note != "" {
+		out += "\nThe developer's note — what to find out or take into account (it has priority over the generic task above):\n" + note + "\n"
+	}
+	return out + "\n" + readOnlyRules()
+}
+
 // Continued prefixes the prompt of a run that the developer chose to start inside an earlier agent session
 // (Phase C: "Продолжить сессию #N" instead of a new chat).
 func Continued(previousKind string) string {

@@ -80,6 +80,7 @@ func New(svc *app.Service, version string, runners []runner.Runner) (*Server, er
 	funcs := template.FuncMap{
 		"findingComment": app.FindingComment,
 		"draftNote":      app.IsDraftNote,
+		"threadVerdict":  threadVerdict,
 		"shortSHA": func(sha string) string {
 			if len(sha) > 10 {
 				return sha[:10]
@@ -678,6 +679,8 @@ func runSlug(kind string) string {
 		return "task-implement"
 	case db.KindVerifyFinding:
 		return "verify-finding"
+	case db.KindThreadCheck:
+		return "thread-check"
 	case db.KindStandTest:
 		return "stand-test"
 	case db.KindCIAnalyze:
@@ -692,7 +695,7 @@ func runSlug(kind string) string {
 	return "run"
 }
 
-var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "verify-finding": true, "stand-test": true, "ci-analyze": true, "ci-fix": true, "fix-findings": true, "fix-comments": true, "ask": true, "task-plan": true, "task-implement": true, "run": true}
+var runSlugs = map[string]bool{"review": true, "quick-review": true, "verify": true, "verify-finding": true, "thread-check": true, "stand-test": true, "ci-analyze": true, "ci-fix": true, "fix-findings": true, "fix-comments": true, "ask": true, "task-plan": true, "task-implement": true, "run": true}
 
 func runPath(kind string, id any) string { return fmt.Sprintf("/-/%s/%v", runSlug(kind), id) }
 func mrPath(id any) string               { return fmt.Sprintf("/-/mr/%v", id) }
@@ -1192,6 +1195,18 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		}
 		data["FixResults"] = results
 	}
+	if run.Kind == db.KindThreadCheck {
+		if threads := run.SelectionOf().Threads; len(threads) > 0 {
+			if thread, _ := svc.DB.GetMRDiscussion(threads[0]); thread != nil {
+				data["Thread"] = thread
+			}
+		}
+		if run.ResultJSON != "" {
+			var check map[string]any
+			_ = json.Unmarshal([]byte(run.ResultJSON), &check)
+			data["ThreadCheck"] = check
+		}
+	}
 	if run.Kind == db.KindCIAnalyze && run.ResultJSON != "" {
 		var analysis map[string]any
 		_ = json.Unmarshal([]byte(run.ResultJSON), &analysis)
@@ -1362,6 +1377,9 @@ func (s *Server) apiStartMRRun(w http.ResponseWriter, r *http.Request) {
 	case "verify_finding":
 		findingID, _ := strconv.ParseInt(body["finding"], 10, 64)
 		runID, err = s.svc.StartVerifyFinding(id, findingID, body["runner"], cont)
+	case "thread_check":
+		threadID, _ := strconv.ParseInt(body["thread"], 10, 64)
+		runID, err = s.svc.StartThreadCheck(id, threadID, body["runner"], body["notes"], cont)
 	case "stand":
 		runID, err = s.svc.StartStandTest(id, body["runner"], body["notes"], cont)
 	case "ci_analyze":
@@ -1372,7 +1390,7 @@ func (s *Server) apiStartMRRun(w http.ResponseWriter, r *http.Request) {
 	case "fix_findings":
 		runID, err = s.svc.StartFixFindings(id, body["runner"], body["notes"], db.Selection{Findings: idList(body["findings"]), Discussions: idList(body["discussions"]), Threads: idList(body["threads"])}, cont)
 	default:
-		writeJSON(w, 400, map[string]any{"error": "kind must be quick, full, verify, verify_finding, fix_findings, stand, ci_analyze, ci_fix or fix"})
+		writeJSON(w, 400, map[string]any{"error": "kind must be quick, full, verify, verify_finding, thread_check, fix_findings, stand, ci_analyze, ci_fix or fix"})
 		return
 	}
 	if err != nil {
@@ -1559,6 +1577,8 @@ func kindLabel(kind string) string {
 		return "Проверка изменений"
 	case db.KindVerifyFinding:
 		return "Проверка замечания"
+	case db.KindThreadCheck:
+		return "Исследование треда"
 	case db.KindStandTest:
 		return "Проверка на стенде"
 	case db.KindCIAnalyze:
@@ -1587,6 +1607,8 @@ func kindTip(kind string) string {
 		return "Инкрементальное ревью: агент получает только diff с последнего ревью и прежние замечания (открытые и отклонённые вами), а не весь MR заново. Обновит статусы замечаний: исправлено / открыто / неактуально — и добавит новые, если их внесли свежие коммиты."
 	case "verify_finding":
 		return "AI перепроверит только это замечание, не считая его верным априори: подтверждено / ложное срабатывание / неактуально / недостаточно данных, с доказательством из кода. Только чтение, остальной MR не трогается."
+	case "thread_check":
+		return "AI разберётся в этом треде по коду MR, не считая правым ни ревьюера, ни автора: прав ли ревьюер, что поменять и что ответить — с готовым текстом ответа. Можно добавить комментарий: что выяснить или учесть. Только чтение, в GitLab ничего не пишет."
 	case "fix_findings":
 		return "Агент в отдельном workspace ветки MR перепроверит каждое выбранное замечание, исправит подтверждённые и учтёт выбранные обсуждения ревьюеров; по каждому отчитается: исправлено / не подтверждено / пропущено. Commit и push — по вашим кнопкам, потом «Проверить изменения»."
 	case "ci_analyze":
@@ -1914,6 +1936,8 @@ func errorTitle(kind string) string {
 		return "Не удалось выполнить ревью"
 	case db.KindVerifyFinding:
 		return "Не удалось проверить замечание"
+	case db.KindThreadCheck:
+		return "Не удалось исследовать тред"
 	case db.KindStandTest:
 		return "Не удалось проверить на стенде"
 	case db.KindCIAnalyze:
@@ -2043,4 +2067,21 @@ func (s *Server) waitingRuns() []int64 {
 		}
 	}
 	return waiting
+}
+
+// threadVerdict is the human label and badge class of a «Исследовать тред» verdict.
+func threadVerdict(v string) map[string]string {
+	switch v {
+	case "valid":
+		return map[string]string{"label": "ревьюер прав", "class": "badge-danger"}
+	case "partly":
+		return map[string]string{"label": "прав частично", "class": "badge-warning"}
+	case "invalid":
+		return map[string]string{"label": "замечание не подтвердилось", "class": "badge-success"}
+	case "addressed":
+		return map[string]string{"label": "уже исправлено", "class": "badge-success"}
+	case "question":
+		return map[string]string{"label": "вопрос, а не правка", "class": "badge-info"}
+	}
+	return map[string]string{"label": "недостаточно данных", "class": ""}
 }

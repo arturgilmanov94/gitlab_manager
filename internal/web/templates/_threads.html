@@ -54,6 +54,18 @@
     <div>{{md .Text $r.Blob $r.SHA}}</div>
   </div>
   {{end}}
+  {{with $d.Check}}
+  <div class="thread-ai thread-check small">
+    {{if .Active}}<b>Исследование:</b> <span class="badge badge-info">идёт</span> <a href="{{runPath .Run.Kind .Run.ID}}">#{{.Run.ID}}</a>
+    {{else if eq .Run.Status "done"}}{{$v := threadVerdict .Verdict}}<b>Исследование:</b> <span class="badge {{index $v "class"}}">{{index $v "label"}}</span>
+      <span class="muted">· <a href="{{runPath .Run.Kind .Run.ID}}">#{{.Run.ID}}</a>{{if .Run.HeadSHA}} на <span class="mono">{{shortSHA .Run.HeadSHA}}</span>{{end}}{{with .Run.Notes}} · ваш комментарий: «{{.}}»{{end}}</span>
+      <div>{{md .Summary $r.Blob $r.SHA}}</div>
+      {{with .Fix}}<details class="fix"><summary>Что поменять</summary>{{md . $r.Blob $r.SHA}}</details>{{end}}
+      {{with .Reply}}<details class="fix"><summary>Предлагаемый ответ</summary><div class="note-body">{{md . $r.Blob $r.SHA}}</div>
+        <button class="btn btn-sm" data-reply-text="{{.}}" onclick="useThreadReply('{{$d.ID}}', this)">Вставить в ответ</button></details>{{end}}
+    {{else}}<b>Исследование:</b> <span class="badge badge-danger">{{.Run.Status}}</span> <a href="{{runPath .Run.Kind .Run.ID}}">#{{.Run.ID}}</a>{{end}}
+  </div>
+  {{end}}
   {{$draft := $d.ReplyDraft $r.IsMine}}
   <div class="thread-actions">
     <details class="gl-post thread-reply">
@@ -71,6 +83,17 @@
         </div>
       </div>
     </details>
+    {{if not $r.Closed}}<details class="gl-post thread-investigate">
+      <summary class="btn btn-sm tip" data-tip="{{kindTip "thread_check"}}">Исследовать{{if and $d.Check (not $d.Check.Active)}} заново{{end}}</summary>
+      <div class="gl-post-body">
+        <textarea rows="3" data-investigate-thread="{{$d.ID}}" placeholder="Необязательно: что выяснить или учесть. Например: «прав ли ревьюер про N+1, если список всегда до 10 элементов?»"></textarea>
+        <div class="inline">
+          <button class="btn btn-primary btn-sm" onclick="investigateThread('{{$r.MR.ID}}', '{{$d.ID}}', this)">Исследовать</button>
+          <button class="btn btn-sm btn-link" onclick="cancelPost(this)">Отмена</button>
+          <span class="small muted">только чтение: агент разбирает тред по коду MR и предлагает ответ, в GitLab ничего не пишет</span>
+        </div>
+      </div>
+    </details>{{end}}
     {{if $d.Open}}<button class="btn btn-sm btn-link tip" data-tip="Закрыть (resolve) тред в GitLab без ответа" onclick="confirm('Закрыть тред в GitLab без ответа?') && resolveThread('{{$d.ID}}', this, true)">Закрыть тред</button>
     {{else if $d.Resolved}}<button class="btn btn-sm btn-link tip" data-tip="Снова открыть (unresolve) тред в GitLab" onclick="confirm('Открыть тред в GitLab снова?') && resolveThread('{{$d.ID}}', this, false)">Открыть снова</button>{{end}}
   </div>

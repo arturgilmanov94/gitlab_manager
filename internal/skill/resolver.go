@@ -33,6 +33,7 @@ const (
 	ActionVerifyFinding = "verify_finding"
 	ActionStandTest     = "stand_test"
 	ActionCIAnalyze     = "ci_analyze"
+	ActionThreadCheck   = "thread_check"
 	ActionCIFix         = "ci_fix"
 	ActionFixFindings   = "fix_findings"
 )
@@ -73,6 +74,13 @@ var Actions = []Action{
 		Contract: "Получает ссылку на MR, head SHA и одно замечание ревью (файл, строка, описание, предложение). Не считая его верным априори, " +
 			"перепроверяет по коду: подтверждено / ложное срабатывание / неактуально / недостаточно данных, с доказательством. Ничего не меняет. " +
 			"Без своего skill используется skill полного ревью.",
+	},
+	{
+		Kind: ActionThreadCheck, SkillName: "mr-thread-check", EnvKey: "SKILL_THREAD_CHECK", Fallback: ActionReviewFull,
+		Title: "Исследование треда",
+		Contract: "Получает ссылку на MR, head SHA, один тред обсуждения (автор, место, текст, ответы) и комментарий разработчика — что выяснить. " +
+			"Не считая правым ни ревьюера, ни автора, разбирается по коду: прав ли ревьюер, что поменять и как ответить; предлагает текст ответа. " +
+			"Ничего не меняет и в GitLab не пишет. Без своего skill используется skill полного ревью.",
 	},
 	{
 		Kind: ActionFixComments, SkillName: "mr-fix-comments", EnvKey: "SKILL_FIX_COMMENTS",

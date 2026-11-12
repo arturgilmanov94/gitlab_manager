@@ -17,6 +17,7 @@ Dashboard — это интерфейс поверх агентов **вашег
 | Быстрое ревью | `review_quick` | `mr-review-quick` | `SKILL_REVIEW_QUICK` | skill `review_full` с пометкой «быстрый проход: только diff» |
 | Проверить изменения | `review_verify` | `mr-review-verify` | `SKILL_REVIEW_VERIFY` | skill `review_full` с прежними findings в промпте |
 | Проверить замечание | `verify_finding` | `mr-verify-finding` | `SKILL_VERIFY_FINDING` | skill `review_full` с одним замечанием в промпте |
+| Исследовать тред | `thread_check` | `mr-thread-check` | `SKILL_THREAD_CHECK` | skill `review_full` с одним тредом и комментарием разработчика в промпте |
 | Разобрать ошибки CI | `ci_analyze` | `mr-ci-analyze` | `SKILL_CI_ANALYZE` | CLAUDE.md + промпт dashboard с логами jobs |
 | Исправить CI | `ci_fix` | `mr-ci-fix` | `SKILL_CI_FIX` | CLAUDE.md + промпт dashboard |
 | Проверить на стенде | `stand_test` | `mr-stand-test` | `SKILL_STAND_TEST` | сценарий dashboard поверх skill доступа к стенду (`STAND_SKILL`, ищется по слову «стенд») |

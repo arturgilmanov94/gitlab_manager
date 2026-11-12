@@ -212,7 +212,7 @@
   const startedLabels = {
     quick: 'Быстрое ревью поставлено в очередь', full: 'Полное ревью поставлено в очередь', verify: 'Проверка изменений поставлена в очередь',
     fix: 'Исправление замечаний запущено, создаю workspace', plan: 'Исследование поставлено в очередь', implement: 'Решение задачи запущено, создаю workspace',
-    verify_finding: 'Проверка замечания поставлена в очередь', stand: 'Проверка на стенде запущена, создаю workspace',
+    verify_finding: 'Проверка замечания поставлена в очередь', thread_check: 'Исследование треда поставлено в очередь', stand: 'Проверка на стенде запущена, создаю workspace',
     ci_analyze: 'Разбор CI поставлен в очередь', ci_fix: 'Исправление CI запущено, создаю workspace',
     fix_findings: 'Исправление выбранных замечаний запущено, создаю workspace',
   };
@@ -303,6 +303,20 @@
     else flash(data.on_line ? 'Комментарий добавлен на строку в diff MR' : 'Комментарий добавлен в MR (строка вне diff — общим комментарием)', true);
     area.dataset.sent = '1';
     setTimeout(reload, 900);
+  };
+
+  // Threads: «Исследовать» with the developer's note; the suggested reply goes into the reply editor (not sent).
+  window.investigateThread = function (mrID, threadID, button) {
+    const area = document.querySelector(`textarea[data-investigate-thread="${threadID}"]`);
+    return startRun(`/api/mrs/${mrID}/runs`, 'thread_check', button, { thread: String(threadID), notes: area ? area.value : '' });
+  };
+  window.useThreadReply = function (threadID, button) {
+    const area = document.querySelector(`textarea[data-reply-thread="${threadID}"]`);
+    if (!area) return;
+    area.value = button.dataset.replyText || '';
+    const box = area.closest('details');
+    if (box) box.open = true;
+    area.focus();
   };
 
   // Local tasks: create one and open it; edit its title and description.

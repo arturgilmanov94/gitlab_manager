@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -88,13 +89,37 @@ func (s *Service) promptThreads(mr *db.MergeRequest) []prompts.ThreadNote {
 		if !d.Open() {
 			continue
 		}
-		note := prompts.ThreadNote{ID: d.GitLabID, Author: d.Author, File: d.File, Line: firstPositive(d.Line, d.OldLine), Body: d.First().Body}
-		for _, r := range d.Replies() {
-			note.Replies = append(note.Replies, prompts.ThreadReply{Author: r.Author, Body: r.Body})
-		}
-		out = append(out, note)
+		out = append(out, threadNote(d))
 	}
 	return out
+}
+
+// threadNote is a thread as the prompts quote it.
+func threadNote(d db.MRDiscussion) prompts.ThreadNote {
+	note := prompts.ThreadNote{ID: d.GitLabID, Author: d.Author, File: d.File, Line: firstPositive(d.Line, d.OldLine), Body: d.First().Body}
+	for _, r := range d.Replies() {
+		note.Replies = append(note.Replies, prompts.ThreadReply{Author: r.Author, Body: r.Body})
+	}
+	return note
+}
+
+// ThreadCheck is the latest «Исследовать тред» run of a thread, with its result once done.
+type ThreadCheck struct {
+	Run                                    *db.Run
+	Verdict, Summary, Evidence, Fix, Reply string
+}
+
+// Active reports whether the check is still queued, running or waiting.
+func (c ThreadCheck) Active() bool { return c.Run.Active() }
+
+func threadCheckOf(run *db.Run) *ThreadCheck {
+	c := &ThreadCheck{Run: run}
+	if run.Status == db.StatusDone && run.ResultJSON != "" {
+		var res struct{ Verdict, Summary, Evidence, Fix, Reply string }
+		_ = json.Unmarshal([]byte(run.ResultJSON), &res)
+		c.Verdict, c.Summary, c.Evidence, c.Fix, c.Reply = res.Verdict, res.Summary, res.Evidence, res.Fix, res.Reply
+	}
+	return c
 }
 
 // matchThread finds the GitLab discussion an assessment of a review is about: the id the agent returned when it
@@ -127,9 +152,10 @@ func matchThread(live []db.MRDiscussion, id, author, file string, line *int64) s
 type ThreadView struct {
 	db.MRDiscussion
 	Assessment *db.Assessment
-	URL        string // the thread in GitLab
-	Mine       bool   // started by the current user
-	WaitsForMe bool   // open, and the last word is someone else's
+	Check      *ThreadCheck // the latest «Исследовать тред» of this thread (nil = never)
+	URL        string       // the thread in GitLab
+	Mine       bool         // started by the current user
+	WaitsForMe bool         // open, and the last word is someone else's
 }
 
 // Threads is what the «Обсуждения» tab shows.
@@ -171,6 +197,7 @@ func (s *Service) ThreadsOf(mr *db.MergeRequest) Threads {
 			}
 		}
 	}
+	checks, _ := s.DB.ThreadChecks(mr.ID)
 	me := s.CurrentUser()
 	out := Threads{SyncedAt: s.DB.DiscussionsSyncedAt(mr.ID)}
 	var waiting, rest []ThreadView
@@ -178,6 +205,9 @@ func (s *Service) ThreadsOf(mr *db.MergeRequest) Threads {
 		v := ThreadView{MRDiscussion: d, Mine: me != "" && d.Author == me}
 		if a, ok := assessments[d.GitLabID]; ok {
 			v.Assessment = &a
+		}
+		if run := checks[d.ID]; run != nil {
+			v.Check = threadCheckOf(run)
 		}
 		if id := d.FirstNoteID(); id > 0 && mr.WebURL != "" {
 			v.URL = fmt.Sprintf("%s#note_%d", mr.WebURL, id)

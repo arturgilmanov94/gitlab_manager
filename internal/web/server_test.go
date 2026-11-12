@@ -1007,6 +1007,20 @@ func TestDiscussionsTab(t *testing.T) {
 	if _, run := get(t, ts.URL+"/-/review/1"); !strings.Contains(run, "Нерешённые обсуждения ревьюеров") {
 		t.Fatal("the run page keeps what the review saw")
 	}
+	if !strings.Contains(body, `data-investigate-thread="1"`) || !strings.Contains(body, ">Исследовать</summary>") {
+		t.Fatal("a thread offers «Исследовать» with a note")
+	}
+	fr.Outputs = []map[string]any{{"verdict": "valid", "summary": "The reviewer is right: the value can be null here.", "evidence": "", "fix": "guard it", "reply": "Поправлю."}}
+	if code, out := postJSON(t, ts.URL+"/api/mrs/1/runs", map[string]any{"kind": "thread_check", "thread": "1", "notes": "проверь null"}); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	testutil.WaitFor(t, func() bool { r, _ := svc.DB.GetRun(2); return r != nil && r.Status == db.StatusDone })
+	if _, body := get(t, ts.URL+"/-/mr/1"); !strings.Contains(body, "ревьюер прав") || !strings.Contains(body, `data-reply-text="Поправлю."`) || !strings.Contains(body, "Исследовать заново") {
+		t.Fatal("the thread shows the verdict and the suggested reply")
+	}
+	if _, run := get(t, ts.URL+"/-/thread-check/2"); !strings.Contains(run, "Итог исследования") || !strings.Contains(run, "Предлагаемый ответ") || !strings.Contains(run, "проверь null") {
+		t.Fatal("the run page shows the thread, the note and the result")
+	}
 	code, out := getJSON(t, ts.URL+"/api/threads/1/code")
 	if code != 200 || out["code"].(map[string]any)["Line"].(float64) != 12 {
 		t.Fatalf("%d %v", code, out)
