@@ -14,12 +14,17 @@ import (
 var readOnlyGit = map[string]bool{
 	"log": true, "show": true, "diff": true, "blame": true, "merge-base": true, "rev-parse": true,
 	"status": true, "grep": true, "ls-files": true, "cat-file": true, "rev-list": true, "shortlog": true,
+	"ls-tree": true, "describe": true, "name-rev": true, "show-ref": true, "for-each-ref": true,
+	// fetch only updates remote-tracking refs and objects; a review needs it for `git merge-base HEAD origin/develop`.
+	"fetch": true,
 }
 
 // readOnlyTools are plain read-only programs (dangerous options are refused in safeArgs).
 var readOnlyTools = map[string]bool{
 	"rg": true, "grep": true, "cat": true, "head": true, "tail": true, "ls": true, "find": true, "wc": true,
-	"jq": true, "sort": true, "cd": true, "pwd": true, "echo": true,
+	"jq": true, "sort": true, "cd": true, "pwd": true, "echo": true, "sed": true, "cut": true, "tr": true,
+	"nl": true, "uniq": true, "diff": true, "stat": true, "basename": true, "dirname": true, "realpath": true,
+	"true": true,
 }
 
 // ReadOnlyCommand reports whether every part of a shell command line (split on |, &&, ||, ;) is a read-only
@@ -80,6 +85,11 @@ sub:
 		if strings.HasPrefix(a, "--output") || a == "--ext-diff" || strings.HasPrefix(a, "--open-files-in-pager") || a == "-O" {
 			return false
 		}
+		// fetch: options that run another program or touch submodules / other repositories.
+		if args[0] == "fetch" && (strings.HasPrefix(a, "--upload-pack") || a == "-u" || strings.HasPrefix(a, "--recurse-submodules") ||
+			a == "--multiple" || a == "--all" || strings.HasPrefix(a, "--write-") || a == "--update-head-ok" || strings.HasPrefix(a, "--refmap")) {
+			return false
+		}
 	}
 	return true
 }
@@ -131,7 +141,177 @@ func safeArgs(name string, args []string) bool {
 			}
 		}
 	}
+	switch name {
+	case "sed":
+		return safeSed(args)
+	case "uniq": // `uniq in out` writes out
+		return len(positional(args)) <= 1
+	}
 	return true
+}
+
+func positional(args []string) []string {
+	var out []string
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// safeSed accepts sed without in-place editing whose script only prints, deletes, quits or substitutes
+// (`sed -n 1,200p f`, `sed -n '/re/,/re/p'`, `sed 's/a/b/g'`): commands that write files (w, W, s///w),
+// read them (r, R) or run programs (e, s///e) make it not read-only.
+func safeSed(args []string) bool {
+	var scripts []string
+	haveScript := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-n" || a == "--quiet" || a == "--silent" || a == "-E" || a == "-r" || a == "--regexp-extended" ||
+			a == "-s" || a == "--separate" || a == "-u" || a == "--unbuffered" || a == "-z" || a == "--null-data" ||
+			a == "--posix" || a == "--debug" || a == "--sandbox":
+		case a == "-e" || a == "--expression":
+			if i+1 >= len(args) {
+				return false
+			}
+			scripts = append(scripts, args[i+1])
+			haveScript = true
+			i++
+		case strings.HasPrefix(a, "--expression="):
+			scripts = append(scripts, strings.TrimPrefix(a, "--expression="))
+			haveScript = true
+		case strings.HasPrefix(a, "-") && a != "-":
+			// -i/--in-place, -f script files, -l and combined flags like -ni: not accepted.
+			if strings.Trim(a[1:], "nEsur") != "" || strings.HasPrefix(a, "--") {
+				return false
+			}
+		case !haveScript:
+			scripts = append(scripts, a)
+			haveScript = true
+		}
+	}
+	if !haveScript {
+		return false
+	}
+	for _, sc := range scripts {
+		if !safeSedScript(sc) {
+			return false
+		}
+	}
+	return true
+}
+
+// safeSedScript checks every command of a sed script (separated by ; or newlines): an optional address or range
+// (line numbers, $, /regex/), an optional !, then one of p P d D q Q = n N or s/re/repl/flags with flags from
+// g p i I m M and digits.
+func safeSedScript(sc string) bool {
+	rs := []rune(sc)
+	i := 0
+	skipSpace := func() {
+		for i < len(rs) && (rs[i] == ' ' || rs[i] == '\t') {
+			i++
+		}
+	}
+	// delimited reads up to the closing delimiter d (backslash escapes it); false if there is none.
+	delimited := func(d rune) bool {
+		for i < len(rs) && rs[i] != d {
+			if rs[i] == '\\' {
+				i++
+				if i >= len(rs) {
+					return false
+				}
+			}
+			if rs[i] == '\n' {
+				return false
+			}
+			i++
+		}
+		if i >= len(rs) {
+			return false
+		}
+		i++ // the delimiter
+		return true
+	}
+	address := func() bool {
+		switch {
+		case i < len(rs) && rs[i] == '$':
+			i++
+		case i < len(rs) && rs[i] >= '0' && rs[i] <= '9':
+			for i < len(rs) && (rs[i] >= '0' && rs[i] <= '9' || rs[i] == '~') {
+				i++
+			}
+		case i < len(rs) && rs[i] == '/':
+			i++
+			if !delimited('/') {
+				return false
+			}
+			for i < len(rs) && (rs[i] == 'I' || rs[i] == 'M') {
+				i++
+			}
+		}
+		return true
+	}
+	for {
+		skipSpace()
+		for i < len(rs) && (rs[i] == ';' || rs[i] == '\n') {
+			i++
+			skipSpace()
+		}
+		if i >= len(rs) {
+			return true
+		}
+		if !address() {
+			return false
+		}
+		if i < len(rs) && rs[i] == ',' {
+			i++
+			if i < len(rs) && rs[i] == '+' {
+				i++
+			}
+			if !address() {
+				return false
+			}
+		}
+		skipSpace()
+		if i < len(rs) && rs[i] == '!' {
+			i++
+			skipSpace()
+		}
+		if i >= len(rs) {
+			return false
+		}
+		cmd := rs[i]
+		i++
+		switch {
+		case strings.ContainsRune("pPdDqQ=nN", cmd):
+			for i < len(rs) && rs[i] >= '0' && rs[i] <= '9' && (cmd == 'q' || cmd == 'Q') {
+				i++
+			}
+		case cmd == 's':
+			if i >= len(rs) || rs[i] == '\\' || rs[i] == '\n' {
+				return false
+			}
+			d := rs[i]
+			i++
+			if !delimited(d) || !delimited(d) {
+				return false
+			}
+			for i < len(rs) && strings.ContainsRune("gpiImM0123456789", rs[i]) {
+				i++
+			}
+		default:
+			return false
+		}
+		skipSpace()
+		if i < len(rs) && rs[i] != ';' && rs[i] != '\n' && rs[i] != '}' {
+			return false
+		}
+		if i < len(rs) && rs[i] == '}' {
+			return false
+		}
+	}
 }
 
 // splitShell splits a command line into simple commands (words with quotes removed). ok is false for anything
@@ -190,7 +370,21 @@ func splitShell(line string) (parts [][]string, ok bool) {
 		case c == '\\' && i+1 < len(rs):
 			word.WriteRune(rs[i+1])
 			inWord, i = true, i+1
-		case c == '`', c == '$' && i+1 < len(rs) && rs[i+1] == '(':
+		case c == '$' && i+1 < len(rs) && rs[i+1] == '(':
+			// $(git merge-base ...) / $(git rev-parse ...) print only an object name; anything else is refused.
+			j := i + 2
+			for j < len(rs) && rs[j] != ')' {
+				if strings.ContainsRune("()`$'\"\\<>&|;\n", rs[j]) {
+					return nil, false
+				}
+				j++
+			}
+			if j >= len(rs) || !shaSubstitution(string(rs[i+2:j])) {
+				return nil, false
+			}
+			word.WriteString("0000000000000000000000000000000000000000")
+			inWord, i = true, j
+		case c == '`':
 			return nil, false
 		case c == '<':
 			return nil, false // input redirection, here-docs and <( ) process substitution
@@ -238,6 +432,25 @@ func splitShell(line string) (parts [][]string, ok bool) {
 		return nil, false // "a &&" or "a |" with nothing after
 	}
 	return parts, true
+}
+
+// shaSubstitution reports whether a command substitution only prints object names: `git merge-base` or
+// `git rev-parse` with revisions and the few options that do not change what kind of text is printed.
+func shaSubstitution(inner string) bool {
+	words := strings.Fields(inner)
+	if len(words) < 3 || words[0] != "git" || (words[1] != "merge-base" && words[1] != "rev-parse") {
+		return false
+	}
+	for _, w := range words[2:] {
+		switch w {
+		case "--verify", "-q", "--quiet", "--short", "--fork-point":
+			continue
+		}
+		if strings.HasPrefix(w, "-") || !isSubcommand(strings.NewReplacer("~", "", "^", "", "@", "", "{", "", "}", "").Replace(w)) {
+			return false
+		}
+	}
+	return true
 }
 
 // redirectTarget reads the target after '>' (">>" counts as a redirection too); n is how many runes it took.
