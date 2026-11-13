@@ -1597,3 +1597,24 @@ func TestTelegramSectionAndWaitingCount(t *testing.T) {
 		t.Fatal(body)
 	}
 }
+
+// Bookmarks, favourites and «На экран Домой» get PNG icons and a manifest; iOS finds its icon at the root.
+func TestAppIcons(t *testing.T) {
+	ts, _, _ := newServer(t)
+	if _, body := get(t, ts.URL+"/mrs"); !strings.Contains(body, `rel="manifest"`) || !strings.Contains(body, "/static/apple-touch-icon.png") {
+		t.Fatal("page head must link the manifest and the touch icon")
+	}
+	if code, body := get(t, ts.URL+"/static/manifest.json"); code != 200 || !strings.Contains(body, "icon-512.png") {
+		t.Fatalf("manifest %d %s", code, body)
+	}
+	for _, p := range []string{"/apple-touch-icon.png", "/static/icon-192.png", "/static/icon-maskable-512.png"} {
+		resp, err := http.Get(ts.URL + p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "image/png" {
+			t.Fatalf("%s: %d %s", p, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+	}
+}

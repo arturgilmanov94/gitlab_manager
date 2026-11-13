@@ -239,6 +239,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/static/favicon.svg", http.StatusFound)
 	})
+	// iOS asks for the home-screen / favourites icon at the root without reading the page.
+	for _, p := range []string{"/apple-touch-icon.png", "/apple-touch-icon-precomposed.png"} {
+		s.mux.HandleFunc("GET "+p, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/static/apple-touch-icon.png", http.StatusFound)
+		})
+	}
 
 	s.mux.HandleFunc("GET /{$}", s.overview)
 	s.mux.HandleFunc("GET /mrs", s.index)

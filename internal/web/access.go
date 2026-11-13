@@ -97,7 +97,8 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			http.Error(w, "mr-review: requests from other web sites are refused", http.StatusForbidden)
 			return
 		}
-		if s.accessKey == "" || isLocalRequest(r) || strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/favicon.ico" {
+		if s.accessKey == "" || isLocalRequest(r) || strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/favicon.ico" ||
+			strings.HasPrefix(r.URL.Path, "/apple-touch-icon") {
 			next.ServeHTTP(w, r)
 			return
 		}
