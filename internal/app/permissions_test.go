@@ -38,6 +38,22 @@ func TestReadOnlyCommandsAllowedWithoutAsking(t *testing.T) {
 	testutil.WaitFor(t, func() bool { return status(svc, id) == db.StatusDone })
 }
 
+// Inspecting commands with any shell syntax pass in a read-only run unless the agent asks to leave the sandbox.
+func TestInspectingCommandsPassInSandbox(t *testing.T) {
+	svc, _, _ := newService(t)
+	cmd := "git merge-tree $(git merge-base HEAD origin/develop) HEAD origin/develop > $TMPDIR/mt.txt; grep -n x $TMPDIR/mt.txt"
+	if why := svc.autoAllow(1, runner.ModeReadOnly, bashPrompt(cmd)); why == "" {
+		t.Fatal("sandboxed inspecting command must pass")
+	}
+	input, _ := json.Marshal(map[string]any{"command": cmd, "dangerouslyDisableSandbox": true})
+	if why := svc.autoAllow(1, runner.ModeReadOnly, runner.PermissionRequest{ToolName: "Bash", Input: input}); why != "" {
+		t.Fatalf("unsandboxed must be asked: %s", why)
+	}
+	if why := svc.autoAllow(1, runner.ModeEdit, bashPrompt(cmd)); why != "" {
+		t.Fatalf("edit runs keep asking: %s", why)
+	}
+}
+
 // «Разрешать такие до конца запуска»: the next call of the same kind passes without a prompt, another kind is
 // still asked.
 func TestAllowSimilarUntilEndOfRun(t *testing.T) {

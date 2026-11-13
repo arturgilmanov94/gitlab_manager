@@ -2523,8 +2523,15 @@ func (s *Service) permissionFunc(runID int64, logln func(string), mode func() ru
 // (runner.ReadOnlyCommand), and any run may repeat calls of a kind the developer allowed until the end of the
 // run. It returns why the call is allowed, "" = ask the developer.
 func (s *Service) autoAllow(runID int64, mode runner.Mode, req runner.PermissionRequest) string {
-	if req.ToolName == "Bash" && mode == runner.ModeReadOnly && runner.ReadOnlyCommand(bashCommand(req.Input)) {
-		return "read-only command"
+	if req.ToolName == "Bash" && mode == runner.ModeReadOnly {
+		if runner.ReadOnlyCommand(bashCommand(req.Input)) {
+			return "read-only command"
+		}
+		// The shell of a read-only run is sandboxed with the project and the worktree not writable; inspecting git
+		// and text tools pass whatever their shell syntax, as long as the agent does not ask to leave the sandbox.
+		if s.policy() != runner.PolicyStrict && !bashUnsandboxed(req.Input) && runner.ReviewShellCommand(bashCommand(req.Input)) {
+			return "inspecting command in the sandbox"
+		}
 	}
 	rule := runner.SimilarKey(req.ToolName, req.Input)
 	s.mu.Lock()
@@ -2540,6 +2547,15 @@ func (s *Service) forgetRunRules(runID int64) {
 	s.mu.Lock()
 	delete(s.runRules, runID)
 	s.mu.Unlock()
+}
+
+// bashUnsandboxed reports whether a Bash call asks to run outside the sandbox.
+func bashUnsandboxed(input []byte) bool {
+	var in struct {
+		Unsandboxed bool `json:"dangerouslyDisableSandbox"`
+	}
+	_ = json.Unmarshal(input, &in)
+	return in.Unsandboxed
 }
 
 // bashCommand is the command of a Bash tool input ("" for other inputs).
