@@ -48,8 +48,11 @@ func readOnlyPart(words []string) bool {
 		return false
 	}
 	name := words[0]
-	if strings.Contains(name, "=") { // VAR=value cmd: the variable may change what the program runs (GIT_*, PAGER)
-		return false
+	if strings.Contains(name, "=") {
+		// MB=$(git merge-base ...) on its own sets a shell variable for later parts of the line; VAR=value cmd
+		// may change what the program runs (GIT_*, PAGER) and is refused.
+		_, ok := safeAssignment(name)
+		return ok && len(words) == 1
 	}
 	name = filepath.Base(name)
 	args := words[1:]
@@ -321,7 +324,45 @@ func splitShell(line string) (parts [][]string, ok bool) {
 	var words []string
 	var word strings.Builder
 	inWord := false
-	dangling := false // the last operator (|, &&, ||) still needs a command after it
+	dangling := false         // the last operator (|, &&, ||) still needs a command after it
+	vars := map[string]bool{} // shell variables set earlier in the line by a safe assignment
+	// expand handles $NAME / ${NAME} at rs[i] == '$' and returns the index of its last rune. Only variables set
+	// earlier in the line to an object name, and a few plain paths, are known; anything else ($1, $?, $FOO)
+	// could hide an option or a command and is refused. A '$' not followed by a name stays literal.
+	var rs []rune
+	expand := func(i int) (int, bool) {
+		j, braced := i+1, false
+		if j < len(rs) && rs[j] == '{' {
+			j, braced = j+1, true
+		}
+		start := j
+		for j < len(rs) && (rs[j] == '_' || rs[j] >= 'a' && rs[j] <= 'z' || rs[j] >= 'A' && rs[j] <= 'Z' || j > start && rs[j] >= '0' && rs[j] <= '9') {
+			j++
+		}
+		name := string(rs[start:j])
+		if name == "" {
+			if !braced && (j >= len(rs) || strings.ContainsRune(" \t\n\"';|&)", rs[j])) {
+				word.WriteRune('$')
+				return i, true
+			}
+			return 0, false // $?, $1, $@, $$, ${...} with an expression
+		}
+		if braced {
+			if j >= len(rs) || rs[j] != '}' {
+				return 0, false // ${X:-...}, ${X/...}
+			}
+			j++
+		}
+		switch {
+		case vars[name]:
+			word.WriteString(shaPlaceholder)
+		case name == "HOME" || name == "PWD" || name == "TMPDIR":
+			word.WriteString("/" + strings.ToLower(name))
+		default:
+			return 0, false
+		}
+		return j - 1, true
+	}
 	flushWord := func() {
 		if inWord {
 			words = append(words, word.String())
@@ -334,11 +375,16 @@ func splitShell(line string) (parts [][]string, ok bool) {
 		if len(words) == 0 {
 			return false
 		}
+		if len(words) == 1 {
+			if name, ok := safeAssignment(words[0]); ok {
+				vars[name] = true
+			}
+		}
 		parts = append(parts, words)
 		words = nil
 		return true
 	}
-	rs := []rune(line)
+	rs = []rune(line)
 	for i := 0; i < len(rs); i++ {
 		c := rs[i]
 		switch {
@@ -354,18 +400,29 @@ func splitShell(line string) (parts [][]string, ok bool) {
 			inWord, i = true, j
 		case c == '"':
 			j := i + 1
-			for j < len(rs) && rs[j] != '"' {
-				if rs[j] == '\\' && j+1 < len(rs) {
+			for ; j < len(rs) && rs[j] != '"'; j++ {
+				switch {
+				case rs[j] == '\\' && j+1 < len(rs):
+					if !strings.ContainsRune("\"\\$`", rs[j+1]) {
+						word.WriteRune('\\')
+					}
+					word.WriteRune(rs[j+1])
 					j++
-				} else if rs[j] == '`' || (rs[j] == '$' && j+1 < len(rs) && rs[j+1] == '(') {
+				case rs[j] == '`' || (rs[j] == '$' && j+1 < len(rs) && rs[j+1] == '('):
 					return nil, false
+				case rs[j] == '$':
+					end, ok := expand(j)
+					if !ok {
+						return nil, false
+					}
+					j = end
+				default:
+					word.WriteRune(rs[j])
 				}
-				j++
 			}
 			if j >= len(rs) {
 				return nil, false
 			}
-			word.WriteString(strings.ReplaceAll(string(rs[i+1:j]), `\"`, `"`))
 			inWord, i = true, j
 		case c == '\\' && i+1 < len(rs):
 			word.WriteRune(rs[i+1])
@@ -382,8 +439,14 @@ func splitShell(line string) (parts [][]string, ok bool) {
 			if j >= len(rs) || !shaSubstitution(string(rs[i+2:j])) {
 				return nil, false
 			}
-			word.WriteString("0000000000000000000000000000000000000000")
+			word.WriteString(shaPlaceholder)
 			inWord, i = true, j
+		case c == '$':
+			end, ok := expand(i)
+			if !ok {
+				return nil, false
+			}
+			inWord, i = true, end
 		case c == '`':
 			return nil, false
 		case c == '<':
@@ -432,6 +495,38 @@ func splitShell(line string) (parts [][]string, ok bool) {
 		return nil, false // "a &&" or "a |" with nothing after
 	}
 	return parts, true
+}
+
+// shaPlaceholder stands for the object name a $(git merge-base ...) substitution or a variable holding it gives.
+const shaPlaceholder = "0000000000000000000000000000000000000000"
+
+// safeAssignment accepts NAME=value where the value is an object name from a substitution or a plain ref-like
+// literal, and NAME is not a variable the shell or git reads (PATH, IFS, GIT_*, ...): the assignment then only
+// stores a revision for later parts of the line.
+func safeAssignment(w string) (string, bool) {
+	name, value, ok := strings.Cut(w, "=")
+	if !ok || name == "" {
+		return "", false
+	}
+	for i, r := range name {
+		if !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || i > 0 && r >= '0' && r <= '9') {
+			return "", false
+		}
+	}
+	upper := strings.ToUpper(name)
+	switch upper {
+	case "PATH", "IFS", "HOME", "ENV", "BASH_ENV", "CDPATH", "SHELLOPTS", "BASHOPTS", "PS4", "PAGER", "EDITOR",
+		"VISUAL", "PROMPT_COMMAND", "TMPDIR", "PWD", "OLDPWD", "SHELL", "GLOBIGNORE":
+		return "", false
+	}
+	if strings.HasPrefix(upper, "GIT_") || strings.HasPrefix(upper, "LD_") || strings.HasPrefix(upper, "LESS") ||
+		strings.HasPrefix(upper, "BASH_") || strings.HasPrefix(upper, "RIPGREP") {
+		return "", false
+	}
+	if value != shaPlaceholder && value != "" && !isSubcommand(value) {
+		return "", false
+	}
+	return name, true
 }
 
 // shaSubstitution reports whether a command substitution only prints object names: `git merge-base` or
