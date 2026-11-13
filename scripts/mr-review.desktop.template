@@ -3,10 +3,23 @@ Type=Application
 Name=MR Review
 GenericName=GitLab merge request review
 Comment=Review GitLab merge requests with the project's Claude review skill
-Exec=__BIN__
+Exec=__BIN__ launch
 Path=__WORKDIR__
 Icon=__ICON__
 Terminal=false
 Categories=Development;RevisionControl;
 Keywords=gitlab;merge;request;review;mr;claude;
 StartupNotify=false
+Actions=launch;stop;update;
+
+[Desktop Action launch]
+Name=Запустить
+Exec=__BIN__ launch
+
+[Desktop Action stop]
+Name=Остановить
+Exec=__BIN__ stop
+
+[Desktop Action update]
+Name=Обновить и перезапустить
+Exec=__UPDATE__

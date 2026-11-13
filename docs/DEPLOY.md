@@ -149,11 +149,17 @@ REPORT_LANGUAGE=ru      # язык текстов агента: ru | en | de | u
 ```sh
 ./mr-review serve      # foreground, без браузера
 ./mr-review start      # в фоне (pid в runtime/server.pid, лог в logs/server.log)
-./mr-review stop | status
-./install-desktop.sh                # ярлык «MR Review» в меню и на рабочем столе (только в архиве релиза)
+./mr-review stop | status | restart
+./mr-review launch     # запустить в фоне, если не запущен, и открыть браузер (так работает клик по ярлыку)
+./install-desktop.sh                # ярлык «MR Review» в меню и на рабочем столе (в checkout — scripts/install-desktop.sh)
+./install-desktop.sh --dock         # плюс закрепить в доке GNOME (избранное)
 ./install-desktop.sh --no-desktop   # то же, но без ярлыка на рабочем столе
-./install-desktop.sh --uninstall    # убрать ярлыки и иконку
+./install-desktop.sh --uninstall    # убрать ярлыки, иконку и из дока
 ```
+
+Клик по ярлыку — `mr-review launch`. Правая кнопка: «Запустить», «Остановить» и (в git-checkout) «Обновить и
+перезапустить» — `scripts/update.sh`: fast-forward до `origin/main`, сборка, подмена бинарника, перезапуск; если идут
+запуски агентов — сначала спросит. Ход и ошибки — уведомлениями и в `logs/update.log`.
 
 ## Шаг 6 — skills проекта
 

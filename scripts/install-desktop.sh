@@ -2,18 +2,23 @@
 # Optional: register a launcher so mr-review can be started from the application menu or by double-click.
 # Writes ~/.local/share/applications/mr-review.desktop, a copy of the icon under ~/.local/share/icons/,
 # and (unless --no-desktop) a copy of the launcher on the desktop. Nothing else is touched.
+# Click = start in the background if needed and open the browser; right click: Запустить / Остановить /
+# Обновить и перезапустить (the last one only in a source checkout, see scripts/update.sh).
 #   ./install-desktop.sh              menu entry + desktop shortcut
+#   ./install-desktop.sh --dock       also pin it to the GNOME dock (favourites)
 #   ./install-desktop.sh --no-desktop menu entry only
-#   ./install-desktop.sh --uninstall  remove everything this script created
+#   ./install-desktop.sh --uninstall  remove everything this script created (and unpin it)
 set -euo pipefail
 
 WANT_DESKTOP=1
+WANT_DOCK=0
 UNINSTALL=0
 for arg in "$@"; do
     case "$arg" in
         --no-desktop) WANT_DESKTOP=0 ;;
+        --dock) WANT_DOCK=1 ;;
         --uninstall) UNINSTALL=1 ;;
-        -h|--help) sed -n '2,7p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help) sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
         *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
     esac
 done
@@ -22,6 +27,21 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
 TARGET="$DATA_DIR/applications/mr-review.desktop"
 ICON_TARGET="$DATA_DIR/icons/hicolor/scalable/apps/mr-review.svg"
+
+# GNOME dock favourites (no-op without gsettings / outside GNOME).
+dock() {
+    command -v gsettings >/dev/null 2>&1 || return 0
+    local favs
+    favs="$(gsettings get org.gnome.shell favorite-apps 2>/dev/null)" || return 0
+    case "$1" in
+        add)
+            [[ "$favs" == *"'mr-review.desktop'"* ]] && return 0
+            if [ "$favs" = "@as []" ] || [ "$favs" = "[]" ]; then favs="['mr-review.desktop']"; else favs="${favs%]}, 'mr-review.desktop']"; fi ;;
+        remove)
+            favs="$(printf '%s' "$favs" | sed -e "s/, 'mr-review.desktop'//; s/'mr-review.desktop', //; s/'mr-review.desktop'//")" ;;
+    esac
+    gsettings set org.gnome.shell favorite-apps "$favs" && echo "Dock favourites: $1 mr-review.desktop"
+}
 
 # Prints the desktop directory, or nothing when there is none (never fails: the caller runs under set -e).
 desktop_dir() {
@@ -38,6 +58,7 @@ desktop_dir() {
 
 if [ "$UNINSTALL" = 1 ]; then
     DESK="$(desktop_dir)"
+    dock remove
     rm -f "$TARGET" "$ICON_TARGET" ${DESK:+"$DESK/mr-review.desktop"}
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$(dirname "$TARGET")" || true
     echo "Removed the MR Review launcher."
@@ -69,8 +90,15 @@ else
     ICON="utilities-terminal"
 fi
 
+UPDATE="$HERE/update.sh"
+[ -x "$UPDATE" ] || UPDATE="$HERE/scripts/update.sh"
+
 mkdir -p "$(dirname "$TARGET")"
-sed -e "s|__BIN__|$BIN|" -e "s|__ICON__|$ICON|" -e "s|__WORKDIR__|$(dirname "$BIN")|" "$TEMPLATE" > "$TARGET"
+sed -e "s|__BIN__|$BIN|" -e "s|__ICON__|$ICON|" -e "s|__WORKDIR__|$(dirname "$BIN")|" -e "s|__UPDATE__|$UPDATE|" "$TEMPLATE" > "$TARGET"
+if [ ! -x "$UPDATE" ]; then
+    # Release archive: no checkout to update from, so no «Обновить и перезапустить».
+    sed -i -e 's/^Actions=launch;stop;update;/Actions=launch;stop;/' -e '/^\[Desktop Action update\]/,$d' "$TARGET"
+fi
 chmod +x "$TARGET"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$(dirname "$TARGET")" || true
 echo "Installed $TARGET"
@@ -87,5 +115,7 @@ if [ "$WANT_DESKTOP" = 1 ]; then
         echo "No desktop directory found — skipped the desktop shortcut." >&2
     fi
 fi
+
+[ "$WANT_DOCK" = 1 ] && dock add
 
 echo "Look for 'MR Review' in your application menu. Double-clicking $BIN in a file manager works too (it opens the browser)."

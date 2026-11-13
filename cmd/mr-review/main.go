@@ -38,7 +38,10 @@ func usage() {
   (no command)   start the dashboard in the foreground and open the browser
   serve          start the dashboard in the foreground (no browser)
   start          start in the background (pid in runtime/server.pid)
+  launch         start in the background if needed and open the browser (desktop / dock click)
+  restart        stop and start the background server
   stop           stop the background server
+  busy           print how many runs a restart would interrupt (exit 1 when any)
   status         is the server running?
   doctor         check the environment (exit code 1 when something FAILs)
   init-db        create/upgrade the SQLite database
@@ -87,8 +90,17 @@ func run(args []string) int {
 		return serve(settings, false)
 	case "start":
 		return startBackground(settings)
+	case "launch":
+		return launch(settings)
+	case "restart":
+		if code := stop(settings); code != 0 {
+			return code
+		}
+		return startBackground(settings)
 	case "stop":
 		return stop(settings)
+	case "busy":
+		return busy(settings)
 	case "status":
 		return status(settings)
 	case "doctor":
@@ -421,6 +433,35 @@ func startBackground(settings *config.Settings) int {
 	}
 	fmt.Fprintln(os.Stderr, "server did not become healthy; see logs/server.log")
 	return 1
+}
+
+// launch is the desktop/dock click: start the server in the background unless it already runs, then open the
+// dashboard in the browser. The server does not depend on the launcher process.
+func launch(settings *config.Settings) int {
+	if pid, addr, ok := readPid(settings); !ok || !processAlive(pid) || !healthy(addr) {
+		if code := startBackground(settings); code != 0 {
+			return code
+		}
+	}
+	if _, addr, ok := readPid(settings); ok {
+		launchBrowser("http://" + addr)
+	}
+	return 0
+}
+
+// busy prints how many runs a restart would interrupt; exit code 1 when there are any (for scripts).
+func busy(settings *config.Settings) int {
+	database, err := db.Open(settings.DatabasePath) // no migration: the running (older) server owns the schema
+	if err != nil {
+		return fail("%v", err)
+	}
+	defer database.Close()
+	n := database.InterruptibleRuns()
+	fmt.Println(n)
+	if n > 0 {
+		return 1
+	}
+	return 0
 }
 
 func stop(settings *config.Settings) int {

@@ -996,6 +996,15 @@ func (d *DB) RunsWithoutTokens() ([]int64, error) {
 	return out, rows.Err()
 }
 
+// InterruptibleRuns counts the runs a restart would cut short: running ones and those waiting for a permission
+// prompt (runs waiting for answers to the agent's questions and queued ones survive a restart).
+func (d *DB) InterruptibleRuns() int {
+	var n int
+	_ = d.sql.QueryRow("SELECT COUNT(*) FROM runs WHERE status IN ('running', 'waiting')" +
+		" AND NOT (status = 'waiting' AND EXISTS (SELECT 1 FROM run_questions q WHERE q.run_id = runs.id AND q.answer = ''))").Scan(&n)
+	return n
+}
+
 // FailStaleRuns marks active runs as failed and their open permission prompts as expired (after a restart).
 func (d *DB) FailStaleRuns(message string) (int64, error) {
 	_, _ = d.sql.Exec("UPDATE approvals SET status = 'expired', decided_at = ? WHERE status = 'pending'", Now())
