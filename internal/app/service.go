@@ -115,6 +115,7 @@ func New(settings *config.Settings, database *db.DB, gl gitlab.Client, runners [
 	if settings.ReportLanguage != "" {
 		prompts.Language = settings.ReportLanguage
 	}
+	prompts.CommentStyleFile = settings.CommentStyleFile
 	if settings.ProjectRoot != "" {
 		s.Worktrees = &worktree.Manager{Root: settings.ProjectRoot, Dir: settings.WorktreeDir, BaseBranch: settings.BaseBranch}
 	}
@@ -2719,6 +2720,7 @@ type reviewResult struct {
 		Title       string `json:"title"`
 		Description string `json:"description"`
 		Suggestion  string `json:"suggestion"`
+		Comment     string `json:"comment"`
 	} `json:"findings"`
 	NewFindings []struct {
 		Severity    string `json:"severity"`
@@ -2728,6 +2730,7 @@ type reviewResult struct {
 		Title       string `json:"title"`
 		Description string `json:"description"`
 		Suggestion  string `json:"suggestion"`
+		Comment     string `json:"comment"`
 	} `json:"new_findings"`
 	Verified []struct {
 		FindingID int64  `json:"finding_id"`
@@ -2834,15 +2837,15 @@ func (s *Service) store(run *db.Run, structured json.RawMessage, previous []db.F
 			}
 			origin := prev.ID
 			findings = append(findings, db.Finding{OriginFindingID: &origin, Status: status, Severity: prev.Severity, Category: prev.Category, File: prev.File,
-				Line: shift(prev.File, prev.Line), Title: prev.Title, Description: prev.Description, Suggestion: prev.Suggestion, VerifyNote: note,
+				Line: shift(prev.File, prev.Line), Title: prev.Title, Description: prev.Description, Suggestion: prev.Suggestion, Comment: prev.Comment, VerifyNote: note,
 				CheckStatus: prev.CheckStatus, CheckRunID: prev.CheckRunID, GitLabNoteURL: prev.GitLabNoteURL})
 		}
 		for _, f := range res.NewFindings {
-			findings = append(findings, db.Finding{Status: "open", Severity: f.Severity, Category: f.Category, File: f.File, Line: f.Line, Title: f.Title, Description: f.Description, Suggestion: f.Suggestion, VerifyNote: "New in this head"})
+			findings = append(findings, db.Finding{Status: "open", Severity: f.Severity, Category: f.Category, File: f.File, Line: f.Line, Title: f.Title, Description: f.Description, Suggestion: f.Suggestion, Comment: f.Comment, VerifyNote: "New in this head"})
 		}
 	} else {
 		for _, f := range res.Findings {
-			findings = append(findings, db.Finding{Status: "open", Severity: f.Severity, Category: f.Category, File: f.File, Line: f.Line, Title: f.Title, Description: f.Description, Suggestion: f.Suggestion})
+			findings = append(findings, db.Finding{Status: "open", Severity: f.Severity, Category: f.Category, File: f.File, Line: f.Line, Title: f.Title, Description: f.Description, Suggestion: f.Suggestion, Comment: f.Comment})
 		}
 	}
 	// The verdict shown in the UI always agrees with the findings: an "approve with comments" without a single

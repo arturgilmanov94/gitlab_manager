@@ -554,7 +554,7 @@ func FullReviewOutput(sha string) map[string]any {
 		"summary": "Looks mostly fine.", "verdict": "request_changes", "reviewed_sha": sha,
 		"findings": []any{
 			map[string]any{"severity": "HIGH", "category": "bug", "file": "src/A.php", "line": 10.0, "title": "Null deref", "description": "d", "suggestion": "s"},
-			map[string]any{"severity": "LOW", "category": "style", "file": "src/B.php", "line": nil, "title": "Naming", "description": "d2", "suggestion": ""},
+			map[string]any{"severity": "LOW", "category": "style", "file": "src/B.php", "line": nil, "title": "Naming", "description": "d2", "suggestion": "", "comment": "нейминг бы поправить"},
 		},
 		"unresolved_discussions": []any{
 			map[string]any{"author": "bob", "file": "src/A.php", "line": 12.0, "body": "why?", "assessment": "not addressed", "addressed": false},

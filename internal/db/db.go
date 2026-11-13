@@ -1208,6 +1208,7 @@ type Finding struct {
 	Title           string
 	Description     string
 	Suggestion      string
+	Comment         string // the ready GitLab text in the developer's style ("" = built from description and suggestion)
 	VerifyNote      string
 	CheckStatus     string // outcome of «Проверить замечание»: confirmed | false_positive | obsolete | unclear ("" = not checked)
 	CheckRunID      *int64 // the verify_finding run that produced CheckStatus
@@ -1239,10 +1240,10 @@ func (d *DB) ReplaceFindings(runID int64, findings []Finding) error {
 		}
 		// check_status, check_run_id and gitlab_note_url travel with a finding carried over by verify: a finding
 		// posted to GitLab or checked by an agent stays so on the newer head.
-		if _, err := tx.Exec(`INSERT INTO findings (run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note,
+		if _, err := tx.Exec(`INSERT INTO findings (run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, gitlab_comment, verify_note,
 			check_status, check_run_id, gitlab_note_url)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			runID, i+1, nullInt(f.OriginFindingID), status, severity, f.Category, f.File, nullInt(f.Line), title, f.Description, f.Suggestion, f.VerifyNote,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runID, i+1, nullInt(f.OriginFindingID), status, severity, f.Category, f.File, nullInt(f.Line), title, f.Description, f.Suggestion, f.Comment, f.VerifyNote,
 			f.CheckStatus, nullInt(f.CheckRunID), f.GitLabNoteURL); err != nil {
 			return err
 		}
@@ -1303,7 +1304,7 @@ func (d *DB) SetFindingCheck(id int64, checkStatus, note string, runID int64) er
 
 // GetFinding returns a finding or nil.
 func (d *DB) GetFinding(id int64) (*Finding, error) {
-	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note, check_status, check_run_id, gitlab_note_url FROM findings WHERE id = ?", id)
+	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, gitlab_comment, verify_note, check_status, check_run_id, gitlab_note_url FROM findings WHERE id = ?", id)
 	if err != nil {
 		return nil, err
 	}
@@ -1313,7 +1314,7 @@ func (d *DB) GetFinding(id int64) (*Finding, error) {
 	}
 	var f Finding
 	var origin, line, checkRun sql.NullInt64
-	if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.VerifyNote, &f.CheckStatus, &checkRun, &f.GitLabNoteURL); err != nil {
+	if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.Comment, &f.VerifyNote, &f.CheckStatus, &checkRun, &f.GitLabNoteURL); err != nil {
 		return nil, err
 	}
 	if origin.Valid {
@@ -1330,7 +1331,7 @@ func (d *DB) GetFinding(id int64) (*Finding, error) {
 
 // ListFindings returns a run's findings in order.
 func (d *DB) ListFindings(runID int64) ([]Finding, error) {
-	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, verify_note, check_status, check_run_id, gitlab_note_url FROM findings WHERE run_id = ? ORDER BY ordinal", runID)
+	rows, err := d.sql.Query("SELECT id, run_id, ordinal, origin_finding_id, status, severity, category, file, line, title, description, suggestion, gitlab_comment, verify_note, check_status, check_run_id, gitlab_note_url FROM findings WHERE run_id = ? ORDER BY ordinal", runID)
 	if err != nil {
 		return nil, err
 	}
@@ -1339,7 +1340,7 @@ func (d *DB) ListFindings(runID int64) ([]Finding, error) {
 	for rows.Next() {
 		var f Finding
 		var origin, line, checkRun sql.NullInt64
-		if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.VerifyNote, &f.CheckStatus, &checkRun, &f.GitLabNoteURL); err != nil {
+		if err := rows.Scan(&f.ID, &f.RunID, &f.Ordinal, &origin, &f.Status, &f.Severity, &f.Category, &f.File, &line, &f.Title, &f.Description, &f.Suggestion, &f.Comment, &f.VerifyNote, &f.CheckStatus, &checkRun, &f.GitLabNoteURL); err != nil {
 			return nil, err
 		}
 		if origin.Valid {

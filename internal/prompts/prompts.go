@@ -8,6 +8,7 @@ package prompts
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"mr-review/internal/skill"
@@ -22,9 +23,10 @@ const findingSchema = `{
     "line": {"type": ["integer", "null"], "description": "line in the new version of the file, null if unknown"},
     "title": {"type": "string", "description": "one line, the problem itself"},
     "description": {"type": "string", "description": "markdown: short paragraphs and bullets, evidence as path/file.php:line in inline code, why it matters; not one dense paragraph"},
-    "suggestion": {"type": "string", "description": "concrete fix proposal as markdown (fenced code block for code); empty if none"}
+    "suggestion": {"type": "string", "description": "concrete fix proposal as markdown (fenced code block for code); empty if none"},
+    "comment": {"type": "string", "description": "the ready GitLab comment the developer will post for this finding on its line: short, written as the developer, per the GITLAB COMMENT STYLE rules; description/suggestion stay detailed, this one does not"}
   },
-  "required": ["severity", "category", "file", "line", "title", "description", "suggestion"],
+  "required": ["severity", "category", "file", "line", "title", "description", "suggestion", "comment"],
   "additionalProperties": false
 }`
 
@@ -214,6 +216,32 @@ func languageRule() string {
 	return "- LANGUAGE: write every human-readable field of the result (summary, titles, descriptions, suggestions prose, " +
 		"assessments, notes, steps, risks, questions, actions, tests, todo) in " + name + ", even though these instructions are in English. " +
 		"Keep code, identifiers, file paths, branch names and the commit message as they are.\n"
+}
+
+// CommentStyleFile is a markdown file with the developer's own way of writing review comments (examples, habits,
+// typical concerns). Read on every prompt, so edits apply to the next run. Set from COMMENT_STYLE_FILE at startup.
+var CommentStyleFile string
+
+// commentStyleRule tells the agent how to write texts that go to GitLab as the developer (a finding's `comment`,
+// a thread `reply`): short and in the developer's voice, while the report fields stay detailed.
+func commentStyleRule() string {
+	rule := "- GITLAB COMMENT STYLE (only for texts posted to GitLab as the developer: a finding's `comment`, a thread `reply`; " +
+		"title/description/suggestion/summary stay as detailed as before):\n" +
+		"  - 1-3 short lines as a colleague writes on the line in the diff, not a report: the point, at most one reason, the fix. " +
+		"No headings, no bold, no severity/category labels, no «Проблема:/Решение:», no greetings, thanks or sign-offs, no recap of what the code does.\n" +
+		"  - Do not repeat the file and line: the comment sits on that line. Mention another place as `path/File.php:123` only when it matters.\n" +
+		"  - When the fix is a small replacement of the commented line(s), give it as a GitLab ```suggestion:-0+0 block (adjust -N+M to the lines replaced) " +
+		"with the exact new code, optionally one line of text after it; a larger idea as a short ```php snippet.\n" +
+		"  - A doubt is a question («не выстрелит ли тут …?»), an optional nit says so («вкусовщина, можно оставить»).\n"
+	if CommentStyleFile == "" {
+		return rule
+	}
+	raw, err := os.ReadFile(CommentStyleFile)
+	if err != nil || strings.TrimSpace(string(raw)) == "" {
+		return rule
+	}
+	return rule + "  - The developer's own style and the concerns they usually raise (follow the voice, do not copy the examples; " +
+		"the concerns also tell what to look for in the review):\n--- developer's comment style ---\n" + strings.TrimSpace(string(raw)) + "\n--- end ---\n"
 }
 
 const readOnlyRulesText = `Dashboard run constraints (orchestration only, project rules stay authoritative):
@@ -561,7 +589,7 @@ func Implement(issue Issue, notes string, b Branch, s *skill.Skill) string {
 }
 
 // readOnlyRules / editRules are the dashboard constraints plus the report-language rule.
-func readOnlyRules() string { return readOnlyRulesText + languageRule() }
+func readOnlyRules() string { return readOnlyRulesText + languageRule() + commentStyleRule() }
 func editRules() string     { return editRulesText + languageRule() }
 
 // CheckedFinding is one finding handed to a verify_finding run.
@@ -594,7 +622,7 @@ var ThreadCheckSchema = []byte(`{
     "summary": {"type": "string", "minLength": 40, "description": "markdown, 3-8 sentences: what the thread is about and your conclusion, answering the developer's note when there is one"},
     "evidence": {"type": "string", "description": "markdown: what exactly in the code (path:line in inline code) supports the conclusion; empty when nothing to cite"},
     "fix": {"type": "string", "description": "markdown: what to change in the MR and where, with a code snippet when short; empty when nothing should change"},
-    "reply": {"type": "string", "description": "a ready reply to post in the thread on the developer's behalf: polite, to the point, in the language of the thread, GitLab markdown, no greetings or signatures; empty when no reply makes sense"}
+    "reply": {"type": "string", "description": "a ready reply to post in the thread on the developer's behalf, per the GITLAB COMMENT STYLE rules, in the language of the thread; empty when no reply makes sense"}
   },
   "required": ["verdict", "summary", "evidence", "fix", "reply"],
   "additionalProperties": false

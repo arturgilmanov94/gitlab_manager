@@ -552,6 +552,10 @@ func TestFindingCodeAndPostToGitLab(t *testing.T) {
 	if text := FindingComment(findings[0]); !strings.Contains(text, "**Null deref**") || !strings.Contains(text, "**Предложение:**\ns") {
 		t.Fatalf("default comment %q", text)
 	}
+	// The agent's short comment in the developer's style wins over the detailed description.
+	if text := FindingComment(findings[1]); text != "нейминг бы поправить" {
+		t.Fatalf("agent comment %q", text)
+	}
 }
 
 func TestPostFindingFallsBackWhenGitLabRejectsTheLine(t *testing.T) {

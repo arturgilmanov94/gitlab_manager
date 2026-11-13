@@ -178,8 +178,12 @@ func (s *Service) PostFinding(findingID int64, body string, draft bool) (*PostRe
 	return &PostResult{URL: link, OnLine: onLine, Draft: draft}, nil
 }
 
-// FindingComment is the default text of a finding posted to GitLab; the developer edits it before sending.
+// FindingComment is the default text of a finding posted to GitLab; the developer edits it before sending. The
+// agent's short comment in the developer's style when there is one, else the description and the suggestion.
 func FindingComment(f db.Finding) string {
+	if c := strings.TrimSpace(f.Comment); c != "" {
+		return c
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "**%s** · %s", f.Title, strings.ToLower(f.Severity))
 	if f.Category != "" {

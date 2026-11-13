@@ -54,6 +54,7 @@ type Settings struct {
 	ApprovalTimeoutSec int    // how long a run waits for the developer's answer to a permission prompt
 	PlansDir           string // where "save plan" writes markdown; "" = <project>/.claude/plans
 	ReportLanguage     string // language of the agent's human-readable output (ru by default)
+	CommentStyleFile   string // the developer's way of writing GitLab comments, inlined into read-only prompts
 	CodexBin           string
 	CodexModels        []string
 	DefaultRunner      string
@@ -284,6 +285,7 @@ func Load(baseDir string, env map[string]string, readEnvFile bool) *Settings {
 		ClaudePermissions:     strings.ToLower(str("CLAUDE_PERMISSIONS", "auto")),
 		ApprovalTimeoutSec:    num("APPROVAL_TIMEOUT_SEC", 1800),
 		ReportLanguage:        strings.ToLower(str("REPORT_LANGUAGE", "ru")),
+		CommentStyleFile:      path("COMMENT_STYLE_FILE", "./data/comment-style.md"),
 		CodexBin:              str("CODEX_BIN", "codex"),
 		CodexModels:           splitList(str("CODEX_MODELS", "default,gpt-6-astra,gpt-5.6-terra")),
 		DefaultRunner:         str("DEFAULT_RUNNER", "claude"),
