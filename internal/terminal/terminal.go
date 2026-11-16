@@ -108,19 +108,34 @@ func (e *Emulator) Open(dir, command string) error {
 
 var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
+var modelRe = regexp.MustCompile(`^[A-Za-z0-9._:/\[\]-]{1,128}$`)
+
 // ResumeCommand is the interactive command that continues an agent session: `<bin> --resume <id>` for Claude
-// Code and Cursor, `<bin> resume <id>` for Codex. "" when the session id is unusable.
-func ResumeCommand(runnerName, bin, sessionID string) string {
+// Code and Cursor, `<bin> resume <id>` for Codex. "" when the session id is unusable. A non-empty model keeps
+// the session on the model it ran with (`--model`, `-m` for Codex) instead of the CLI's own default; an
+// unusable model name is dropped.
+func ResumeCommand(runnerName, bin, sessionID, model string) string {
 	if !sessionIDRe.MatchString(sessionID) {
 		return ""
 	}
 	if bin == "" {
 		bin = runnerName
 	}
+	if !modelRe.MatchString(model) {
+		model = ""
+	} else if strings.ContainsAny(model, "[]") {
+		model = Quote(model)
+	}
 	switch runnerName {
 	case "codex":
+		if model != "" {
+			return bin + " resume " + sessionID + " -m " + model
+		}
 		return bin + " resume " + sessionID
 	default:
+		if model != "" {
+			return bin + " --resume " + sessionID + " --model " + model
+		}
 		return bin + " --resume " + sessionID
 	}
 }

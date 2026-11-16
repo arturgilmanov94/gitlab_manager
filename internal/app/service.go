@@ -1068,7 +1068,31 @@ func (s *Service) ResumeCommand(run *db.Run) string {
 	case "cursor":
 		bin = "cursor-agent"
 	}
-	return terminal.ResumeCommand(run.Runner, bin, run.SessionID)
+	return terminal.ResumeCommand(run.Runner, bin, run.SessionID, sessionModel(run))
+}
+
+// sessionModel is the model the run's session was executed on, for continuing it on the same one: the model the
+// agent reported that matches the developer's pick (the exact id rather than an alias), else the pick itself,
+// else — for a run on the agent's default — the model that did most of the work. "" when nothing is known.
+func sessionModel(run *db.Run) string {
+	var used []string
+	for _, m := range strings.Split(run.Model, ",") {
+		if m = strings.TrimSpace(m); m != "" {
+			used = append(used, m)
+		}
+	}
+	if !runner.IsDefaultModel(run.RequestedModel) {
+		for _, m := range used {
+			if strings.Contains(strings.ToLower(m), strings.ToLower(run.RequestedModel)) {
+				return m
+			}
+		}
+		return run.RequestedModel
+	}
+	if len(used) > 0 {
+		return used[0]
+	}
+	return ""
 }
 
 // TerminalCommand is the full shell line a developer can paste: cd into the run's directory and resume the session.

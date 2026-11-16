@@ -8,17 +8,29 @@ import (
 )
 
 func TestResumeCommand(t *testing.T) {
-	if got := ResumeCommand("claude", "claude", "abc-123"); got != "claude --resume abc-123" {
+	if got := ResumeCommand("claude", "claude", "abc-123", ""); got != "claude --resume abc-123" {
 		t.Fatal(got)
 	}
-	if got := ResumeCommand("codex", "/opt/codex", "thread_1"); got != "/opt/codex resume thread_1" {
+	if got := ResumeCommand("codex", "/opt/codex", "thread_1", ""); got != "/opt/codex resume thread_1" {
 		t.Fatal(got)
 	}
-	if got := ResumeCommand("cursor", "", "s1"); got != "cursor --resume s1" {
+	if got := ResumeCommand("cursor", "", "s1", ""); got != "cursor --resume s1" {
 		t.Fatal(got)
 	}
-	if ResumeCommand("claude", "claude", "x; rm -rf /") != "" || ResumeCommand("claude", "claude", "") != "" {
+	if ResumeCommand("claude", "claude", "x; rm -rf /", "") != "" || ResumeCommand("claude", "claude", "", "") != "" {
 		t.Fatal("unsafe session ids must be rejected")
+	}
+	if got := ResumeCommand("claude", "claude", "abc-123", "claude-opus-5-5"); got != "claude --resume abc-123 --model claude-opus-5-5" {
+		t.Fatal(got)
+	}
+	if got := ResumeCommand("claude", "claude", "abc-123", "claude-opus-5-5[1m]"); got != "claude --resume abc-123 --model 'claude-opus-5-5[1m]'" {
+		t.Fatal(got)
+	}
+	if got := ResumeCommand("codex", "codex", "thread_1", "gpt-5"); got != "codex resume thread_1 -m gpt-5" {
+		t.Fatal(got)
+	}
+	if got := ResumeCommand("claude", "claude", "abc-123", "opus; rm -rf /"); got != "claude --resume abc-123" {
+		t.Fatal(got)
 	}
 }
 
