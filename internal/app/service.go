@@ -117,7 +117,7 @@ func New(settings *config.Settings, database *db.DB, gl gitlab.Client, runners [
 	}
 	prompts.CommentStyleFile = settings.CommentStyleFile
 	if settings.ProjectRoot != "" {
-		s.Worktrees = &worktree.Manager{Root: settings.ProjectRoot, Dir: settings.WorktreeDir, BaseBranch: settings.BaseBranch}
+		s.Worktrees = s.watchFetches(&worktree.Manager{Root: settings.ProjectRoot, Dir: settings.WorktreeDir, BaseBranch: settings.BaseBranch})
 	}
 	s.ensureProjects()
 	return s

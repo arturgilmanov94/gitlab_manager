@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"net"
 	"os/exec"
 	"strings"
@@ -99,6 +101,7 @@ func TestGitEndpoint(t *testing.T) {
 }
 
 // The API answers but git does not (an ssh port closed by the network): syncs go on, pages warn about git only.
+// The git port is never dialed on a timer: its state comes from real fetches, and it is re-dialed only while down.
 func TestGitClosedAPIOpen(t *testing.T) {
 	api, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -113,14 +116,59 @@ func TestGitClosedAPIOpen(t *testing.T) {
 	if out, err := exec.Command("git", "-C", settings.ProjectRoot, "remote", "set-url", "origin", "ssh://git@"+gitAddr+"/group/sub/project.git").CombinedOutput(); err != nil {
 		t.Fatalf("%v %s", err, out)
 	}
-	if off := svc.CheckGitLab(); off != "" {
+	gitDials, gitUp := 0, false
+	svc.reach.dial = func(addr string, timeout time.Duration) error {
+		if addr != gitAddr {
+			return tcpDial(addr, timeout)
+		}
+		gitDials++
+		if gitUp {
+			return nil
+		}
+		return errors.New("connect: connection refused")
+	}
+	recheck := func() string {
+		svc.reach.mu.Lock()
+		svc.reach.checked = time.Time{}
+		svc.reach.mu.Unlock()
+		return svc.CheckGitLab()
+	}
+	if off := recheck(); off != "" {
 		t.Fatalf("the API answers: syncs must go on (%q)", off)
 	}
-	if svc.GitLabOffline() != "" || !strings.Contains(svc.GitOffline(), gitAddr) {
-		t.Fatalf("api %q git %q", svc.GitLabOffline(), svc.GitOffline())
+	if gitDials != 0 || svc.GitOffline() != "" {
+		t.Fatalf("the git port must not be dialed by the periodic check: %d dials, %q", gitDials, svc.GitOffline())
+	}
+	// A real fetch fails (the manager reports it): the port is dialed once and pages warn about git.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, _ = svc.Worktrees.Prepare(ctx, "feature/offline", func(string) {}) // whether a local base exists does not matter here
+	if gitDials == 0 || svc.GitLabOffline() != "" || !strings.Contains(svc.GitOffline(), gitAddr) {
+		t.Fatalf("dials %d api %q git %q", gitDials, svc.GitLabOffline(), svc.GitOffline())
 	}
 	svc.autoSyncOnce()
 	if _, msg := svc.AutoSyncState(); strings.HasPrefix(msg, OfflineHint) {
 		t.Fatalf("sync must not pause for git: %q", msg)
+	}
+	// While git is down the periodic check re-dials it and notices that it is back; then it leaves the port alone.
+	before := gitDials
+	recheck()
+	if gitDials != before+1 || svc.GitOffline() == "" {
+		t.Fatalf("a down git port is re-dialed: %d → %d, %q", before, gitDials, svc.GitOffline())
+	}
+	gitUp = true
+	recheck()
+	if svc.GitOffline() != "" {
+		t.Fatalf("git is back: %q", svc.GitOffline())
+	}
+	before = gitDials
+	recheck()
+	if gitDials != before {
+		t.Fatal("a reachable git port must not be dialed again")
+	}
+	// A fetch that failed although the port answers (unknown ref, access) is not a connectivity problem.
+	svc.noteFetch(settings.ProjectRoot, errors.New("fatal: couldn't find remote ref"))
+	if svc.GitOffline() != "" {
+		t.Fatalf("a refusal is not «git недоступен»: %q", svc.GitOffline())
 	}
 }

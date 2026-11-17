@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"mr-review/internal/gitlab"
+	"mr-review/internal/worktree"
 )
 
-// Reachability of GitLab: a TCP dial to the git host (origin remote) and the API host. It tells "VPN is off"
-// apart from real errors in seconds, before a sync or a run waits for glab or git to give up.
+// Reachability of GitLab: a TCP dial to the API host. It tells "VPN is off" apart from real errors in seconds,
+// before a sync waits for glab to give up. The git endpoint (ssh) is not dialed on a timer — every such dial is a
+// line in the server's auth.log; whether git answers is learned from real fetches (noteFetch).
 const (
 	reachDialTimeout = 3 * time.Second
 	reachTTL         = 30 * time.Second
@@ -27,7 +29,8 @@ type reachState struct {
 	mu         sync.Mutex
 	checked    time.Time
 	offline    string // the API does not answer: why ("" = it does)
-	gitOffline string // the git endpoint of origin does not answer: why ("" = it does, or it is the API host itself)
+	gitDown    string // host:port of git a fetch could not connect to ("" = the last fetch connected, or none ran)
+	gitOffline string // why gitDown does not answer
 	checking   bool
 	dial       func(addr string, timeout time.Duration) error // replaced in tests
 }
@@ -40,22 +43,35 @@ func tcpDial(addr string, timeout time.Duration) error {
 	return conn.Close()
 }
 
-// gitLabEndpoints are the host:port of the API and of git (from the origin remote; "" when it is the API one or
-// a local path).
-func (s *Service) gitLabEndpoints() (api, git string) {
-	host, _ := s.DefaultProject()
-	api = gitlab.APIEndpoint(host)
-	if s.Settings.ProjectRoot != "" {
-		if ep, ok := gitlab.GitEndpoint(gitlab.OriginURL(s.Settings.ProjectRoot)); ok && ep != api {
-			git = ep
-		}
+// gitEndpoint is the host:port of git for the checkout at root (from its origin remote; "" when it is the API one
+// or a local path).
+func (s *Service) gitEndpoint(root string) string {
+	if root == "" {
+		return ""
 	}
-	return api, git
+	host, _ := s.DefaultProject()
+	if ep, ok := gitlab.GitEndpoint(gitlab.OriginURL(root)); ok && ep != gitlab.APIEndpoint(host) {
+		return ep
+	}
+	return ""
 }
 
-// CheckGitLab dials the GitLab endpoints now (cached for reachTTL) and returns "" when the API answers, otherwise
-// why not: that is what syncs need. Whether git answers is kept for the pages (GitOffline). With
-// GITLAB_REACH_CHECK=0 everything is considered reachable.
+func (s *Service) probe(ep string) string {
+	s.reach.mu.Lock()
+	dial := s.reach.dial
+	s.reach.mu.Unlock()
+	if dial == nil {
+		dial = tcpDial
+	}
+	if err := dial(ep, reachDialTimeout); err != nil {
+		return fmt.Sprintf("%s: %v", ep, err)
+	}
+	return ""
+}
+
+// CheckGitLab dials the API endpoint now (cached for reachTTL) and returns "" when it answers, otherwise why not:
+// that is what syncs need. The git endpoint is dialed only while the last fetch could not connect to it, to notice
+// that it is back. With GITLAB_REACH_CHECK=0 everything is considered reachable.
 func (s *Service) CheckGitLab() string {
 	if !s.Settings.GitLabReachCheck {
 		return ""
@@ -65,26 +81,57 @@ func (s *Service) CheckGitLab() string {
 		defer s.reach.mu.Unlock()
 		return s.reach.offline
 	}
-	dial := s.reach.dial
+	gitDown := s.reach.gitDown
 	s.reach.mu.Unlock()
-	if dial == nil {
-		dial = tcpDial
+	host, _ := s.DefaultProject()
+	offline := s.probe(gitlab.APIEndpoint(host))
+	gitOffline := ""
+	if gitDown != "" {
+		gitOffline = s.probe(gitDown)
 	}
-	api, git := s.gitLabEndpoints()
-	probe := func(ep string) string {
-		if ep == "" {
-			return ""
-		}
-		if err := dial(ep, reachDialTimeout); err != nil {
-			return fmt.Sprintf("%s: %v", ep, err)
-		}
-		return ""
-	}
-	offline, gitOffline := probe(api), probe(git)
 	s.reach.mu.Lock()
-	s.reach.checked, s.reach.offline, s.reach.gitOffline = time.Now(), offline, gitOffline
+	s.reach.checked, s.reach.offline = time.Now(), offline
+	if s.reach.gitDown == gitDown {
+		s.reach.gitOffline = gitOffline
+		if gitOffline == "" {
+			s.reach.gitDown = ""
+		}
+	}
 	s.reach.mu.Unlock()
 	return offline
+}
+
+// noteFetch records what a real `git fetch` of the checkout at root says about the git endpoint: a fetch that
+// worked means it answers; after a failed one the endpoint is dialed once to tell "no connection" from a refusal
+// (unknown ref, access).
+func (s *Service) noteFetch(root string, err error) {
+	if !s.Settings.GitLabReachCheck {
+		return
+	}
+	ep := s.gitEndpoint(root)
+	if ep == "" {
+		return
+	}
+	why := ""
+	if err != nil {
+		if why = s.probe(ep); why == "" {
+			return // the port answers: the failure is not about connectivity and says nothing new
+		}
+	}
+	s.reach.mu.Lock()
+	defer s.reach.mu.Unlock()
+	if why != "" {
+		s.reach.gitDown, s.reach.gitOffline = ep, why
+	} else if s.reach.gitDown == ep {
+		s.reach.gitDown, s.reach.gitOffline = "", ""
+	}
+}
+
+// watchFetches makes the fetches of m report to noteFetch.
+func (s *Service) watchFetches(m *worktree.Manager) *worktree.Manager {
+	root := s.root
+	m.OnFetch = func(err error) { root.noteFetch(m.Root, err) }
+	return m
 }
 
 // GitLabOffline is the last known reachability of the API for pages ("" = reachable or not checked yet). It

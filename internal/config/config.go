@@ -74,7 +74,7 @@ type Settings struct {
 	// AutoSyncSec is how often (seconds) the running dashboard re-syncs MRs and issues from GitLab by itself
 	// (GITLAB_AUTO_SYNC_SEC, default 60; 0 = only by the button). Values below 15 are raised to 15.
 	AutoSyncSec int
-	// GitLabReachCheck dials the git and API hosts before syncs and for the header chip (GITLAB_REACH_CHECK, default on).
+	// GitLabReachCheck dials the API host before syncs and for the header chip (GITLAB_REACH_CHECK, default on).
 	GitLabReachCheck bool
 
 	// ReviewWorktree runs reviews in a read-only worktree at the MR head SHA (REVIEW_WORKTREE, default on).

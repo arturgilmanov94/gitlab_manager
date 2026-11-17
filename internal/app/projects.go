@@ -86,7 +86,7 @@ func (s *Service) ForProject(id int64) *Service {
 	m := root.views[id]
 	if m == nil || m.Root != p.RepoRoot || m.BaseBranch != settings.BaseBranch {
 		// Worktrees of other projects live next to the default project's, one directory per project.
-		m = &worktree.Manager{Root: p.RepoRoot, Dir: filepath.Join(root.Settings.WorktreeDir, fmt.Sprintf("project-%d", id)), BaseBranch: settings.BaseBranch}
+		m = root.watchFetches(&worktree.Manager{Root: p.RepoRoot, Dir: filepath.Join(root.Settings.WorktreeDir, fmt.Sprintf("project-%d", id)), BaseBranch: settings.BaseBranch})
 		root.views[id] = m
 	}
 	root.mu.Unlock()

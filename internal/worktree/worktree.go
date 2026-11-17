@@ -24,6 +24,8 @@ type Manager struct {
 	Root       string // main project checkout (shares .git with the worktrees)
 	Dir        string // where worktrees live (inside the dashboard's runtime dir)
 	BaseBranch string // e.g. develop
+	// OnFetch, when set, is told the outcome of every `git fetch origin` that ran to its end (nil = it worked).
+	OnFetch func(err error)
 
 	mu     sync.Mutex             // worktree registry of the main checkout
 	pathMu sync.Mutex             // guards paths
@@ -212,6 +214,9 @@ func (m *Manager) fetch(ctx context.Context, refs ...string) error {
 	fctx, cancel := context.WithTimeout(ctx, FetchTimeout)
 	defer cancel()
 	_, err := m.git(fctx, m.Root, append([]string{"fetch", "--quiet", "origin"}, refs...)...)
+	if m.OnFetch != nil && ctx.Err() == nil {
+		m.OnFetch(err)
+	}
 	if err != nil && ctx.Err() == nil && errors.Is(fctx.Err(), context.DeadlineExceeded) {
 		return fmt.Errorf("git fetch origin %s: нет ответа за %s", strings.Join(refs, " "), FetchTimeout)
 	}
